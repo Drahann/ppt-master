@@ -1,0 +1,29 @@
+{
+  "job_id": "local-test-001",
+  "source_md_path": "C:/replace/with/your/source.md",
+  "project_name": "my_deck",
+  "canvas_format": "ppt169",
+  "project_base_dir": "projects",
+  "model": "qwen3.6-plus",
+  "review_model": "qwen3-max",
+  "batch_mode": "auto",
+  "batch_size": 8,
+  "rules": {
+    "template_mode": "free",
+    "include_cover": true,
+    "include_ending": true,
+    "include_toc": false,
+    "include_section_headers": false,
+    "content_density": "moderately_high",
+    "faithful_to_source": true,
+    "highlight_key_points": true,
+    "pagination": {
+      "default": "each_h2_one_slide",
+      "expand_h2_titles": [
+        "创新技术",
+        "产业验证"
+      ],
+      "expand_rule": "each_h3_one_slide_no_parent_h2_slide"
+    }
+  }
+}

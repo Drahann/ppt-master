@@ -33,6 +33,16 @@ Repository update:
 python3 scripts/update_repo.py
 ```
 
+Local automation runner:
+
+```bash
+python3 scripts/qwen_ppt_runner.py scripts/assets/qwen_runner_request.example.json
+python3 scripts/stop_qwen_runner.py --dry-run
+```
+
+The runner uses staged Qwen sessions with deterministic precomputed references, batched serial SVG generation for long decks, a separate design-spec review gate, a dedicated notes stage, and a final SVG review pass.
+For Qwen Code project-native discovery, see [QWEN.md](../../../QWEN.md) and [`.qwen/skills/ppt-master/SKILL.md`](../../../.qwen/skills/ppt-master/SKILL.md).
+
 ## Script Index
 
 | Area | Primary scripts | Documentation |
@@ -41,6 +51,7 @@ python3 scripts/update_repo.py
 | Project management | `project_manager.py`, `batch_validate.py`, `generate_examples_index.py`, `error_helper.py`, `pptx_template_import.py` | [docs/project.md](./docs/project.md) |
 | SVG pipeline | `finalize_svg.py`, `svg_to_pptx.py`, `total_md_split.py`, `svg_quality_checker.py` | [docs/svg-pipeline.md](./docs/svg-pipeline.md) |
 | Image tools | `image_gen.py`, `analyze_images.py`, `gemini_watermark_remover.py` | [docs/image.md](./docs/image.md) |
+| Automation | `qwen_ppt_runner.py` | [docs/automation.md](./docs/automation.md) |
 | Repo maintenance | `update_repo.py` | README install/update section |
 | Troubleshooting | validation, preview, export, dependency issues | [docs/troubleshooting.md](./docs/troubleshooting.md) |
 
@@ -93,6 +104,12 @@ python3 scripts/update_repo.py
 python3 scripts/update_repo.py --skip-pip
 ```
 
+Automation runner:
+
+```bash
+python3 scripts/qwen_ppt_runner.py scripts/assets/qwen_runner_request.example.json
+```
+
 ## Recommendations
 
 - Keep one user-facing entry point per workflow at the top level of `scripts/`
@@ -106,6 +123,7 @@ python3 scripts/update_repo.py --skip-pip
 - [Project Tools](./docs/project.md)
 - [SVG Pipeline Tools](./docs/svg-pipeline.md)
 - [Image Tools](./docs/image.md)
+- [Automation Runner](./docs/automation.md)
 - [Troubleshooting](./docs/troubleshooting.md)
 - [AGENTS Guide](../../../AGENTS.md)
 

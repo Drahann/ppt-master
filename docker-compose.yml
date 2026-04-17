@@ -1,0 +1,18 @@
+services:
+  ppt-master-api:
+    build: .
+    container_name: ppt-master-api
+    ports:
+      - "3001:3000"
+    env_file:
+      - .env.api
+    environment:
+      PPT_API_HOST: 0.0.0.0
+      PPT_API_PORT: 3000
+      PPT_API_PROJECT_BASE_DIR: /app/projects
+      PPT_API_JOBS_DIR: /app/tmp/api-jobs
+      PPT_API_MAX_CONCURRENT_JOBS: 1
+    volumes:
+      - ./projects:/app/projects
+      - ./tmp:/app/tmp
+    restart: unless-stopped

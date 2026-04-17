@@ -90,3 +90,6 @@ curl_cffi>=0.7.0
 google-genai>=1.0.0
 # OpenAI-compatible backend / OpenAI 兼容后端 (IMAGE_BACKEND=openai)
 openai>=1.0.0
+fastapi>=0.115.0
+uvicorn>=0.32.0
+cos-python-sdk-v5>=1.9.31

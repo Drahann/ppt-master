@@ -1,0 +1,13 @@
+.git
+.github
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+tmp/*
+projects/*
+!projects/README.md
+node_modules/
+dist/
+build/
