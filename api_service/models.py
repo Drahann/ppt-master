@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -26,7 +27,7 @@ class GeneratePptRequest(BaseModel):
     report_id: str = Field(..., min_length=1)
     fileUrl: str | None = None
     wordUrl: str | None = None
-    title: str | None = None
+    title: Any | None = None
     content: str = Field(..., min_length=1)
     themeId: str | None = None
     callbackUrl: str | None = None

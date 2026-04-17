@@ -146,9 +146,26 @@ def _normalize_generate_ppt_request(request: GeneratePptRequest) -> NormalizedRe
         content=request.content,
         file_url=request.fileUrl,
         word_url=request.wordUrl,
-        title=request.title,
+        title=_normalize_generate_title(request.title),
         callback_url=request.callbackUrl,
         batch_mode=request.batchMode,
         batch_size=request.batchSize,
         parallel_batch_workers=request.parallelBatchWorkers,
     )
+
+
+def _normalize_generate_title(raw_title) -> str | None:
+    if raw_title is None:
+        return None
+    if isinstance(raw_title, str):
+        return raw_title.strip() or None
+    if isinstance(raw_title, list):
+        if raw_title:
+            first = raw_title[0]
+            if isinstance(first, dict) and first.get("sub_answer"):
+                text = str(first["sub_answer"]).strip()
+                if text:
+                    return text
+        flattened = " - ".join(str(item).strip() for item in raw_title if str(item).strip())
+        return flattened or None
+    return str(raw_title).strip() or None
