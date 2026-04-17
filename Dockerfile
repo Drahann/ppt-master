@@ -8,6 +8,8 @@ ENV PIP_NO_CACHE_DIR=1
 ENV PPT_API_HOST=0.0.0.0
 ENV PPT_API_PORT=3000
 
+ARG PIP_INDEX_URL=https://pypi.org/simple
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     pkg-config \
@@ -22,7 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./requirements.txt
-RUN pip install -r requirements.txt
+RUN pip install -i ${PIP_INDEX_URL} -r requirements.txt
 RUN npm install -g @qwen-code/qwen-code@0.14.5
 
 COPY . .
