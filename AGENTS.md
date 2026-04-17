@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This file serves as the project entry point for general AI agents. Before executing PPT generation tasks, **you MUST first read `skills/ppt-master/SKILL.md`** for the complete workflow and rules.
+This file serves as the project entry point for general AI agents. Before executing PPT generation tasks, **you MUST first read `.qwen/skills/ppt-master/SKILL.md`** for the complete workflow and rules.
 
 ## Project Overview
 
@@ -10,7 +10,7 @@ PPT Master is an AI-driven presentation generation system. Through multi-role co
 
 **Execution Requirements**:
 
-- Before starting a PPT task, read `skills/ppt-master/SKILL.md` first
+- Before starting a PPT task, read `.qwen/skills/ppt-master/SKILL.md` first
 - To create a template independently, read `skills/ppt-master/workflows/create-template.md`
 - Role-specific rules and technical constraints are in `skills/ppt-master/references/`
 - ⚠️ **Strict serial execution**: Every Step in the pipeline MUST be executed sequentially — bundling, batching, or parallelizing Steps is FORBIDDEN
@@ -21,7 +21,7 @@ PPT Master is an AI-driven presentation generation system. Through multi-role co
 
 - This repository is a workflow/skill package, not a conventional app or service scaffold
 - Do NOT assume repository-local conventions such as `.worktrees/`, `tests/`, or mandatory branch setup unless the user explicitly requests them
-- If a generic coding skill conflicts with this repository's instructions, prioritize `skills/ppt-master/SKILL.md` and this file for work inside this repository
+- If a generic coding skill conflicts with this repository's instructions, prioritize `.qwen/skills/ppt-master/SKILL.md` and this file for work inside this repository
 
 ## Common Commands
 
@@ -57,7 +57,8 @@ python3 skills/ppt-master/scripts/svg_to_pptx.py <project_path> -s final
 
 ## Core Directories
 
-- `skills/ppt-master/SKILL.md` — Main entry point and complete workflow
+- `.qwen/skills/ppt-master/SKILL.md` — Main entry point and complete workflow
+- `.qwen/skills/ppt-master/references/repo_skill.md` — Mirrored repository workflow reference used by the Qwen wrapper
 - `skills/ppt-master/workflows/create-template.md` — Standalone template workflow
 - `skills/ppt-master/references/` — Role definitions and technical specifications
 - `skills/ppt-master/scripts/` — Tool scripts

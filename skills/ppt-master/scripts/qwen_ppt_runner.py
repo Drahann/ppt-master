@@ -58,14 +58,6 @@ SVG_QUALITY_REPORT_FILENAME = "svg_quality_report.txt"
 SVG_REVIEW_REPORT_FILENAME = "svg_review_report.json"
 SVG_REVIEW_INPUT_FILENAME = "svg_review_input.json"
 SVG_ANCHOR_CONTEXT_FILENAME = "svg_anchor_context.json"
-CHARTS_INDEX_PATH = REPO_ROOT / "skills" / "ppt-master" / "templates" / "charts" / "charts_index.json"
-DESIGN_SPEC_REFERENCE_PATH = REPO_ROOT / "skills" / "ppt-master" / "templates" / "design_spec_reference.md"
-STRATEGIST_REFERENCE_PATH = REPO_ROOT / "skills" / "ppt-master" / "references" / "strategist.md"
-EXECUTOR_REFERENCE_PATH = REPO_ROOT / "skills" / "ppt-master" / "references" / "executor-base.md"
-EXECUTOR_CONSULTANT_PATH = REPO_ROOT / "skills" / "ppt-master" / "references" / "executor-consultant.md"
-EXECUTOR_GENERAL_PATH = REPO_ROOT / "skills" / "ppt-master" / "references" / "executor-general.md"
-SHARED_STANDARDS_PATH = REPO_ROOT / "skills" / "ppt-master" / "references" / "shared-standards.md"
-IMAGE_LAYOUT_REFERENCE_PATH = REPO_ROOT / "skills" / "ppt-master" / "references" / "image-layout-spec.md"
 QWEN_PROJECT_GUIDE_PATH = REPO_ROOT / "QWEN.md"
 QWEN_SKILL_ROOT = REPO_ROOT / ".qwen" / "skills" / "ppt-master"
 QWEN_SKILL_WRAPPER_PATH = QWEN_SKILL_ROOT / "SKILL.md"
@@ -82,6 +74,15 @@ QWEN_CHARTS_INDEX_PATH = QWEN_SKILL_ROOT / "templates" / "charts" / "charts_inde
 QWEN_SPEC_REVIEW_SKILL_PATH = REPO_ROOT / ".qwen" / "skills" / "ppt-spec-review" / "SKILL.md"
 QWEN_SVG_REVIEW_SKILL_PATH = REPO_ROOT / ".qwen" / "skills" / "ppt-svg-review" / "SKILL.md"
 QWEN_SVG_REVIEW_WORKFLOW_PATH = REPO_ROOT / ".qwen" / "skills" / "ppt-svg-review" / "workflows" / "svg-review.md"
+# AI-read reference files now live under .qwen; runtime scripts/assets remain under skills/ppt-master.
+CHARTS_INDEX_PATH = QWEN_CHARTS_INDEX_PATH
+DESIGN_SPEC_REFERENCE_PATH = QWEN_DESIGN_SPEC_REFERENCE_PATH
+STRATEGIST_REFERENCE_PATH = QWEN_STRATEGIST_REFERENCE_PATH
+EXECUTOR_REFERENCE_PATH = QWEN_EXECUTOR_REFERENCE_PATH
+EXECUTOR_CONSULTANT_PATH = QWEN_EXECUTOR_CONSULTANT_PATH
+EXECUTOR_GENERAL_PATH = QWEN_EXECUTOR_GENERAL_PATH
+SHARED_STANDARDS_PATH = QWEN_SHARED_STANDARDS_PATH
+IMAGE_LAYOUT_REFERENCE_PATH = QWEN_IMAGE_LAYOUT_REFERENCE_PATH
 ICON_LIBRARY_DIR = REPO_ROOT / "skills" / "ppt-master" / "templates" / "icons" / "chunk"
 DEFAULT_ICON_LIBRARY = "chunk"
 ICON_COVERAGE_RATIO = 0.75
@@ -217,24 +218,6 @@ class MarkdownH2:
     title: str
     intro_lines: list[str]
     children: list[MarkdownH3]
-
-
-def sync_qwen_skill_mirror() -> None:
-    mirror_pairs = [
-        (REPO_ROOT / "skills" / "ppt-master" / "SKILL.md", QWEN_REPO_SKILL_PATH),
-        (STRATEGIST_REFERENCE_PATH, QWEN_STRATEGIST_REFERENCE_PATH),
-        (EXECUTOR_REFERENCE_PATH, QWEN_EXECUTOR_REFERENCE_PATH),
-        (EXECUTOR_CONSULTANT_PATH, QWEN_EXECUTOR_CONSULTANT_PATH),
-        (EXECUTOR_GENERAL_PATH, QWEN_EXECUTOR_GENERAL_PATH),
-        (SHARED_STANDARDS_PATH, QWEN_SHARED_STANDARDS_PATH),
-        (IMAGE_LAYOUT_REFERENCE_PATH, QWEN_IMAGE_LAYOUT_REFERENCE_PATH),
-        (REPO_ROOT / "skills" / "ppt-master" / "references" / "svg_design_cookbook.md", SVG_DESIGN_COOKBOOK_PATH),
-        (DESIGN_SPEC_REFERENCE_PATH, QWEN_DESIGN_SPEC_REFERENCE_PATH),
-        (CHARTS_INDEX_PATH, QWEN_CHARTS_INDEX_PATH),
-    ]
-    for source, destination in mirror_pairs:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, destination)
 
 
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -2984,12 +2967,12 @@ def execute_generation(
     write_json(
         runner_dir / "svg_executor_context.json",
         {
-            "executor_base": str(EXECUTOR_REFERENCE_PATH),
+            "executor_base": str(QWEN_EXECUTOR_REFERENCE_PATH),
             "svg_design_cookbook": str(SVG_DESIGN_COOKBOOK_PATH),
             "svg_anchor_context": str(svg_anchor_context_path),
             "executor_style": str(executor_style_path),
-            "shared_standards": str(SHARED_STANDARDS_PATH),
-            "image_layout": str(IMAGE_LAYOUT_REFERENCE_PATH),
+            "shared_standards": str(QWEN_SHARED_STANDARDS_PATH),
+            "image_layout": str(QWEN_IMAGE_LAYOUT_REFERENCE_PATH),
         },
     )
 
@@ -3225,7 +3208,6 @@ def main() -> None:
 
     request_path = Path(sys.argv[1]).expanduser().resolve()
     request = load_request(request_path)
-    sync_qwen_skill_mirror()
     ensure_qwen_available()
 
     manager = ProjectManager()

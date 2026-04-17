@@ -11,6 +11,14 @@ description: >
 
 > AI-driven multi-format SVG content generation system. Converts source documents into high-quality SVG pages through multi-role collaboration and exports to PPTX.
 
+> [!IMPORTANT]
+> ## Runtime Path Authority
+>
+> - AI-read workflow documents and reference files are authoritative under `.qwen/skills/ppt-master/`
+> - Runtime scripts and executable tooling remain under `skills/ppt-master/scripts/`
+> - Runtime chart/icon assets remain under `skills/ppt-master/templates/charts/` and `skills/ppt-master/templates/icons/`
+> - If a path in this mirrored source skill conflicts with the `.qwen` wrapper or runner prompt, follow the `.qwen` path
+
 **Core Pipeline**: `Source Document → Create Project → Template Option → Strategist → [Image_Generator] → Executor → Post-processing → Export`
 
 > [!CAUTION]

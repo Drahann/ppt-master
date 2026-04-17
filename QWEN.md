@@ -6,7 +6,7 @@ Before doing any PPT generation work, read these files in order:
 
 1. `AGENTS.md`
 2. `.qwen/skills/ppt-master/SKILL.md`
-3. `skills/ppt-master/SKILL.md`
+3. `.qwen/skills/ppt-master/references/repo_skill.md`
 
 ## Project Intent
 
@@ -19,7 +19,7 @@ Core pipeline:
 ## Important Execution Rules
 
 - This is a strict serial workflow. Do not skip or reorder phases.
-- `skills/ppt-master/SKILL.md` remains the source of truth for the workflow.
+- `.qwen/skills/ppt-master/references/repo_skill.md` is the mirrored repository workflow reference used at runtime.
 - SVG generation must stay in the main agent and proceed sequentially page by page.
 - Do not treat this repository like a generic app scaffold.
 
