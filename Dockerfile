@@ -9,10 +9,13 @@ ENV PPT_API_HOST=0.0.0.0
 ENV PPT_API_PORT=3000
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    pkg-config \
     nodejs \
     npm \
     git \
     fonts-noto-cjk \
+    libcairo2-dev \
     libjpeg62-turbo \
     libpng16-16 \
     zlib1g \
