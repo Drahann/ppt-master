@@ -39,6 +39,7 @@ def upload_to_cos(buffer: bytes, cos_path: str, settings: Settings) -> str:
 def notify_report_server(
     report_id: str,
     file_url: str | None,
+    word_url: str | None,
     ppt_url: str,
     callback_url: str | None,
 ) -> CallbackResult:
@@ -52,6 +53,7 @@ def notify_report_server(
             "reportId": report_id,
             "fileUrl": normalize_to_relative(file_url or ""),
             "pptUrl": normalize_to_relative(ppt_url),
+            "wordUrl": normalize_to_relative(word_url or ""),
         },
     }
 

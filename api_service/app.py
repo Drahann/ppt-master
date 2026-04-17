@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from .config import load_settings
 from .markdown_assets import process_markdown_images
 from .models import CallbackResult as CallbackResultModel
-from .models import ReportRequest, ReportResponse
+from .models import GeneratePptRequest, GeneratePptResponse, NormalizedRequest, ReportRequest, ReportResponse
 from .runner import derive_title, execute_runner
 from .storage import build_result_zip, notify_report_server, sanitize_title, upload_to_cos
 
@@ -48,15 +48,32 @@ async def request_validation_exception_handler(_request, exc: RequestValidationE
 async def report_to_ppt(request: ReportRequest):
     async with job_semaphore:
         try:
-            payload = await asyncio.to_thread(_process_request, request)
+            payload = await asyncio.to_thread(_process_request, _normalize_report_to_ppt_request(request))
             return ReportResponse(**payload)
         except Exception as exc:
             return JSONResponse(status_code=500, content={"error": str(exc), "reportId": request.reportId})
 
 
-def _process_request(request: ReportRequest) -> dict[str, object]:
-    title = derive_title(request.content, request.reportId)
-    job_dir = _build_job_dir(request.reportId)
+@app.post("/api/generate-ppt", response_model=GeneratePptResponse)
+async def generate_ppt(request: GeneratePptRequest):
+    async with job_semaphore:
+        try:
+            payload = await asyncio.to_thread(_process_request, _normalize_generate_ppt_request(request))
+            return GeneratePptResponse(
+                success=payload["success"],
+                report_id=payload["reportId"],
+                pptUrl=payload["pptUrl"],
+                slideCount=payload["slideCount"],
+                title=payload["title"],
+                callback=payload["callback"],
+            )
+        except Exception as exc:
+            return JSONResponse(status_code=500, content={"success": False, "error": str(exc), "report_id": request.report_id})
+
+
+def _process_request(request: NormalizedRequest) -> dict[str, object]:
+    title = request.title or derive_title(request.content, request.report_id)
+    job_dir = _build_job_dir(request.report_id)
     job_dir.mkdir(parents=True, exist_ok=True)
 
     processed_markdown, image_warnings = process_markdown_images(request.content, job_dir)
@@ -67,27 +84,28 @@ def _process_request(request: ReportRequest) -> dict[str, object]:
 
     runner_result = execute_runner(
         source_md_path=source_md_path,
-        report_id=request.reportId,
+        report_id=request.report_id,
         title=title,
         settings=settings,
         working_dir=job_dir,
-        batch_mode=(request.batchMode or settings.batch_mode),
-        batch_size=(request.batchSize or settings.batch_size),
-        parallel_batch_workers=(request.parallelBatchWorkers or settings.parallel_batch_workers),
+        batch_mode=(request.batch_mode or settings.batch_mode),
+        batch_size=(request.batch_size or settings.batch_size),
+        parallel_batch_workers=(request.parallel_batch_workers or settings.parallel_batch_workers),
     )
 
     notes_path = runner_result.project_path / "notes" / "total.md"
     zip_buffer = build_result_zip(runner_result.native_pptx_path, notes_path, runner_result.title)
 
     safe_title = sanitize_title(runner_result.title)
-    cos_path = f"ppt/{request.reportId}/{safe_title}.zip"
+    cos_path = f"ppt/{request.report_id}/{safe_title}.zip"
     ppt_url = upload_to_cos(zip_buffer, cos_path, settings)
 
     callback_result = notify_report_server(
-        report_id=request.reportId,
-        file_url=request.fileUrl,
+        report_id=request.report_id,
+        file_url=request.file_url,
+        word_url=request.word_url,
         ppt_url=ppt_url,
-        callback_url=(request.callbackUrl or settings.report_callback_url),
+        callback_url=(request.callback_url or settings.report_callback_url),
     )
 
     if not settings.keep_job_files:
@@ -95,7 +113,7 @@ def _process_request(request: ReportRequest) -> dict[str, object]:
 
     return {
         "success": True,
-        "reportId": request.reportId,
+        "reportId": request.report_id,
         "pptUrl": ppt_url,
         "slideCount": runner_result.slide_count,
         "title": runner_result.title,
@@ -106,3 +124,31 @@ def _process_request(request: ReportRequest) -> dict[str, object]:
 def _build_job_dir(report_id: str) -> Path:
     token = sanitize_title(report_id)
     return settings.jobs_dir / f"{token}_{int(time.time() * 1000)}"
+
+
+def _normalize_report_to_ppt_request(request: ReportRequest) -> NormalizedRequest:
+    return NormalizedRequest(
+        report_id=request.reportId,
+        content=request.content,
+        file_url=request.fileUrl,
+        word_url=None,
+        title=None,
+        callback_url=request.callbackUrl,
+        batch_mode=request.batchMode,
+        batch_size=request.batchSize,
+        parallel_batch_workers=request.parallelBatchWorkers,
+    )
+
+
+def _normalize_generate_ppt_request(request: GeneratePptRequest) -> NormalizedRequest:
+    return NormalizedRequest(
+        report_id=request.report_id,
+        content=request.content,
+        file_url=request.fileUrl,
+        word_url=request.wordUrl,
+        title=request.title,
+        callback_url=request.callbackUrl,
+        batch_mode=request.batchMode,
+        batch_size=request.batchSize,
+        parallel_batch_workers=request.parallelBatchWorkers,
+    )
