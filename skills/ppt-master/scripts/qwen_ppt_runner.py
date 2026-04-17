@@ -18,6 +18,7 @@ import sys
 import time
 import uuid
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import get_close_matches
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import asdict, dataclass
@@ -40,6 +41,7 @@ COMPLETION_SENTINEL_PREFIX = "PPT_RUN_COMPLETE:"
 SPEC_COMPLETION_SENTINEL_PREFIX = "PPT_SPEC_COMPLETE:"
 REVIEW_COMPLETION_SENTINEL_PREFIX = "PPT_SPEC_REVIEW_COMPLETE:"
 SVG_REVIEW_COMPLETION_SENTINEL_PREFIX = "PPT_SVG_REVIEW_COMPLETE:"
+SVG_REVIEW_BATCH_COMPLETION_SENTINEL_PREFIX = "PPT_SVG_REVIEW_BATCH_COMPLETE:"
 SVG_BATCH_COMPLETION_SENTINEL_PREFIX = "PPT_SVG_BATCH_COMPLETE:"
 NOTES_COMPLETION_SENTINEL_PREFIX = "PPT_NOTES_COMPLETE:"
 DEFAULT_CANVAS_FORMAT = "ppt169"
@@ -87,6 +89,7 @@ ICON_COVERAGE_MIN_SLIDES = 12
 COOKBOOK_REREAD_INTERVAL = 8
 BATCH_SIZE = 8
 BATCH_MODE_THRESHOLD = 15
+DEFAULT_PARALLEL_BATCH_WORKERS = 4
 QWEN_ALLOWED_TOOLS = (
     "edit",
     "write_file",
@@ -228,7 +231,6 @@ def sync_qwen_skill_mirror() -> None:
         (REPO_ROOT / "skills" / "ppt-master" / "references" / "svg_design_cookbook.md", SVG_DESIGN_COOKBOOK_PATH),
         (DESIGN_SPEC_REFERENCE_PATH, QWEN_DESIGN_SPEC_REFERENCE_PATH),
         (CHARTS_INDEX_PATH, QWEN_CHARTS_INDEX_PATH),
-        (REPO_ROOT / "skills" / "ppt-master" / "workflows" / "svg-review.md", QWEN_SVG_REVIEW_WORKFLOW_PATH),
     ]
     for source, destination in mirror_pairs:
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -460,13 +462,17 @@ def load_request(request_path: Path) -> dict[str, Any]:
     if "review_model" in request and request["review_model"] is not None and not isinstance(request["review_model"], str):
         raise RunnerError("review_model must be null or a string")
     batch_mode = (request.get("batch_mode") or "auto")
-    if not isinstance(batch_mode, str) or batch_mode not in {"auto", "always", "never"}:
-        raise RunnerError("batch_mode must be one of: auto, always, never")
+    if not isinstance(batch_mode, str) or batch_mode not in {"auto", "always", "never", "parallel"}:
+        raise RunnerError("batch_mode must be one of: auto, always, never, parallel")
     request["batch_mode"] = batch_mode
     batch_size = request.get("batch_size", BATCH_SIZE)
     if not isinstance(batch_size, int) or batch_size < 1:
         raise RunnerError("batch_size must be a positive integer")
     request["batch_size"] = batch_size
+    parallel_batch_workers = request.get("parallel_batch_workers", DEFAULT_PARALLEL_BATCH_WORKERS)
+    if not isinstance(parallel_batch_workers, int) or parallel_batch_workers < 1:
+        raise RunnerError("parallel_batch_workers must be a positive integer")
+    request["parallel_batch_workers"] = parallel_batch_workers
     model = request.get("model")
     request["model"] = model.strip() if isinstance(model, str) and model.strip() else DEFAULT_QWEN_MODEL
     review_model = request.get("review_model")
@@ -992,6 +998,34 @@ def build_svg_review_input(
     }
 
 
+def build_batch_svg_review_input(
+    project_path: Path,
+    batch_plan: list[SlidePlanEntry],
+    full_plan: list[SlidePlanEntry],
+    runner_dir: Path,
+) -> dict[str, Any]:
+    svg_dir = project_path / "svg_output"
+    expected_batch_names = [entry.filename for entry in batch_plan]
+    actual_svg_names = sorted(
+        path.name for path in svg_dir.glob("*.svg") if path.name in set(expected_batch_names)
+    )
+    batch_complete, deterministic_issues = check_batch_state(project_path, batch_plan, full_plan)
+    return {
+        "design_spec_path": str(project_path / "design_spec.md"),
+        "slide_plan_path": str(runner_dir / "slide_plan.json"),
+        "svg_output_dir": str(svg_dir),
+        "batch_expected_svg_names": expected_batch_names,
+        "batch_actual_svg_names": actual_svg_names,
+        "batch_state_complete": batch_complete,
+        "deterministic_issues": deterministic_issues,
+        "repair_targets": [
+            "invalid XML or unescaped text tokens inside this batch",
+            "invalid icon refs or malformed attributes inside this batch",
+            "small local layout defects such as misalignment, overflow, clipping, or obvious chart-geometry mistakes inside this batch",
+        ],
+    }
+
+
 def validate_design_spec(
     project_path: Path,
     plan: list[SlidePlanEntry],
@@ -1252,6 +1286,34 @@ def check_svg_review_state(
     )
     if not generation_complete:
         errors.extend(generation_errors)
+    if not review_report_path.exists():
+        errors.append(f"Missing {review_report_path.name}")
+    else:
+        try:
+            payload = json.loads(review_report_path.read_text(encoding="utf-8", errors="replace"))
+        except json.JSONDecodeError as exc:
+            errors.append(f"Invalid JSON in {review_report_path.name}: {exc}")
+        else:
+            if not isinstance(payload, dict):
+                errors.append(f"{review_report_path.name} must be a JSON object")
+            else:
+                if not payload.get("status"):
+                    errors.append(f"{review_report_path.name} is missing status")
+                if "summary" not in payload:
+                    errors.append(f"{review_report_path.name} is missing summary")
+    return not errors, errors
+
+
+def check_batch_svg_review_state(
+    project_path: Path,
+    batch_plan: list[SlidePlanEntry],
+    full_plan: list[SlidePlanEntry],
+    review_report_path: Path,
+) -> tuple[bool, list[str]]:
+    errors: list[str] = []
+    batch_complete, batch_errors = check_batch_state(project_path, batch_plan, full_plan)
+    if not batch_complete:
+        errors.extend(batch_errors)
     if not review_report_path.exists():
         errors.append(f"Missing {review_report_path.name}")
     else:
@@ -1951,6 +2013,66 @@ Output requirements:
 """
 
 
+def build_batch_svg_review_bootstrap_prompt(
+    project_path: Path,
+    svg_review_input_path: Path,
+    svg_review_report_path: Path,
+    svg_anchor_context_path: Path,
+    batch_plan: list[SlidePlanEntry],
+    batch_index: int,
+    total_batches: int,
+) -> str:
+    exact_filenames = ", ".join(entry.filename for entry in batch_plan)
+    return f"""You are in the SVG repair review gate for PPT Master.
+
+This is SVG review batch {batch_index + 1} of {total_batches}. Repair only this batch's SVG files.
+
+Read these files before doing anything else:
+1. {REPO_ROOT / "AGENTS.md"}
+2. {QWEN_PROJECT_GUIDE_PATH}
+3. {QWEN_SKILL_WRAPPER_PATH}
+4. {QWEN_REPO_SKILL_PATH}
+5. {QWEN_EXECUTOR_REFERENCE_PATH}
+6. {SVG_DESIGN_COOKBOOK_PATH}
+7. {QWEN_SHARED_STANDARDS_PATH}
+8. {QWEN_IMAGE_LAYOUT_REFERENCE_PATH}
+9. {QWEN_SVG_REVIEW_SKILL_PATH}
+10. {QWEN_SVG_REVIEW_WORKFLOW_PATH}
+11. {project_path / "design_spec.md"}
+12. {svg_review_input_path}
+13. {svg_anchor_context_path}
+
+Review boundaries:
+- Project path: {project_path}
+- You may edit only these SVG files in `{project_path / "svg_output"}`:
+  {exact_filenames}
+- You may write only:
+  - {svg_review_report_path}
+- Do NOT edit `notes/total.md` in this batch review stage
+- Do NOT rewrite `design_spec.md`
+- Do NOT rename files outside this batch
+- Do NOT redesign whole slides; only do local SVG repair and polish
+
+Repair priorities:
+1. Fix invalid SVG XML, bad escaping, broken tags, and malformed attributes inside this batch
+2. Fix invalid icon refs, text overflow, misalignment, clipping, border overflow, or obvious local overlap inside this batch
+3. Fix obvious chart-geometry mistakes when a local redraw is needed to make the existing intended chart correct
+4. Use `{svg_anchor_context_path.name}` as the visual-consistency contract when repairing header/footer coordinates, defs, title-icon spacing, and anchor consistency
+5. Follow the C1→C6 pipeline and baseline-content-page comparison from `{QWEN_SVG_REVIEW_WORKFLOW_PATH.name}`
+
+Output requirements:
+- Repair only this batch's SVG files if needed
+- Write `{svg_review_report_path.name}` as JSON with:
+  - `status`
+  - `summary`
+  - `issues_found`
+  - `issues_fixed`
+  - `remaining_risks`
+- When review is complete, print exactly:
+{SVG_REVIEW_BATCH_COMPLETION_SENTINEL_PREFIX} {project_path}
+"""
+
+
 def build_svg_review_continue_prompt(
     project_path: Path,
     svg_review_report_path: Path,
@@ -1982,6 +2104,43 @@ Before repairing, re-read these files:
 Keep the original page design intent. Fix only local SVG and notes defects.
 When review is complete, print:
 {SVG_REVIEW_COMPLETION_SENTINEL_PREFIX} {project_path}
+"""
+
+
+def build_batch_svg_review_continue_prompt(
+    project_path: Path,
+    svg_review_report_path: Path,
+    generation_errors: list[str],
+    svg_anchor_context_path: Path,
+    batch_plan: list[SlidePlanEntry],
+) -> str:
+    bullet_errors = "\n".join(f"- {item}" for item in generation_errors)
+    return f"""Continue the current SVG repair review batch.
+
+Project path: {project_path}
+The batch SVG outputs are still failing these checks:
+{bullet_errors}
+
+Repair only these SVG files:
+  {", ".join(entry.filename for entry in batch_plan)}
+
+Write only:
+- {svg_review_report_path}
+
+Before repairing, re-read these files:
+- `{QWEN_PROJECT_GUIDE_PATH.name}`
+- `{QWEN_SKILL_WRAPPER_PATH.name}`
+- `{QWEN_REPO_SKILL_PATH.name}`
+- `{QWEN_EXECUTOR_REFERENCE_PATH.name}`
+- `{SVG_DESIGN_COOKBOOK_PATH.name}`
+- `{svg_anchor_context_path.name}`
+- `{QWEN_SVG_REVIEW_SKILL_PATH.name}`
+- `{QWEN_SVG_REVIEW_WORKFLOW_PATH.name}`
+
+Do not edit `notes/total.md` in this batch review stage.
+Keep the original page design intent. Fix only local SVG defects.
+When review is complete, print:
+{SVG_REVIEW_BATCH_COMPLETION_SENTINEL_PREFIX} {project_path}
 """
 
 
@@ -2390,6 +2549,259 @@ def execute_batched_svg_generation(
     return session_ids
 
 
+def execute_parallel_svg_generation(
+    request: dict[str, Any],
+    project_path: Path,
+    slide_plan_path: Path,
+    slide_digest_path: Path,
+    icon_reference_path: Path,
+    svg_anchor_context_path: Path,
+    executor_style_path: Path,
+    plan: list[SlidePlanEntry],
+    runner_dir: Path,
+    log_path: Path,
+) -> list[str]:
+    batches = split_plan_into_batches(plan, int(request.get("batch_size", BATCH_SIZE)))
+    max_workers = min(len(batches), int(request.get("parallel_batch_workers", DEFAULT_PARALLEL_BATCH_WORKERS)))
+    append_log(
+        log_path,
+        f"Launching parallel SVG batches: total_batches={len(batches)} workers={max_workers}",
+    )
+
+    batch_artifacts: list[tuple[int, list[SlidePlanEntry], Path, Path, str]] = []
+    for batch_index, batch_plan in enumerate(batches):
+        batch_slide_plan_path = runner_dir / f"slide_plan.batch_{batch_index + 1:02d}.json"
+        write_json(batch_slide_plan_path, [asdict(entry) for entry in batch_plan])
+
+        batch_digest_path = runner_dir / f"slide_content_digest.batch_{batch_index + 1:02d}.json"
+        write_batch_reference_file(slide_digest_path, batch_digest_path, batch_plan)
+
+        batch_icon_reference_path = runner_dir / f"available_icon_candidates.batch_{batch_index + 1:02d}.json"
+        write_batch_reference_file(icon_reference_path, batch_icon_reference_path, batch_plan)
+
+        batch_prompt = build_batch_svg_prompt(
+            request=request,
+            project_path=project_path,
+            slide_plan_path=slide_plan_path,
+            batch_slide_plan_path=batch_slide_plan_path,
+            batch_digest_path=batch_digest_path,
+            batch_icon_reference_path=batch_icon_reference_path,
+            svg_anchor_context_path=svg_anchor_context_path,
+            executor_style_path=executor_style_path,
+            batch_plan=batch_plan,
+            batch_index=batch_index,
+            total_batches=len(batches),
+            prev_last_svg_path=None,
+        )
+        prompt_path = runner_dir / f"svg_batch_{batch_index + 1:02d}_prompt.txt"
+        prompt_path.write_text(batch_prompt, encoding="utf-8")
+        batch_artifacts.append(
+            (
+                batch_index,
+                batch_plan,
+                prompt_path,
+                batch_slide_plan_path,
+                batch_prompt,
+            )
+        )
+
+    session_by_index: dict[int, str] = {}
+
+    def run_single_parallel_batch(
+        batch_index: int,
+        batch_plan: list[SlidePlanEntry],
+        batch_prompt: str,
+    ) -> str:
+        return execute_qwen_stage(
+            stage_name=f"svg_batch_{batch_index + 1}",
+            artifact_prefix=f"svg_batch_{batch_index + 1:02d}",
+            initial_prompt=batch_prompt,
+            completion_sentinel_prefix=SVG_BATCH_COMPLETION_SENTINEL_PREFIX,
+            state_checker=lambda bp=batch_plan: check_batch_state(project_path, bp, plan),
+            continue_prompt_builder=lambda errors, bp=batch_plan: build_batch_svg_continue_prompt(
+                request,
+                project_path,
+                bp,
+                errors,
+                svg_anchor_context_path,
+            ),
+            confirmation_prompt_builder=lambda _errors, bp=batch_plan: build_batch_svg_confirmation_prompt(bp, request),
+            model=request.get("model"),
+            runner_dir=runner_dir,
+            log_path=log_path,
+        )
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_map = {
+            executor.submit(run_single_parallel_batch, batch_index, batch_plan, batch_prompt): batch_index
+            for batch_index, batch_plan, _prompt_path, _batch_slide_plan_path, batch_prompt in batch_artifacts
+        }
+        for future in as_completed(future_map):
+            batch_index = future_map[future]
+            session_by_index[batch_index] = future.result()
+            append_log(log_path, f"Parallel SVG batch {batch_index + 1} completed")
+
+    return [session_by_index[index] for index in sorted(session_by_index)]
+
+
+def merge_svg_review_reports(batch_report_paths: list[Path], output_path: Path) -> dict[str, Any]:
+    payloads: list[dict[str, Any]] = []
+    for path in batch_report_paths:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        if isinstance(payload, dict):
+            payloads.append(payload)
+
+    issues_found: list[Any] = []
+    issues_fixed: list[Any] = []
+    remaining_risks: list[Any] = []
+    statuses: list[str] = []
+    summaries: list[str] = []
+    for payload in payloads:
+        issues_found.extend(payload.get("issues_found") or [])
+        issues_fixed.extend(payload.get("issues_fixed") or [])
+        remaining_risks.extend(payload.get("remaining_risks") or [])
+        status = str(payload.get("status") or "").strip()
+        if status:
+            statuses.append(status)
+        summary = str(payload.get("summary") or "").strip()
+        if summary:
+            summaries.append(summary)
+
+    if any(status == "FAILED" for status in statuses):
+        merged_status = "FAILED"
+    elif issues_fixed:
+        merged_status = "PASSED_WITH_FIXES"
+    else:
+        merged_status = "PASSED"
+
+    merged = {
+        "status": merged_status,
+        "summary": (
+            f"Parallel SVG review completed across {len(batch_report_paths)} batches. "
+            f"Total fixes: {len(issues_fixed)}. Total issues found: {len(issues_found)}."
+        ),
+        "batch_reports": [str(path) for path in batch_report_paths],
+        "issues_found": issues_found,
+        "issues_fixed": issues_fixed,
+        "remaining_risks": remaining_risks,
+        "batch_summaries": summaries,
+    }
+    write_json(output_path, merged)
+    return merged
+
+
+def execute_parallel_svg_review(
+    *,
+    request: dict[str, Any],
+    project_path: Path,
+    svg_anchor_context_path: Path,
+    plan: list[SlidePlanEntry],
+    valid_chart_keys: set[str],
+    runner_dir: Path,
+    log_path: Path,
+) -> list[str]:
+    batches = split_plan_into_batches(plan, int(request.get("batch_size", BATCH_SIZE)))
+    max_workers = min(len(batches), int(request.get("parallel_batch_workers", DEFAULT_PARALLEL_BATCH_WORKERS)))
+    append_log(
+        log_path,
+        f"Launching parallel SVG review batches: total_batches={len(batches)} workers={max_workers}",
+    )
+
+    batch_artifacts: list[tuple[int, list[SlidePlanEntry], Path, str]] = []
+    for batch_index, batch_plan in enumerate(batches):
+        batch_input_path = runner_dir / f"svg_review_batch_{batch_index + 1:02d}_input.json"
+        batch_report_path = runner_dir / f"svg_review_batch_{batch_index + 1:02d}_report.json"
+        write_json(
+            batch_input_path,
+            build_batch_svg_review_input(
+                project_path=project_path,
+                batch_plan=batch_plan,
+                full_plan=plan,
+                runner_dir=runner_dir,
+            ),
+        )
+        batch_prompt = build_batch_svg_review_bootstrap_prompt(
+            project_path=project_path,
+            svg_review_input_path=batch_input_path,
+            svg_review_report_path=batch_report_path,
+            svg_anchor_context_path=svg_anchor_context_path,
+            batch_plan=batch_plan,
+            batch_index=batch_index,
+            total_batches=len(batches),
+        )
+        (runner_dir / f"svg_review_batch_{batch_index + 1:02d}_prompt.txt").write_text(
+            batch_prompt,
+            encoding="utf-8",
+        )
+        batch_artifacts.append((batch_index, batch_plan, batch_report_path, batch_prompt))
+
+    session_by_index: dict[int, str] = {}
+
+    def run_single_parallel_batch_review(
+        batch_index: int,
+        batch_plan: list[SlidePlanEntry],
+        batch_report_path: Path,
+        batch_prompt: str,
+    ) -> str:
+        return execute_qwen_stage(
+            stage_name=f"svg_review_batch_{batch_index + 1}",
+            artifact_prefix=f"svg_review_batch_{batch_index + 1:02d}",
+            initial_prompt=batch_prompt,
+            completion_sentinel_prefix=SVG_REVIEW_BATCH_COMPLETION_SENTINEL_PREFIX,
+            state_checker=lambda bp=batch_plan, rp=batch_report_path: check_batch_svg_review_state(
+                project_path,
+                bp,
+                plan,
+                rp,
+            ),
+            continue_prompt_builder=lambda errors, bp=batch_plan, rp=batch_report_path: build_batch_svg_review_continue_prompt(
+                project_path,
+                rp,
+                errors,
+                svg_anchor_context_path,
+                bp,
+            ),
+            confirmation_prompt_builder=lambda errors, bp=batch_plan, rp=batch_report_path: build_batch_svg_review_continue_prompt(
+                project_path,
+                rp,
+                errors,
+                svg_anchor_context_path,
+                bp,
+            ),
+            model=request.get("review_model"),
+            runner_dir=runner_dir,
+            log_path=log_path,
+        )
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_map = {
+            executor.submit(
+                run_single_parallel_batch_review,
+                batch_index,
+                batch_plan,
+                batch_report_path,
+                batch_prompt,
+            ): batch_index
+            for batch_index, batch_plan, batch_report_path, batch_prompt in batch_artifacts
+        }
+        for future in as_completed(future_map):
+            batch_index = future_map[future]
+            session_by_index[batch_index] = future.result()
+            append_log(log_path, f"Parallel SVG review batch {batch_index + 1} completed")
+
+    merge_svg_review_reports(
+        [item[2] for item in batch_artifacts],
+        runner_dir / SVG_REVIEW_REPORT_FILENAME,
+    )
+    state_complete, generation_errors = check_generation_state(project_path, plan, valid_chart_keys, runner_dir)
+    if not state_complete:
+        raise RunnerError(
+            "Parallel SVG review completed but the project still fails generation checks: "
+            + "; ".join(generation_errors)
+        )
+    return [session_by_index[index] for index in sorted(session_by_index)]
+
+
 def build_svg_anchor_context(
     project_path: Path,
     plan: list[SlidePlanEntry],
@@ -2595,13 +3007,34 @@ def execute_generation(
 
     batch_mode = str(request.get("batch_mode", "auto"))
     batch_size = int(request.get("batch_size", BATCH_SIZE))
+    use_parallel_svg = batch_mode == "parallel"
     use_batched_svg = batch_mode == "always" or (
         batch_mode == "auto" and len(plan) > BATCH_MODE_THRESHOLD
     )
 
     svg_session_id: str
     svg_batch_session_ids: list[str] = []
-    if use_batched_svg:
+    if use_parallel_svg:
+        append_log(
+            log_path,
+            "Using parallel batched SVG generation: "
+            f"pages={len(plan)} batch_size={batch_size} "
+            f"workers={int(request.get('parallel_batch_workers', DEFAULT_PARALLEL_BATCH_WORKERS))}",
+        )
+        svg_batch_session_ids = execute_parallel_svg_generation(
+            request=request,
+            project_path=project_path,
+            slide_plan_path=slide_plan_path,
+            slide_digest_path=slide_digest_path,
+            icon_reference_path=icon_reference_path,
+            svg_anchor_context_path=svg_anchor_context_path,
+            executor_style_path=executor_style_path,
+            plan=plan,
+            runner_dir=runner_dir,
+            log_path=log_path,
+        )
+        svg_session_id = svg_batch_session_ids[-1]
+    elif use_batched_svg:
         append_log(
             log_path,
             f"Using batched serial SVG generation: pages={len(plan)} batch_size={batch_size} batch_mode={batch_mode}",
@@ -2681,35 +3114,53 @@ def execute_generation(
         svg_anchor_context_path,
     )
     (runner_dir / "svg_review_prompt.txt").write_text(svg_review_prompt, encoding="utf-8")
-
-    svg_review_session_id = execute_qwen_stage(
-        stage_name="svg_review",
-        artifact_prefix="svg_review",
-        initial_prompt=svg_review_prompt,
-        completion_sentinel_prefix=SVG_REVIEW_COMPLETION_SENTINEL_PREFIX,
-        state_checker=lambda: check_svg_review_state(
-            project_path,
-            plan,
-            valid_chart_keys,
-            svg_review_report_path,
-            runner_dir,
-        ),
-        continue_prompt_builder=lambda errors: build_svg_review_continue_prompt(
-            project_path,
-            svg_review_report_path,
-            errors,
-            svg_anchor_context_path,
-        ),
-        confirmation_prompt_builder=lambda errors: build_svg_review_continue_prompt(
-            project_path,
-            svg_review_report_path,
-            errors,
-            svg_anchor_context_path,
-        ),
-        model=request.get("review_model"),
-        runner_dir=runner_dir,
-        log_path=log_path,
-    )
+    svg_review_session_ids: list[str] = []
+    if use_parallel_svg or use_batched_svg:
+        append_log(
+            log_path,
+            "Using parallel batched SVG review: "
+            f"pages={len(plan)} batch_size={batch_size} "
+            f"workers={int(request.get('parallel_batch_workers', DEFAULT_PARALLEL_BATCH_WORKERS))}",
+        )
+        svg_review_session_ids = execute_parallel_svg_review(
+            request=request,
+            project_path=project_path,
+            svg_anchor_context_path=svg_anchor_context_path,
+            plan=plan,
+            valid_chart_keys=valid_chart_keys,
+            runner_dir=runner_dir,
+            log_path=log_path,
+        )
+        svg_review_session_id = svg_review_session_ids[-1]
+    else:
+        svg_review_session_id = execute_qwen_stage(
+            stage_name="svg_review",
+            artifact_prefix="svg_review",
+            initial_prompt=svg_review_prompt,
+            completion_sentinel_prefix=SVG_REVIEW_COMPLETION_SENTINEL_PREFIX,
+            state_checker=lambda: check_svg_review_state(
+                project_path,
+                plan,
+                valid_chart_keys,
+                svg_review_report_path,
+                runner_dir,
+            ),
+            continue_prompt_builder=lambda errors: build_svg_review_continue_prompt(
+                project_path,
+                svg_review_report_path,
+                errors,
+                svg_anchor_context_path,
+            ),
+            confirmation_prompt_builder=lambda errors: build_svg_review_continue_prompt(
+                project_path,
+                svg_review_report_path,
+                errors,
+                svg_anchor_context_path,
+            ),
+            model=request.get("review_model"),
+            runner_dir=runner_dir,
+            log_path=log_path,
+        )
 
     write_json(
         runner_dir / "stage_sessions.json",
@@ -2720,6 +3171,7 @@ def execute_generation(
             "svg_batch_sessions": svg_batch_session_ids,
             "notes_session_id": notes_session_id,
             "svg_review_session_id": svg_review_session_id,
+            "svg_review_batch_sessions": svg_review_session_ids,
         },
     )
     return svg_review_session_id

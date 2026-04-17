@@ -337,6 +337,37 @@ When content outline pages involve **data visualization or infographic-style str
 
 **PPT 16:9 (1280x720) key dimensions**: Safe area 1200x640 (40px margins); Title area 1200x100; Content area 1200x500; Footer area 1200x40.
 
+### Layout Selection Decision Tree
+
+When content has 3 parallel items, do NOT default to three-column. Match content type first:
+
+```
+Content has 3 parallel items?
+  ├─ Items are PEOPLE (experts, mentors, team) ────→ Three-column cards ✅
+  ├─ Items are DATA (metrics, KPIs, stats) ────────→ KPI strip + two-column
+  ├─ Items are STAGES (phases, steps) ─────────────→ Numbered steps / timeline
+  ├─ Items are COMPARISONS (products, methods) ────→ Table or comparison columns
+  └─ Items are TOPICS (features, modules, areas) ─→ Check further:
+       ├─ Unequal importance? → Left-wide(7:3) + side panel
+       ├─ Data-dense?         → Four-quadrant grid
+       └─ Equal + short text  → Three-column cards ✅
+```
+
+### Layout Frequency Rules
+
+| Rule | Constraint |
+|------|-----------|
+| **Single-layout cap** | **Any single layout mode** must not exceed 20% of content pages (e.g., ≤6 pages in a 30-page deck) |
+| **No consecutive repeats** | No two adjacent pages may use the same layout mode |
+| **Fallback alternatives** | When near cap for any layout, rotate to the least-used mode from the table above |
+
+| Total Content Pages | Max Pages Per Layout Mode |
+|---------------------|--------------------------|
+| 10–15 | 3 |
+| 16–25 | 4 |
+| 26–35 | 6 |
+| 36+ | 7 |
+
 ---
 
 ## 5. Template Flexibility Principle

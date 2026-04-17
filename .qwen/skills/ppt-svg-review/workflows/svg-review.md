@@ -24,11 +24,13 @@ Step 6 (Executor) → ★ SVG Review ★ → Step 7 (Post-processing)
 - Executor 阶段完成后，**自动执行**
 - 用户手动要求 "review SVG" / "检查SVG" / "修一下SVG"
 - `svg_quality_checker.py` 报告 errors > 0 时
+- 若 runner 开启 batched mode，可按 batch 单独触发；每个 batch 只修本批 SVG，最终由 runner 汇总报告并做整套校验
 
 ## 输入 / 输出
 
 - **输入**: `<project_path>/svg_output/*.svg`
 - **输出**: 就地修复的 `<project_path>/svg_output/*.svg`（修改原文件）
+- **Batched mode**: 当 runner 传入当前批次清单时，只修复该批次文件；`notes/total.md` 仅在 full-deck review 中允许修改
 
 ---
 
@@ -163,6 +165,63 @@ icon_group.set_scale(1.875)
 中心圆+周围节点    → 辐射图
 ```
 
+### C7: 图表几何完整性
+
+适用对象：包含弧线命令 (`A rx,ry ...`) 的页面 — 饼图、环形图、进度弧、金字塔等几何图形。
+
+| # | 检查项 | 判定标准 | 修复方式 |
+|---|--------|---------|--------|
+| 7.1 | 弧线端点在圆上 | 所有弧线端点到圆心的距离 = 声明的半径 (±2px) | 用三角函数重新计算端点坐标 |
+| 7.2 | 相邻扇区共享端点 | 前扇区终点的 M/L 坐标 = 下一扇区的起点 | 统一到正确坐标 |
+| 7.3 | 扇区角度总和 | 所有扇区的弧度之和 ≈ 360° (±1°) | 重新按比例分配角度 |
+| 7.4 | 遮罩圆圆心对齐 | `<circle>` 的 cx,cy = 弧线的数学圆心 | 修正 cx,cy |
+| 7.5 | 金字塔/三角形对称 | 左右两侧斜边关于中心 x 轴对称 (±3px) | 以中心线镜像修正 |
+| 7.6 | 图形不超出容器 | 图表的最大外接矩形不超出其所在卡片的边界 | 缩小半径或偏移圆心 |
+
+**环形图三步验证法**：
+
+```python
+# Step 1: 从 <circle> 提取圆心和内径
+cx, cy = mask_circle.cx, mask_circle.cy
+inner_r = mask_circle.r
+
+# Step 2: 从最大弧线的 A 命令提取外径
+outer_r = largest_arc.rx  # A rx,ry 中的 rx
+
+# Step 3: 验证每个弧线端点
+for segment in arc_segments:
+    for point in [segment.start, segment.line_to]:
+        dist = sqrt((point.x - cx)² + (point.y - cy)²)
+        expected = outer_r if is_outer_arc else inner_r
+        if abs(dist - expected) > 2:
+            # 端点坐标错误 → 重新计算
+            angle = atan2(point.y - cy, point.x - cx)
+            correct_x = cx + expected * cos(angle)
+            correct_y = cy + expected * sin(angle)
+```
+
+### C8: 元素重叠检查
+
+适用对象：同层级的多个卡片（`<rect>` 或 `<path>` 带 `filter="url(#cardShadow)"`），以及卡片内部的子元素。
+
+| # | 检查项 | 判定标准 | 修复方式 |
+|---|--------|---------|--------|
+| 8.1 | 同层卡片无水平重叠 | card_A.x + card_A.width ≤ card_B.x | 等分重新计算宽度和位置 |
+| 8.2 | 同层卡片无垂直重叠 | card_A.y + card_A.height ≤ card_B.y | 重新分配垂直空间 |
+| 8.3 | 子元素不超出父卡片 | child 的 x,y,width,height 全在 parent 内 | 缩放或重新定位 |
+| 8.4 | 文字不超出卡片右边界 | text.x + (字数 × font-size) ≤ card.x + card.width - padding | 截断或拆行 |
+
+**同层卡片等分公式**：
+```
+给定 N 张卡片在 [x_start, x_end] 范围内，间距 gap：
+  card_width = (x_end - x_start - (N-1) × gap) / N
+  card_i_x = x_start + i × (card_width + gap)
+
+例：3张卡片在 [80, 740]，gap=20px：
+  width = (740-80-2×20)/3 = 206.7px ≈ 200px
+  card_0: x=80, card_1: x=300, card_2: x=520
+```
+
 ---
 
 ## 执行流程
@@ -194,11 +253,23 @@ icon_group.set_scale(1.875)
 └───────────┬──────────────────────────┘
             ↓
 ┌──────────────────────────────────────┐
+│ 5b. 逐页检查图表几何(C7)             │
+│    → 验证弧线端点、扇区角度、对称性  │
+└───────────┬──────────────────────────┘
+            ↓
+┌──────────────────────────────────────┐
+│ 5c. 逐页检查元素重叠(C8)             │
+│    → 检测同层卡片重叠、子元素越界    │
+└───────────┬──────────────────────────┘
+            ↓
+┌──────────────────────────────────────┐
 │ 6. 批量修复                          │
 │    C1: 替换异常页的defs/header/footer│
 │    C2: 修正图标translate和scale       │
 │    C3: 截断溢出文字                   │
 │    C4: 修复语法错误                   │
+│    C7: 重新计算弧线/几何端点坐标      │
+│    C8: 等分重新分配重叠卡片的宽度     │
 └───────────┬──────────────────────────┘
             ↓
 ┌──────────────────────────────────────┐
@@ -261,3 +332,7 @@ icon_group.set_scale(1.875)
 | 阴影看不见 | feDropShadow/弱filter | C1 | 替换为 5 步 filter |
 | 渐变条和色条重叠 | 渐变条 y=40 | C1 | 改为 y=0 |
 | 后半段页脚消失/变化 | 上下文遗忘 | C1 | 从基准页复制 footer |
+| 环形图/饼图"扭曲"或缝隙 | 内弧端点坐标计算错误 | C7 | 用三角函数重新计算端点 |
+| 金字塔/三角形歪斜 | 左右不对称 | C7 | 以中心线镜像修正 |
+| 同级卡片互相遮挡 | N张卡片总宽>可用空间 | C8 | 等分重新计算宽度 |
+| 文字溢出卡片底部 | 内容太多或卡片太矮 | C8 | 扩高卡片或删末行 |

@@ -24,7 +24,7 @@ description: >
 > 4. **GATE BEFORE ENTRY** — Each Step has prerequisites (🚧 GATE) listed at the top; these MUST be verified before starting that Step
 > 5. **NO SPECULATIVE EXECUTION** — "Pre-preparing" content for subsequent Steps is FORBIDDEN (e.g., writing SVG code during the Strategist phase)
 > 6. **NO SUB-AGENT SVG GENERATION** — Executor Step 6 SVG generation is context-dependent and MUST be completed by the current main agent end-to-end. Delegating page SVG generation to sub-agents is FORBIDDEN
-> 7. **SEQUENTIAL PAGE GENERATION ONLY** — In Executor Step 6, after the global design context is confirmed, SVG pages MUST be generated sequentially page by page in one continuous pass. Grouped page batches (for example, 5 pages at a time) are FORBIDDEN
+> 7. **RUNNER-MEDIATED BATCHING ONLY** — In default interactive use, Executor Step 6 should proceed sequentially page by page in one continuous pass. If the local runner explicitly enables batched generation, batching is allowed only as a runner-managed continuation mechanism with shared deck-level anchors; arbitrary manual batch splitting remains FORBIDDEN
 
 > [!IMPORTANT]
 > ## 🌐 Language & Communication Rule
@@ -245,7 +245,7 @@ Read references/executor-consultant-top.md # Top consulting style (MBB level)
 **Design Parameter Confirmation (Mandatory)**: Before generating the first SVG, the Executor MUST review and output key design parameters from the Design Specification (canvas dimensions, color scheme, font plan, body font size) to ensure spec adherence. See executor-base.md Section 2 for details.
 
 > ⚠️ **Main-agent only rule**: SVG generation in Step 6 MUST remain with the current main agent because page design depends on full upstream context (source content, design spec, template mapping, image decisions, and cross-page consistency). Do NOT delegate any slide SVG generation to sub-agents.
-> ⚠️ **Generation rhythm rule**: After confirming the global design parameters, the Executor MUST generate pages sequentially, one page at a time, while staying in the same continuous main-agent context. Do NOT split Step 6 into grouped page batches such as 5 pages per batch.
+> ⚠️ **Generation rhythm rule**: After confirming the global design parameters, the Executor SHOULD generate pages sequentially, one page at a time, while staying in the same continuous main-agent context. If the local runner explicitly enables batched execution, each batch must still behave like one anchored continuation of the same deck rather than an independent mini-deck.
 > ⚠️ **Long-run anchor rule**: In long decks, Executor MUST periodically re-anchor to the cookbook and runtime anchor context so header/footer/defs/naming rules do not drift mid-run.
 
 **Visual Construction Phase**:
@@ -253,6 +253,7 @@ Read references/executor-consultant-top.md # Top consulting style (MBB level)
 
 **Logic Construction Phase**:
 - Generate speaker notes → `<project_path>/notes/total.md`
+- In runner-managed batched mode, notes may be generated in a dedicated post-SVG notes phase instead of during the same Executor session
 
 **✅ Checkpoint — Confirm all SVGs and notes are fully generated. Proceed directly to Step 7 post-processing**:
 ```markdown
@@ -265,7 +266,7 @@ Read references/executor-consultant-top.md # Top consulting style (MBB level)
 
 ### Step 7: Post-processing & Export
 
-🚧 **GATE**: Step 6 complete; all SVGs generated to `svg_output/`; speaker notes `notes/total.md` generated.
+🚧 **GATE**: Step 6 complete; all SVGs generated to `svg_output/`; speaker notes `notes/total.md` generated (or, in runner-managed batched mode, notes phase completed immediately after SVG generation).
 
 > ⚠️ The following three sub-steps MUST be **executed individually one at a time**. Each command must complete and be confirmed successful before running the next.
 > ❌ **NEVER** put all three commands in a single code block or single shell invocation.

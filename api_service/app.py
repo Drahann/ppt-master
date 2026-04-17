@@ -73,6 +73,7 @@ def _process_request(request: ReportRequest) -> dict[str, object]:
         working_dir=job_dir,
         batch_mode=(request.batchMode or settings.batch_mode),
         batch_size=(request.batchSize or settings.batch_size),
+        parallel_batch_workers=(request.parallelBatchWorkers or settings.parallel_batch_workers),
     )
 
     notes_path = runner_result.project_path / "notes" / "total.md"

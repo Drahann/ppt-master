@@ -793,6 +793,84 @@ ls skills/ppt-master/templates/icons/chunk/ | grep lightbulb
 </g>
 ```
 
+### 规则 L7：彩色背景摘要卡（通用组件）
+
+**用途**：KPI 概览条、章节总述、数据高亮行。可配合任意布局使用。每 8 页最多用 1 次。
+
+```xml
+<!-- ✅ 彩色背景摘要卡 — 主色大面积铺底，白色文字 -->
+<g id="summary-highlight">
+  <rect x="60" y="105" width="1160" height="70" rx="12" fill="[PRIMARY]"/>
+  <use data-icon="chunk/chart-bar" x="88" y="118"
+    width="28" height="28" fill="#FFFFFF"/>
+  <text x="128" y="132" font-family="Microsoft YaHei, Arial, sans-serif"
+    font-size="20" font-weight="bold" fill="#FFFFFF">行业现状一览</text>
+  <text x="128" y="155" font-family="Microsoft YaHei, Arial, sans-serif"
+    font-size="14" fill="#FFFFFF" fill-opacity="0.85">
+    全球XR市场规模4500亿 · 复合增长40%+ · 国产替代窗口期已至</text>
+  <!-- 右侧 pill badge -->
+  <rect x="960" y="118" width="220" height="34" rx="17"
+    fill="#FFFFFF" fill-opacity="0.2"/>
+  <text x="1070" y="140" text-anchor="middle"
+    font-size="14" font-weight="bold" fill="#FFFFFF">国产化率 → 35%</text>
+</g>
+```
+
+**与 K1 规则的关系**：K1 说"卡片主体背景只能纯白"。摘要卡不是内容卡片，它是 70px 高的**横条元素**，不受 K1 约束。
+
+### 规则 L8：SVG 原生表格（通用组件）
+
+**用途**：竞品对比、参数表、多维评价矩阵。数据 ≥ 3 行 × 3 列时使用。可配合任意布局使用。
+
+```xml
+<!-- ✅ SVG 原生表格 — rect + text + line 排列 -->
+<g id="comparison-table">
+  <!-- 表头行 — 主色背景 -->
+  <rect x="60" y="200" width="1160" height="40" rx="8" fill="[PRIMARY]"/>
+  <text x="230" y="226" text-anchor="middle" font-size="14"
+    font-weight="bold" fill="#FFFFFF">维度</text>
+  <text x="530" y="226" text-anchor="middle" font-size="14"
+    font-weight="bold" fill="#FFFFFF">龙影手套</text>
+  <text x="830" y="226" text-anchor="middle" font-size="14"
+    font-weight="bold" fill="#FFFFFF">进口竞品</text>
+  <text x="1080" y="226" text-anchor="middle" font-size="14"
+    font-weight="bold" fill="#FFFFFF">开源方案</text>
+
+  <!-- 奇数行 — SURFACE 底色 -->
+  <rect x="60" y="240" width="1160" height="36" fill="#F0F4F8"/>
+  <text x="230" y="264" text-anchor="middle" font-size="13"
+    fill="#263238">价格</text>
+  <text x="530" y="264" text-anchor="middle" font-size="13"
+    font-weight="bold" fill="#2E7D32">＜5000元 ✓</text>
+  <text x="830" y="264" text-anchor="middle" font-size="13"
+    fill="#C62828">＞10000元</text>
+  <text x="1080" y="264" text-anchor="middle" font-size="13"
+    fill="#546E7A">N/A</text>
+
+  <!-- 偶数行 — 白底 -->
+  <rect x="60" y="276" width="1160" height="36" fill="#FFFFFF"/>
+  <text x="230" y="300" text-anchor="middle" font-size="13"
+    fill="#263238">精度</text>
+  <text x="530" y="300" text-anchor="middle" font-size="13"
+    font-weight="bold" fill="#2E7D32">0.1mm ✓</text>
+  <text x="830" y="300" text-anchor="middle" font-size="13"
+    fill="#546E7A">0.5mm</text>
+  <text x="1080" y="300" text-anchor="middle" font-size="13"
+    fill="#546E7A">1mm+</text>
+
+  <!-- 更多行... 交替 F0F4F8 / FFFFFF -->
+
+  <!-- 列分隔线 -->
+  <line x1="370" y1="200" x2="370" y2="420" stroke="#CFD8DC" stroke-width="1"/>
+  <line x1="680" y1="200" x2="680" y2="420" stroke="#CFD8DC" stroke-width="1"/>
+  <line x1="960" y1="200" x2="960" y2="420" stroke="#CFD8DC" stroke-width="1"/>
+</g>
+```
+
+**列宽计算**：内容区宽度 1160px，N 列等分。4 列时每列 290px，5 列时每列 232px。text-anchor="middle" 放在每列中心 x 坐标。
+
+**颜色语义**：优势用 `SUCCESS`(`#2E7D32`)，劣势用 `WARNING`(`#C62828`)，中性用 `MUTED`(`#546E7A`)。
+
 ### 规则 L5：布局使用记录
 
 在生成过程中，你必须在脑中维护一个布局记录表，确保不重复：
@@ -1274,3 +1352,5 @@ ls skills/ppt-master/templates/icons/chunk/ | grep lightbulb
 即使执行了重锚，仍然可能出现注意力漂移。**所有设计一致性问题都将在 Step 6.5 SVG Review 阶段被检测和修复**（见 `workflows/svg-review.md`）。
 
 重锚是"尽力预防"，SVG Review 是"兜底修复"。两者缺一不可。
+
+

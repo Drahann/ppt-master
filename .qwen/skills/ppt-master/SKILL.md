@@ -48,3 +48,5 @@ Then load only the role-specific references needed for the current phase:
 - Treat `.qwen/skills/ppt-master/references/repo_skill.md` as authoritative when this wrapper is shorter than the original.
 - During Executor work, SVG generation must remain in the main agent and proceed sequentially page by page.
 - During long SVG runs, periodically re-anchor to both the cookbook and `runner/svg_anchor_context.json` so geometry, defs, naming, and footer/header rules do not drift.
+- When the local runner enables batched execution, treat each batch as one continuous Executor segment governed by the same deck-level anchor contract.
+- When the local runner enables batched SVG review, repair each batch locally first, then rely on the runner's merged report and final deck-level checks to ensure cross-batch consistency.

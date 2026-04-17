@@ -10,8 +10,9 @@ class ReportRequest(BaseModel):
     content: str = Field(..., min_length=1)
     fileUrl: str | None = None
     callbackUrl: str | None = None
-    batchMode: str | None = Field(default=None, pattern="^(auto|always|never)$")
+    batchMode: str | None = Field(default=None, pattern="^(auto|always|never|parallel)$")
     batchSize: int | None = Field(default=None, ge=1)
+    parallelBatchWorkers: int | None = Field(default=None, ge=1)
 
 
 class CallbackResult(BaseModel):

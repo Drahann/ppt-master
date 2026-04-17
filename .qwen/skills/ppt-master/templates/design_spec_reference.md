@@ -148,6 +148,21 @@
 | Double-row card height | 265-295px each | [fill in] |
 | Three-column card width | 360-380px each | [fill in] |
 
+### Layout Diversity Constraint
+
+> **No single layout mode should dominate the deck.**
+> Strategist MUST limit any single layout type to ≤ 20% of content pages.
+> Before reusing a layout, check if it has already reached the cap.
+
+| Total Content Pages | Max Pages Per Layout Mode |
+|---------------------|--------------------------| 
+| 10–15 | 3 |
+| 16–25 | 4 |
+| 26–35 | 6 |
+| 36+ | 7 |
+
+> **No two consecutive pages** may use the same layout mode.
+
 ---
 
 ## VI. Icon Usage Specification

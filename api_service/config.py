@@ -33,6 +33,7 @@ class Settings:
     qwen_review_model: str | None
     batch_mode: str
     batch_size: int
+    parallel_batch_workers: int
     cos_secret_id: str
     cos_secret_key: str
     cos_region: str
@@ -48,7 +49,7 @@ def load_settings() -> Settings:
     project_base_dir = Path(os.getenv("PPT_API_PROJECT_BASE_DIR", str(REPO_ROOT / "projects"))).expanduser()
     jobs_dir = Path(os.getenv("PPT_API_JOBS_DIR", str(REPO_ROOT / "tmp" / "api-jobs"))).expanduser()
     batch_mode = (os.getenv("PPT_API_BATCH_MODE", "auto") or "auto").strip().lower()
-    if batch_mode not in {"auto", "always", "never"}:
+    if batch_mode not in {"auto", "always", "never", "parallel"}:
         batch_mode = "auto"
     return Settings(
         repo_root=REPO_ROOT,
@@ -64,6 +65,7 @@ def load_settings() -> Settings:
         qwen_review_model=(os.getenv("PPT_API_QWEN_REVIEW_MODEL") or "").strip() or None,
         batch_mode=batch_mode,
         batch_size=max(1, _env_int("PPT_API_BATCH_SIZE", 8)),
+        parallel_batch_workers=max(1, _env_int("PPT_API_PARALLEL_BATCH_WORKERS", 4)),
         cos_secret_id=os.getenv("COS_SECRET_ID", "").strip(),
         cos_secret_key=os.getenv("COS_SECRET_KEY", "").strip(),
         cos_region=os.getenv("COS_REGION", "ap-shanghai").strip() or "ap-shanghai",

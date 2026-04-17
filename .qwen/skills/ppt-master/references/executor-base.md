@@ -75,6 +75,7 @@ Must output confirmation including: canvas dimensions, body font size, color sch
 - **Visual depth**: Use filter shadows, glow effects, gradient fills, dashed strokes, and gradient overlays from shared-standards.md to create layered depth — flat pages without elevation or emphasis look unfinished
 
 - **Cookbook adherence**: Treat `svg_design_cookbook.md` as the default visual-quality playbook for SVG composition unless a page has an explicit contrary requirement in the Design Spec
+- **Advanced visual patterns**: The cookbook's Part 6 includes two universal components — **Color-block Summary Card** (L7, for KPI strips and chapter summaries) and **SVG Native Table** (L8, for competitive comparisons and parameter matrices). Use them when the content fits; see cookbook L7/L8 for copy-pasteable code.
 - **Runtime anchor adherence**: If `runner/svg_anchor_context.json` exists, treat it as the first-priority execution anchor for fixed geometry, naming, and defs consistency
 - **Cookbook + anchor refresh cadence**: During long sequential generation, re-read both `svg_design_cookbook.md` and `runner/svg_anchor_context.json` after every 8 completed SVG pages and immediately whenever visual quality starts drifting or after any interrupted resume
 - **Re-anchor checkpoints**: Before slide 9, 17, 25, etc., pause internally and re-anchor to the cookbook + runtime anchor context before continuing

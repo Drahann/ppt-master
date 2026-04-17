@@ -57,6 +57,7 @@ def execute_runner(
     working_dir: Path,
     batch_mode: str | None = None,
     batch_size: int | None = None,
+    parallel_batch_workers: int | None = None,
 ) -> RunnerResult:
     job_id = build_job_id(report_id)
     working_dir.mkdir(parents=True, exist_ok=True)
@@ -76,6 +77,8 @@ def execute_runner(
         request_payload["batch_mode"] = batch_mode
     if batch_size is not None:
         request_payload["batch_size"] = batch_size
+    if parallel_batch_workers is not None:
+        request_payload["parallel_batch_workers"] = parallel_batch_workers
 
     request_path = working_dir / "runner_request.json"
     request_path.write_text(json.dumps(request_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

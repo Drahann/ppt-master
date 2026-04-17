@@ -37,6 +37,8 @@ Checklist:
 - Reassess weak page-task decisions, especially commercial and team slides
 - Preserve downstream SVG anchorability: reviewed layouts should still support a stable title/icon/header/footer system across long sequential SVG generation
 - Keep page count and slide order unchanged
+- **No single layout mode may exceed 20% of content pages** — count slides by Layout type; if any layout exceeds the cap, replace excess instances with alternatives per the Layout Selection Decision Tree in `references/strategist.md`
+- **No two consecutive pages may use the same layout mode** — scan Content Outline sequentially; if adjacent slides share the same layout, change one to an alternative
 
 Output:
 

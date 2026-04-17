@@ -46,6 +46,8 @@ Repair priorities:
 4. Invalid icon refs
 5. Local layout defects: misalignment, clipping, overflow, border spill, overlap
 6. Obvious chart-geometry mistakes when a local redraw is enough to fix the intended chart
+7. Chart geometry: donut/pie/arc endpoint consistency, sector angle sum, mask alignment, pyramid symmetry
+8. Card overlap: sibling cards at same hierarchy level must not overlap horizontally or vertically; child elements must stay within parent card bounds
 
 Review order:
 
@@ -55,6 +57,8 @@ Review order:
 - C4 XML and escaping validity
 - C5 big-number / badge completeness
 - C6 layout monotony and local polish
+- C7 chart geometry integrity (arcs, sectors, pyramids, symmetry)
+- C8 card/element overlap detection
 
 Rules:
 
@@ -62,6 +66,11 @@ Rules:
 - Prefer small local edits over full rewrites
 - If a chart is semantically wrong, repair the chart region rather than the whole page
 - Use the runtime anchor context to restore fixed header/footer/defs/icon-spacing/naming consistency after long-run drift or interrupted resumes
+- In runner-managed batched mode, this skill may be invoked per batch. In that case:
+  - repair only the current batch's SVG files
+  - do not edit `notes/total.md` during batch-local review
+  - keep deck-level anchor consistency using `runner/svg_anchor_context.json`
+  - let the runner merge batch review reports into the final `svg_review_report.json`
 
 Output:
 

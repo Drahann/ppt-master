@@ -67,7 +67,7 @@ Must output confirmation including: canvas dimensions, body font size, color sch
 - **Absolute spec adherence**: Strictly follow the color, layout, canvas format, and typography parameters in the spec
 - **Follow template structure**: If templates exist, inherit the template's visual framework
 - **Main-agent ownership**: SVG generation must be performed by the current main agent, not delegated to sub-agents, because each page depends on shared upstream context and cross-page visual continuity
-- **Generation rhythm**: First lock the global design context, then generate pages sequentially one by one in the same continuous context; grouped page batches (for example, 5 pages at a time) are not allowed
+- **Generation rhythm**: First lock the global design context, then generate pages sequentially one by one in the same continuous context. When the local runner explicitly enables batch mode, treat each batch as one continuous Executor segment under the same deck-level anchor contract rather than as unrelated mini-decks.
 - **Phased batch generation** (recommended):
   1. **Visual Construction Phase**: Generate all SVG pages continuously in sequential page order, ensuring high consistency in design style and layout coordinates (Visual Consistency)
   2. **Logic Construction Phase**: After all SVGs are finalized, batch-generate speaker notes to ensure narrative coherence (Narrative Continuity)
@@ -78,6 +78,7 @@ Must output confirmation including: canvas dimensions, body font size, color sch
 - **Runtime anchor adherence**: If `runner/svg_anchor_context.json` exists, treat it as the first-priority execution anchor for fixed geometry, naming, and defs consistency
 - **Cookbook + anchor refresh cadence**: During long sequential generation, re-read both `svg_design_cookbook.md` and `runner/svg_anchor_context.json` after every 8 completed SVG pages and immediately whenever visual quality starts drifting or after any interrupted resume
 - **Re-anchor checkpoints**: Before slide 9, 17, 25, etc., pause internally and re-anchor to the cookbook + runtime anchor context before continuing
+- **Batched repair compatibility**: If the local runner later launches `svg_review` per batch, that review pass is allowed to repair each batch locally as long as it preserves the same runtime anchor contract and does not redesign the page intent
 
 ### SVG File Naming Convention
 
