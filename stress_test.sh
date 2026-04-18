@@ -61,7 +61,6 @@ fi
 echo "📄 内容来源: $POSTPPT_JSON"
 
 # 预生成 payload 模板到临时文件（避免 shell 变量传递大 JSON 出错）
-PAYLOAD_TEMPLATE="$LOG_DIR/_payload_template.json"
 LOG_DIR="/tmp/ppt_stress_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$LOG_DIR"
 
