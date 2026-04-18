@@ -7,10 +7,11 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from .config import load_settings
 from .markdown_assets import process_markdown_images
+from .metrics import metrics
 from .models import CallbackResult as CallbackResultModel
 from .models import GeneratePptRequest, GeneratePptResponse, NormalizedRequest, ReportRequest, ReportResponse
 from .runner import derive_title, execute_runner
@@ -24,6 +25,9 @@ app = FastAPI(title="ppt-master-api", version="1.0.0")
 job_semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
 
 
+_DASHBOARD_HTML = (Path(__file__).parent / "dashboard.html").read_text(encoding="utf-8")
+
+
 @app.get("/healthz")
 def healthz() -> dict[str, object]:
     return {
@@ -33,6 +37,18 @@ def healthz() -> dict[str, object]:
         "jobsDir": str(settings.jobs_dir),
         "maxConcurrentJobs": settings.max_concurrent_jobs,
     }
+
+
+@app.get("/metrics")
+def get_metrics() -> dict:
+    """Real-time performance metrics JSON."""
+    return metrics.snapshot(settings.max_concurrent_jobs)
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard():
+    """Live performance dashboard."""
+    return _DASHBOARD_HTML
 
 
 @app.exception_handler(RequestValidationError)
@@ -75,50 +91,57 @@ def _process_request(request: NormalizedRequest) -> dict[str, object]:
     title = request.title or derive_title(request.content, request.report_id)
     job_dir = _build_job_dir(request.report_id)
     job_dir.mkdir(parents=True, exist_ok=True)
+    job_id = job_dir.name
 
-    processed_markdown, image_warnings = process_markdown_images(request.content, job_dir)
-    source_md_path = job_dir / "source.md"
-    source_md_path.write_text(processed_markdown, encoding="utf-8")
-    if image_warnings:
-        (job_dir / "image_warnings.txt").write_text("\n".join(image_warnings) + "\n", encoding="utf-8")
+    metrics.start_job(job_id, request.report_id, title or "untitled")
+    try:
+        processed_markdown, image_warnings = process_markdown_images(request.content, job_dir)
+        source_md_path = job_dir / "source.md"
+        source_md_path.write_text(processed_markdown, encoding="utf-8")
+        if image_warnings:
+            (job_dir / "image_warnings.txt").write_text("\n".join(image_warnings) + "\n", encoding="utf-8")
 
-    runner_result = execute_runner(
-        source_md_path=source_md_path,
-        report_id=request.report_id,
-        title=title,
-        settings=settings,
-        working_dir=job_dir,
-        batch_mode=(request.batch_mode or settings.batch_mode),
-        batch_size=(request.batch_size or settings.batch_size),
-        parallel_batch_workers=(request.parallel_batch_workers or settings.parallel_batch_workers),
-    )
+        runner_result = execute_runner(
+            source_md_path=source_md_path,
+            report_id=request.report_id,
+            title=title,
+            settings=settings,
+            working_dir=job_dir,
+            batch_mode=(request.batch_mode or settings.batch_mode),
+            batch_size=(request.batch_size or settings.batch_size),
+            parallel_batch_workers=(request.parallel_batch_workers or settings.parallel_batch_workers),
+        )
 
-    notes_path = runner_result.project_path / "notes" / "total.md"
-    zip_buffer = build_result_zip(runner_result.native_pptx_path, notes_path, runner_result.title)
+        notes_path = runner_result.project_path / "notes" / "total.md"
+        zip_buffer = build_result_zip(runner_result.native_pptx_path, notes_path, runner_result.title)
 
-    safe_title = sanitize_title(runner_result.title)
-    cos_path = f"ppt/{request.report_id}/{safe_title}.zip"
-    ppt_url = upload_to_cos(zip_buffer, cos_path, settings)
+        safe_title = sanitize_title(runner_result.title)
+        cos_path = f"ppt/{request.report_id}/{safe_title}.zip"
+        ppt_url = upload_to_cos(zip_buffer, cos_path, settings)
 
-    callback_result = notify_report_server(
-        report_id=request.report_id,
-        file_url=request.file_url,
-        word_url=request.word_url,
-        ppt_url=ppt_url,
-        callback_url=(request.callback_url or settings.report_callback_url),
-    )
+        callback_result = notify_report_server(
+            report_id=request.report_id,
+            file_url=request.file_url,
+            word_url=request.word_url,
+            ppt_url=ppt_url,
+            callback_url=(request.callback_url or settings.report_callback_url),
+        )
 
-    if not settings.keep_job_files:
-        shutil.rmtree(job_dir, ignore_errors=True)
+        if not settings.keep_job_files:
+            shutil.rmtree(job_dir, ignore_errors=True)
 
-    return {
-        "success": True,
-        "reportId": request.report_id,
-        "pptUrl": ppt_url,
-        "slideCount": runner_result.slide_count,
-        "title": runner_result.title,
-        "callback": CallbackResultModel(success=callback_result.success, error=callback_result.error).model_dump(),
-    }
+        metrics.finish_job(job_id, runner_result.slide_count)
+        return {
+            "success": True,
+            "reportId": request.report_id,
+            "pptUrl": ppt_url,
+            "slideCount": runner_result.slide_count,
+            "title": runner_result.title,
+            "callback": CallbackResultModel(success=callback_result.success, error=callback_result.error).model_dump(),
+        }
+    except Exception as exc:
+        metrics.fail_job(job_id, str(exc))
+        raise
 
 
 def _build_job_dir(report_id: str) -> Path:

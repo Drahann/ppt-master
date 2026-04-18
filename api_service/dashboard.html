@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PPT Master — 性能监控</title>
+<style>
+  :root { --bg: #0f1117; --card: #1a1d27; --border: #2a2d3a; --text: #e4e4e7; --dim: #71717a; --accent: #3b82f6; --green: #22c55e; --red: #ef4444; --yellow: #eab308; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Inter','Segoe UI',system-ui,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; }
+  .header { padding:20px 32px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:16px; }
+  .header h1 { font-size:20px; font-weight:600; }
+  .header .badge { font-size:11px; padding:3px 8px; border-radius:99px; background:var(--green); color:#000; font-weight:600; }
+  .header .refresh-info { margin-left:auto; font-size:12px; color:var(--dim); }
+  .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; padding:24px 32px; }
+  .stat-card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:20px; }
+  .stat-card .label { font-size:12px; color:var(--dim); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; }
+  .stat-card .value { font-size:32px; font-weight:700; }
+  .stat-card .sub { font-size:12px; color:var(--dim); margin-top:4px; }
+  .section { padding:0 32px 24px; }
+  .section h2 { font-size:16px; font-weight:600; margin-bottom:12px; color:var(--dim); }
+  table { width:100%; border-collapse:collapse; background:var(--card); border-radius:12px; overflow:hidden; border:1px solid var(--border); }
+  th { text-align:left; padding:12px 16px; font-size:12px; color:var(--dim); text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid var(--border); }
+  td { padding:10px 16px; font-size:13px; border-bottom:1px solid var(--border); }
+  tr:last-child td { border-bottom:none; }
+  .status { display:inline-block; padding:2px 8px; border-radius:99px; font-size:11px; font-weight:600; }
+  .status.running { background:rgba(59,130,246,0.15); color:var(--accent); }
+  .status.succeeded { background:rgba(34,197,94,0.15); color:var(--green); }
+  .status.failed { background:rgba(239,68,68,0.15); color:var(--red); }
+  .bar-bg { width:120px; height:8px; background:var(--border); border-radius:4px; overflow:hidden; display:inline-block; vertical-align:middle; }
+  .bar-fill { height:100%; border-radius:4px; transition:width .5s ease; }
+  .bar-fill.green { background:var(--green); }
+  .bar-fill.yellow { background:var(--yellow); }
+  .bar-fill.red { background:var(--red); }
+  .empty-msg { text-align:center; padding:32px; color:var(--dim); font-size:13px; }
+  @media(max-width:900px) { .grid { grid-template-columns:repeat(2,1fr); } }
+  @media(max-width:500px) { .grid { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>⚡ PPT Master 性能监控</h1>
+    <span class="badge" id="statusBadge">LIVE</span>
+    <span class="refresh-info">每 3 秒刷新 · <span id="lastUpdate">--</span></span>
+  </div>
+
+  <div class="grid">
+    <div class="stat-card">
+      <div class="label">活跃任务</div>
+      <div class="value" id="activeCount">-</div>
+      <div class="sub">/ <span id="maxSlots">-</span> 并发槽位</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">已完成</div>
+      <div class="value" id="completedCount" style="color:var(--green)">-</div>
+      <div class="sub">失败: <span id="failedCount" style="color:var(--red)">-</span></div>
+    </div>
+    <div class="stat-card">
+      <div class="label">CPU 使用</div>
+      <div class="value" id="cpuPercent">-</div>
+      <div class="sub">PID: <span id="pid">-</span></div>
+    </div>
+    <div class="stat-card">
+      <div class="label">内存</div>
+      <div class="value" id="memRss">-</div>
+      <div class="sub">
+        <span class="bar-bg"><span class="bar-fill green" id="memBar" style="width:0%"></span></span>
+        &nbsp;<span id="memPercent">-</span> 总体
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>🔄 运行中的任务</h2>
+    <table>
+      <thead><tr><th>Job ID</th><th>Report ID</th><th>标题</th><th>状态</th><th>耗时</th></tr></thead>
+      <tbody id="activeTable"><tr><td colspan="5" class="empty-msg">暂无运行中的任务</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>📋 最近完成</h2>
+    <table>
+      <thead><tr><th>Job ID</th><th>Report ID</th><th>标题</th><th>状态</th><th>耗时</th><th>页数</th></tr></thead>
+      <tbody id="recentTable"><tr><td colspan="6" class="empty-msg">暂无历史记录</td></tr></tbody>
+    </table>
+  </div>
+
+<script>
+function fmtTime(s){
+  if(s<60)return s.toFixed(0)+'s';
+  if(s<3600)return Math.floor(s/60)+'m '+Math.floor(s%60)+'s';
+  return Math.floor(s/3600)+'h '+Math.floor((s%3600)/60)+'m';
+}
+function barColor(pct){return pct>85?'red':pct>60?'yellow':'green';}
+
+async function refresh(){
+  try{
+    const r=await fetch('/metrics');
+    const d=await r.json();
+    const j=d.jobs, s=d.system;
+
+    document.getElementById('activeCount').textContent=j.active_count;
+    document.getElementById('maxSlots').textContent=j.max_concurrent;
+    document.getElementById('completedCount').textContent=j.total_completed;
+    document.getElementById('failedCount').textContent=j.total_failed;
+    document.getElementById('cpuPercent').textContent=s.cpu_percent.toFixed(1)+'%';
+    document.getElementById('pid').textContent=s.pid;
+    document.getElementById('memRss').textContent=s.mem_rss_mb+'MB';
+    document.getElementById('memPercent').textContent=s.mem_percent+'%';
+
+    const bar=document.getElementById('memBar');
+    bar.style.width=s.mem_percent+'%';
+    bar.className='bar-fill '+barColor(s.mem_percent);
+
+    // active table
+    const at=document.getElementById('activeTable');
+    if(j.active.length===0){
+      at.innerHTML='<tr><td colspan="5" class="empty-msg">暂无运行中的任务</td></tr>';
+    }else{
+      at.innerHTML=j.active.map(a=>`<tr>
+        <td><code>${a.job_id.slice(0,16)}</code></td>
+        <td>${a.report_id.slice(0,20)}</td>
+        <td>${a.title}</td>
+        <td><span class="status running">● 运行中</span></td>
+        <td>${fmtTime(a.elapsed_seconds)}</td>
+      </tr>`).join('');
+    }
+
+    // recent table
+    const rt=document.getElementById('recentTable');
+    if(j.recent.length===0){
+      rt.innerHTML='<tr><td colspan="6" class="empty-msg">暂无历史记录</td></tr>';
+    }else{
+      rt.innerHTML=j.recent.map(a=>`<tr>
+        <td><code>${a.job_id.slice(0,16)}</code></td>
+        <td>${a.report_id.slice(0,20)}</td>
+        <td>${a.title}</td>
+        <td><span class="status ${a.status}">${a.status==='succeeded'?'✓ 成功':'✗ 失败'}</span></td>
+        <td>${fmtTime(a.elapsed_seconds)}</td>
+        <td>${a.slide_count||'-'}</td>
+      </tr>`).join('');
+    }
+
+    document.getElementById('lastUpdate').textContent=new Date().toLocaleTimeString();
+    document.getElementById('statusBadge').textContent='LIVE';
+    document.getElementById('statusBadge').style.background='var(--green)';
+  }catch(e){
+    document.getElementById('statusBadge').textContent='OFFLINE';
+    document.getElementById('statusBadge').style.background='var(--red)';
+  }
+}
+
+refresh();
+setInterval(refresh,3000);
+</script>
+</body>
+</html>
