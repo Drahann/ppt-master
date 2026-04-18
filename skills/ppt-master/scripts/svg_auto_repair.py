@@ -17,6 +17,7 @@ import math
 import re
 import sys
 import unicodedata
+import xml.etree.ElementTree as ET
 from html import unescape
 from pathlib import Path
 from typing import Any
@@ -406,6 +407,80 @@ def _repair_svg_syntax(content: str) -> tuple[str, list[str]]:
     return content, fixes
 
 
+def _validate_svg_xml(content: str) -> str | None:
+    """Return a parse error string if the SVG is not well-formed XML."""
+    try:
+        ET.fromstring(content)
+        return None
+    except ET.ParseError as exc:
+        return str(exc)
+
+
+def _repair_xml_structure(content: str) -> tuple[str, list[str], str | None]:
+    """Repair common XML hard errors and report any remaining parse failure."""
+    fixes: list[str] = []
+    parse_error = _validate_svg_xml(content)
+    if parse_error is None:
+        return content, fixes, None
+
+    original_error = parse_error
+
+    broken_closing_tags = [
+        "svg",
+        "defs",
+        "g",
+        "text",
+        "tspan",
+        "path",
+        "rect",
+        "circle",
+        "ellipse",
+        "line",
+        "polyline",
+        "polygon",
+        "use",
+        "image",
+        "clipPath",
+        "mask",
+        "linearGradient",
+        "radialGradient",
+        "stop",
+        "filter",
+        "marker",
+        "feGaussianBlur",
+        "feOffset",
+        "feFlood",
+        "feComposite",
+        "feMerge",
+        "feMergeNode",
+    ]
+    closing_tag_pattern = re.compile(
+        rf'(?<!<)/\s*({"|".join(map(re.escape, broken_closing_tags))})\s*>',
+        re.IGNORECASE,
+    )
+    content, count_broken = closing_tag_pattern.subn(r'</\1>', content)
+    if count_broken > 0:
+        fixes.append(f"XML fix: restored {count_broken} malformed closing tag(s)")
+
+    control_char_pattern = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+    content, count_controls = control_char_pattern.subn("", content)
+    if count_controls > 0:
+        fixes.append(f"XML fix: removed {count_controls} invalid control character(s)")
+
+    parse_error = _validate_svg_xml(content)
+    if parse_error is None:
+        if not fixes:
+            fixes.append("XML fix: validated well-formed SVG after fallback checks")
+        return content, fixes, None
+
+    if fixes:
+        fixes.append(f"XML validation warning: still invalid after fallback repairs ({parse_error})")
+    else:
+        fixes.append(f"XML validation warning: malformed SVG ({original_error})")
+
+    return content, fixes, parse_error
+
+
 # ────────────────────────────────────────────────────────────────
 # Main Orchestrator
 # ────────────────────────────────────────────────────────────────
@@ -420,6 +495,7 @@ def repair_svg_file(
         "file": svg_path.name,
         "repairs": [],
         "skipped": False,
+        "valid_xml": True,
     }
 
     try:
@@ -443,6 +519,13 @@ def repair_svg_file(
     # Repair 3: SVG syntax
     content, fixes = _repair_svg_syntax(content)
     all_fixes.extend(fixes)
+
+    # Repair 4: XML structure validation / fallback repair
+    content, fixes, parse_error = _repair_xml_structure(content)
+    all_fixes.extend(fixes)
+    if parse_error:
+        report["valid_xml"] = False
+        report["validation_error"] = parse_error
 
     report["repairs"] = all_fixes
 
