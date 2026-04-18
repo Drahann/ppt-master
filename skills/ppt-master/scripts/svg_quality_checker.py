@@ -92,6 +92,12 @@ class SVGQualityChecker:
             # 6. Check image references (file existence and resolution)
             self._check_image_references(content, svg_path, result)
 
+            # 7. Check arc/donut/pie chart geometry (C7)
+            self._check_arc_geometry(content, result)
+
+            # 8. Check element overlap (C8)
+            self._check_element_overlap(content, result)
+
             # Determine pass/fail
             result['passed'] = len(result['errors']) == 0
 
@@ -356,6 +362,221 @@ class SVGQualityChecker:
             except Exception:
                 pass  # Image unreadable, skip resolution check
 
+    def _check_arc_geometry(self, content: str, result: Dict):
+        """Check arc/donut/pie chart geometry (C7).
+
+        Parses SVG arc commands, extracts the implied circle center and radii,
+        then verifies that every arc endpoint actually lies on its declared
+        circle (within a tolerance).  Also checks that adjacent sectors share
+        endpoints (no gaps) and that the mask-circle radius matches the inner
+        arc radius.
+
+        For every detected error, the report includes the **correct coordinate**
+        calculated via trigonometry so the AI reviewer can apply a precise fix.
+        """
+        import math
+
+        # Find all <path> elements that contain arc commands
+        arc_path_pattern = re.compile(
+            r'<path[^>]*\bd="([^"]*A\s*[\d.]+[^"]*)"', re.IGNORECASE
+        )
+
+        # Extract arc segments: M x,y A rx,ry ... x,y L x,y A rx,ry ... x,y Z
+        arc_cmd_pattern = re.compile(
+            r'A\s+([\d.]+)\s*,\s*([\d.]+)\s+[\d.]+\s+[\d,]+\s+([\d.]+)\s*,\s*([\d.]+)'
+        )
+
+        # Find mask circles that might be donut-chart centers
+        circle_pattern = re.compile(
+            r'<circle[^>]*cx="([\d.]+)"[^>]*cy="([\d.]+)"[^>]*r="([\d.]+)"'
+        )
+        arc_paths = arc_path_pattern.findall(content)
+        if not arc_paths:
+            return  # No arc-based charts on this page
+
+        circles = circle_pattern.findall(content)
+        # Collect all donut radii from multi-arc paths
+        donut_inner_radii = set()
+        for path_d in arc_paths:
+            arcs = arc_cmd_pattern.findall(path_d)
+            if len(arcs) < 2:
+                continue
+            radii_set = set()
+            for rx_str, ry_str, _ex, _ey in arcs:
+                radii_set.add(float(rx_str))
+            if len(radii_set) == 2:
+                donut_inner_radii.add(min(radii_set))
+
+        # Check mask circles against detected inner radii (once per circle)
+        checked_circles = set()
+        for cx_str, cy_str, cr_str in circles:
+            cr = float(cr_str)
+            circle_key = (cx_str, cy_str, cr_str)
+            if circle_key in checked_circles:
+                continue
+            for inner_r in donut_inner_radii:
+                if abs(cr - inner_r) > 2 and cr < inner_r * 2:
+                    result['errors'].append(
+                        f"Donut mask circle r={cr} does not match inner arc radius {inner_r} "
+                        f"\u2014 change <circle r=\"{cr}\"> to r=\"{inner_r}\" "
+                        f"(gap of {abs(cr - inner_r):.0f}px will expose sector colors)"
+                    )
+                    checked_circles.add(circle_key)
+
+        # Check individual sector endpoint accuracy by re-parsing full sector paths
+        sector_pattern = re.compile(
+            r'<path[^>]*\bd="M\s+([\d.]+)\s*,\s*([\d.]+)\s+'
+            r'A\s+([\d.]+)\s*,\s*[\d.]+\s+[\d.]+\s+[\d,]+\s+([\d.]+)\s*,\s*([\d.]+)\s+'
+            r'L\s+([\d.]+)\s*,\s*([\d.]+)\s+'
+            r'A\s+([\d.]+)\s*,\s*[\d.]+\s+[\d.]+\s+[\d,]+\s+([\d.]+)\s*,\s*([\d.]+)',
+            re.IGNORECASE,
+        )
+
+        sectors = sector_pattern.findall(content)
+        if len(sectors) < 2:
+            return
+
+        # Determine chart center from the mask circle or from outer endpoints
+        chart_cx, chart_cy = None, None
+        for cx_str, cy_str, cr_str in circles:
+            cr = float(cr_str)
+            if cr < 200:  # reasonable donut inner circle
+                chart_cx, chart_cy = float(cx_str), float(cy_str)
+                break
+
+        # Collect all outer endpoints to estimate center if no circle found
+        if chart_cx is None:
+            all_outer_pts = []
+            for s in sectors:
+                all_outer_pts.append((float(s[0]), float(s[1])))
+                all_outer_pts.append((float(s[3]), float(s[4])))
+            if len(all_outer_pts) >= 3:
+                chart_cx = sum(p[0] for p in all_outer_pts) / len(all_outer_pts)
+                chart_cy = sum(p[1] for p in all_outer_pts) / len(all_outer_pts)
+
+        prev_outer_end = None
+        prev_inner_end = None
+        TOLERANCE = 5  # px
+
+        for idx, sector in enumerate(sectors):
+            (m_x, m_y, outer_r_str, outer_end_x, outer_end_y,
+             inner_start_x, inner_start_y, inner_r_str, inner_end_x, inner_end_y) = sector
+
+            m_x, m_y = float(m_x), float(m_y)
+            outer_r_val = float(outer_r_str)
+            outer_end_x, outer_end_y = float(outer_end_x), float(outer_end_y)
+            inner_start_x, inner_start_y = float(inner_start_x), float(inner_start_y)
+            inner_r_val = float(inner_r_str)
+            inner_end_x, inner_end_y = float(inner_end_x), float(inner_end_y)
+
+            # --- Check endpoint distances from center ---
+            if chart_cx is not None:
+                for label, px, py, expected_r in [
+                    ("outer start (M)", m_x, m_y, outer_r_val),
+                    ("outer end (A→)", outer_end_x, outer_end_y, outer_r_val),
+                    ("inner start (L)", inner_start_x, inner_start_y, inner_r_val),
+                    ("inner end (A→)", inner_end_x, inner_end_y, inner_r_val),
+                ]:
+                    dist = math.sqrt((px - chart_cx)**2 + (py - chart_cy)**2)
+                    err = abs(dist - expected_r)
+                    if err > TOLERANCE:
+                        # Calculate correct coordinate
+                        angle = math.atan2(py - chart_cy, px - chart_cx)
+                        correct_x = chart_cx + expected_r * math.cos(angle)
+                        correct_y = chart_cy + expected_r * math.sin(angle)
+                        result['errors'].append(
+                            f"Chart sector {idx + 1} {label}: ({px:.1f},{py:.1f}) is {dist:.1f}px from "
+                            f"center ({chart_cx:.0f},{chart_cy:.0f}), expected {expected_r:.0f}px "
+                            f"— CORRECT coordinate: ({correct_x:.1f},{correct_y:.1f})"
+                        )
+
+            # --- Check sector connectivity ---
+            if prev_outer_end is not None:
+                dx = abs(m_x - prev_outer_end[0])
+                dy = abs(m_y - prev_outer_end[1])
+                if dx > TOLERANCE or dy > TOLERANCE:
+                    result['errors'].append(
+                        f"Chart sector {idx + 1}: outer arc start ({m_x:.1f},{m_y:.1f}) "
+                        f"does not connect to previous sector end ({prev_outer_end[0]:.1f},{prev_outer_end[1]:.1f}) "
+                        f"— should be ({prev_outer_end[0]:.1f},{prev_outer_end[1]:.1f})"
+                    )
+
+            if prev_inner_end is not None:
+                dx = abs(inner_start_x - prev_inner_end[0])
+                dy = abs(inner_start_y - prev_inner_end[1])
+                if dx > TOLERANCE or dy > TOLERANCE:
+                    result['errors'].append(
+                        f"Chart sector {idx + 1}: inner start (L {inner_start_x:.1f},{inner_start_y:.1f}) "
+                        f"does not connect to previous sector inner end ({prev_inner_end[0]:.1f},{prev_inner_end[1]:.1f}) "
+                        f"— should be ({prev_inner_end[0]:.1f},{prev_inner_end[1]:.1f})"
+                    )
+
+            prev_outer_end = (outer_end_x, outer_end_y)
+            prev_inner_end = (inner_end_x, inner_end_y)
+
+    def _check_element_overlap(self, content: str, result: Dict):
+        """Check for overlapping top-level card/panel elements (C8).
+
+        Extracts bounding boxes of major <g> blocks (identified by filter=cardShadow
+        or prominent <rect>/<path> backgrounds) and checks for spatial overlap.
+        """
+        # Extract top-level card rectangles (both <rect> and <path> with rounded corners)
+        rect_pattern = re.compile(
+            r'<rect[^>]*x="([\d.]+)"[^>]*y="([\d.]+)"[^>]*width="([\d.]+)"[^>]*height="([\d.]+)"',
+            re.IGNORECASE,
+        )
+
+        # Find elements with cardShadow filter (these are the visible cards)
+        card_rects = []
+        for match in re.finditer(
+            r'<(?:rect|path)[^>]*filter="url\(#cardShadow\)"[^>]*/?>',
+            content, re.IGNORECASE,
+        ):
+            tag = match.group(0)
+            rect_match = rect_pattern.search(tag)
+            if rect_match:
+                x = float(rect_match.group(1))
+                y = float(rect_match.group(2))
+                w = float(rect_match.group(3))
+                h = float(rect_match.group(4))
+                card_rects.append((x, y, w, h))
+            else:
+                # Try to extract from path d="M x,y H x2 ... V y2 ..."
+                d_match = re.search(r'd="([^"]+)"', tag)
+                if d_match:
+                    d = d_match.group(1)
+                    m = re.match(r'M\s*([\d.]+)\s*,\s*([\d.]+)', d)
+                    h_vals = re.findall(r'H\s*([\d.]+)', d)
+                    v_vals = re.findall(r'V\s*([\d.]+)', d)
+                    if m and h_vals and v_vals:
+                        mx, my = float(m.group(1)), float(m.group(2))
+                        all_x = [mx] + [float(v) for v in h_vals]
+                        all_y = [my] + [float(v) for v in v_vals]
+                        x = min(all_x)
+                        y = min(all_y)
+                        w = max(all_x) - x
+                        h = max(all_y) - y
+                        if w > 10 and h > 10:
+                            card_rects.append((x, y, w, h))
+
+        # Check all pairs for overlap
+        OVERLAP_THRESHOLD = 20  # px — ignore small overlaps from shadows
+        for i in range(len(card_rects)):
+            for j in range(i + 1, len(card_rects)):
+                ax, ay, aw, ah = card_rects[i]
+                bx, by, bw, bh = card_rects[j]
+
+                # Calculate overlap
+                ox = max(0, min(ax + aw, bx + bw) - max(ax, bx))
+                oy = max(0, min(ay + ah, by + bh) - max(ay, by))
+
+                if ox > OVERLAP_THRESHOLD and oy > OVERLAP_THRESHOLD:
+                    result['errors'].append(
+                        f"Card overlap detected: card at ({ax:.0f},{ay:.0f},{aw:.0f}x{ah:.0f}) "
+                        f"overlaps with card at ({bx:.0f},{by:.0f},{bw:.0f}x{bh:.0f}) "
+                        f"by {ox:.0f}x{oy:.0f}px"
+                    )
+
     def _categorize_issue(self, error_msg: str) -> str:
         """Categorize issue type"""
         if 'viewBox' in error_msg:
@@ -364,6 +585,10 @@ class SVGQualityChecker:
             return 'foreignObject'
         elif 'font' in error_msg.lower():
             return 'Font issues'
+        elif 'arc' in error_msg.lower() or 'sector' in error_msg.lower() or 'donut' in error_msg.lower():
+            return 'Chart geometry (C7)'
+        elif 'overlap' in error_msg.lower():
+            return 'Element overlap (C8)'
         else:
             return 'Other'
 

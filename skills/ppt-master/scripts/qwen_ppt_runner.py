@@ -47,7 +47,7 @@ NOTES_COMPLETION_SENTINEL_PREFIX = "PPT_NOTES_COMPLETE:"
 DEFAULT_CANVAS_FORMAT = "ppt169"
 DEFAULT_PROJECT_BASE_DIR = "projects"
 DEFAULT_QWEN_MODEL = "qwen3.6-plus"
-DEFAULT_REVIEW_MODEL = "qwen3-max"
+DEFAULT_REVIEW_MODEL = "qwen3.6-plus"
 DEFAULT_MAX_FOLLOW_UPS = 8
 QWEN_CALL_TIMEOUT_SECONDS = 60 * 60
 QWEN_CHAT_ROOT = Path.home() / ".qwen" / "projects"
@@ -976,7 +976,9 @@ def build_svg_review_input(
             "invalid XML or unescaped text tokens",
             "drifted SVG filenames that do not match the slide plan",
             "invalid icon refs or notes heading mismatches",
-            "small local layout defects such as misalignment, overflow, clipping, or obvious chart-geometry mistakes",
+            "small local layout defects such as misalignment, overflow, clipping, or chart-geometry mistakes",
+            "arc/donut/pie chart geometry errors: broken sector joints, wrong arc endpoints, mask circle radius mismatch (check deterministic_issues for specifics)",
+            "card/panel spatial overlap where two elements share the same region (check deterministic_issues for specifics)",
         ],
     }
 
@@ -1004,7 +1006,9 @@ def build_batch_svg_review_input(
         "repair_targets": [
             "invalid XML or unescaped text tokens inside this batch",
             "invalid icon refs or malformed attributes inside this batch",
-            "small local layout defects such as misalignment, overflow, clipping, or obvious chart-geometry mistakes inside this batch",
+            "small local layout defects such as misalignment, overflow, clipping, or chart-geometry mistakes inside this batch",
+            "arc/donut/pie chart geometry errors: broken sector joints, wrong arc endpoints, mask circle radius mismatch (check deterministic_issues for specifics)",
+            "card/panel spatial overlap where two elements share the same region (check deterministic_issues for specifics)",
         ],
     }
 
@@ -1325,6 +1329,13 @@ def build_sentinel_variants(prefix: str) -> set[str]:
 
 
 def run_svg_quality_check(project_path: Path, runner_dir: Path) -> list[str]:
+    """Run svg_quality_checker.py and return per-file error details.
+
+    Instead of returning a single generic message, we parse the checker's
+    JSON export and surface each individual error string so that
+    ``deterministic_issues`` presented to the AI reviewer contains the
+    precise coordinates and correction suggestions.
+    """
     report_path = runner_dir / SVG_QUALITY_REPORT_FILENAME
     command = [
         sys.executable,
@@ -1345,7 +1356,25 @@ def run_svg_quality_check(project_path: Path, runner_dir: Path) -> list[str]:
     )
     if completed.returncode == 0:
         return []
-    return [f"svg_quality_checker reported SVG errors; see {report_path}"]
+
+    # Try to parse the exported report for detailed errors
+    errors: list[str] = []
+    try:
+        report_text = report_path.read_text(encoding="utf-8", errors="replace")
+        # The report format has lines like "  - Chart sector 2 inner start..."
+        current_file = ""
+        for line in report_text.splitlines():
+            if line.startswith("[ERROR] Failed - "):
+                current_file = line.split(" - ", 1)[1].strip()
+            elif line.strip().startswith("- ") and current_file:
+                error_detail = line.strip().removeprefix("- ").strip()
+                errors.append(f"[{current_file}] {error_detail}")
+    except Exception:
+        pass
+
+    if not errors:
+        errors.append(f"svg_quality_checker reported SVG errors; see {report_path}")
+    return errors
 
 
 def is_recoverable_svg_notes_failure(
@@ -1978,10 +2007,11 @@ Repair priorities:
 1. Fix invalid SVG XML, bad escaping, broken tags, and malformed attributes
 2. Fix SVG filenames so they exactly match the slide plan
 3. Fix `notes/total.md` headings so they exactly match SVG stems
-4. Fix invalid icon refs, text overflow, misalignment, clipping, border overflow, or obvious local overlap
-5. Fix obvious chart-geometry mistakes when a local redraw is needed to make the existing intended chart correct
-6. Use `{svg_anchor_context_path.name}` as the visual-consistency contract when repairing header/footer coordinates, defs, title-icon spacing, and filename/notes anchors
-7. Follow the C1→C6 pipeline and baseline-content-page comparison from `{QWEN_SVG_REVIEW_WORKFLOW_PATH.name}`
+4. Fix invalid icon refs, text overflow, misalignment, clipping, border overflow, or local overlap
+5. Fix chart-geometry mistakes (arc endpoints, sector joint breaks, mask-circle radius mismatch) — check `deterministic_issues` in the review input JSON for exact coordinates
+6. Fix card/element spatial overlap where two panels share the same region — check `deterministic_issues` for detected overlaps
+7. Use `{svg_anchor_context_path.name}` as the visual-consistency contract when repairing header/footer coordinates, defs, title-icon spacing, and filename/notes anchors
+8. Follow the C1→C8 pipeline and baseline-content-page comparison from `{QWEN_SVG_REVIEW_WORKFLOW_PATH.name}`
 
 Output requirements:
 - Repair `svg_output/*.svg` and `notes/total.md` if needed
@@ -2038,10 +2068,11 @@ Review boundaries:
 
 Repair priorities:
 1. Fix invalid SVG XML, bad escaping, broken tags, and malformed attributes inside this batch
-2. Fix invalid icon refs, text overflow, misalignment, clipping, border overflow, or obvious local overlap inside this batch
-3. Fix obvious chart-geometry mistakes when a local redraw is needed to make the existing intended chart correct
-4. Use `{svg_anchor_context_path.name}` as the visual-consistency contract when repairing header/footer coordinates, defs, title-icon spacing, and anchor consistency
-5. Follow the C1→C6 pipeline and baseline-content-page comparison from `{QWEN_SVG_REVIEW_WORKFLOW_PATH.name}`
+2. Fix invalid icon refs, text overflow, misalignment, clipping, border overflow, or local overlap inside this batch
+3. Fix chart-geometry mistakes (arc endpoints, sector joint breaks, mask-circle radius mismatch) — check `deterministic_issues` in the review input JSON for exact coordinates
+4. Fix card/element spatial overlap where two panels share the same region — check `deterministic_issues` for detected overlaps
+5. Use `{svg_anchor_context_path.name}` as the visual-consistency contract when repairing header/footer coordinates, defs, title-icon spacing, and anchor consistency
+6. Follow the C1→C8 pipeline and baseline-content-page comparison from `{QWEN_SVG_REVIEW_WORKFLOW_PATH.name}`
 
 Output requirements:
 - Repair only this batch's SVG files if needed
@@ -2432,6 +2463,42 @@ def import_markdown(request: dict[str, Any], project_path: Path, manager: Projec
     imported_markdown_path = Path(markdown_items[0])
     append_log(log_path, f"Imported markdown: {imported_markdown_path}")
     return imported_markdown_path
+
+
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
+
+
+def populate_images(project_path: Path, log_path: Path) -> int:
+    """Copy image files from sources/ subdirectories into images/.
+
+    The design pipeline expects user-provided images in ``<project>/images/``
+    (referenced as ``../images/xxx.png`` inside ``svg_output/``).  However,
+    ``import_sources`` only archives raw files into ``sources/`` and never
+    populates ``images/``.  This function bridges the gap.
+    """
+    sources_dir = project_path / "sources"
+    images_dir = project_path / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    if not sources_dir.exists():
+        return 0
+    copied = 0
+    for path in sorted(sources_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in IMAGE_SUFFIXES:
+            continue
+        dest = images_dir / path.name
+        if dest.exists():
+            append_log(log_path, f"Image already exists, skipping: {path.name}")
+            continue
+        shutil.copy2(path, dest)
+        copied += 1
+        append_log(log_path, f"Copied image to images/: {path.name}")
+    if copied:
+        append_log(log_path, f"Populated {copied} image(s) into images/")
+    else:
+        append_log(log_path, "No images found in sources/ to populate")
+    return copied
 
 
 def build_runner_reference_files(
@@ -2862,6 +2929,8 @@ def build_svg_anchor_context(
                 "C4 XML and escaping validity",
                 "C5 big-number and badge completeness",
                 "C6 layout monotony / local polish",
+                "C7 chart geometry — verify arc endpoints, sector connectivity, mask circle radius (see svg-review.md C7)",
+                "C8 element overlap — check same-level cards for spatial overlap (see svg-review.md C8)",
             ],
         },
         "anchor_pages": anchor_pages,
@@ -2990,10 +3059,10 @@ def execute_generation(
 
     batch_mode = str(request.get("batch_mode", "auto"))
     batch_size = int(request.get("batch_size", BATCH_SIZE))
-    use_parallel_svg = batch_mode == "parallel"
-    use_batched_svg = batch_mode == "always" or (
+    use_parallel_svg = batch_mode == "parallel" or (
         batch_mode == "auto" and len(plan) > BATCH_MODE_THRESHOLD
     )
+    use_batched_svg = batch_mode == "always"
 
     svg_session_id: str
     svg_batch_session_ids: list[str] = []
@@ -3237,6 +3306,7 @@ def main() -> None:
         append_log(log_path, f"Request copied to {request_copy_path}")
 
         imported_markdown_path = import_markdown(request, project_path, manager, log_path)
+        populate_images(project_path, log_path)
         plan = build_slide_plan(request, imported_markdown_path)
         write_json(runner_dir / "slide_plan.json", [asdict(entry) for entry in plan])
         append_log(log_path, f"Built slide plan with {len(plan)} pages")
