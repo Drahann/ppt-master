@@ -228,9 +228,11 @@ while true; do
     METRICS_JSON=$(curl -s "$METRICS" 2>/dev/null || echo "{}")
     ACTIVE=$(echo "$METRICS_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('jobs',{}).get('active_count','?'))" 2>/dev/null || echo "?")
     CPU=$(echo "$METRICS_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('system',{}).get('cpu_percent','?'))" 2>/dev/null || echo "?")
-    MEM=$(echo "$METRICS_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('system',{}).get('mem_rss_mb','?'))" 2>/dev/null || echo "?")
+    MEM=$(echo "$METRICS_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); s=d.get('system',{}); m=s.get('mem_rss_mb',0); print(f'{m/1024:.1f}GB' if m>=1024 else f'{m}MB')" 2>/dev/null || echo "?")
+    CHILDREN=$(echo "$METRICS_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('system',{}).get('child_processes','?'))" 2>/dev/null || echo "?")
+    SYS_MEM=$(echo "$METRICS_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('system',{}).get('mem_percent','?'))" 2>/dev/null || echo "?")
     
-    echo "  $(date '+%H:%M:%S') | 活跃: $ACTIVE | CPU: ${CPU}% | 内存: ${MEM}MB | 等待中: $RUNNING"
+    echo "  $(date '+%H:%M:%S') | 活跃: $ACTIVE | CPU: ${CPU}% | 进程树: ${MEM} (${CHILDREN}子进程) | 系统内存: ${SYS_MEM}% | 等待中: $RUNNING"
     
     sleep 30
 done

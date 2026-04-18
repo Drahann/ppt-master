@@ -83,7 +83,7 @@ class JobMetrics:
                 reverse=True,
             )[:20]
 
-        cpu_percent, mem_rss_mb, mem_total_mb, mem_percent = _system_stats()
+        cpu_percent, mem_rss_mb, mem_total_mb, mem_percent, child_count = _system_stats()
 
         return {
             "uptime_seconds": round(time.time() - self._boot_time, 0),
@@ -92,6 +92,7 @@ class JobMetrics:
                 "mem_rss_mb": mem_rss_mb,
                 "mem_total_mb": mem_total_mb,
                 "mem_percent": mem_percent,
+                "child_processes": child_count,
                 "pid": os.getpid(),
             },
             "jobs": {
@@ -126,29 +127,64 @@ def _job_to_dict(j: JobRecord) -> dict[str, Any]:
     }
 
 
-def _system_stats() -> tuple[float, float, float, float]:
-    """Best-effort system resource stats."""
+def _system_stats() -> tuple[float, float, float, float, int]:
+    """System-wide resource stats including all child processes.
+
+    Returns (cpu_percent, proc_tree_rss_mb, mem_total_mb, mem_percent, child_count).
+    """
     cpu_percent = 0.0
-    mem_rss_mb = 0.0
+    proc_tree_rss_mb = 0.0
     mem_total_mb = 0.0
     mem_percent = 0.0
+    child_count = 0
     try:
         import psutil
 
+        # System-wide CPU (not just main process)
+        cpu_percent = psutil.cpu_percent(interval=0.1)
+
+        # Aggregate RSS across main process + ALL descendants (runner subprocesses)
         proc = psutil.Process(os.getpid())
-        cpu_percent = proc.cpu_percent(interval=0.1)
-        mem_info = proc.memory_info()
-        mem_rss_mb = round(mem_info.rss / 1024 / 1024, 1)
+        tree_rss = proc.memory_info().rss
+        children = proc.children(recursive=True)
+        child_count = len(children)
+        for child in children:
+            try:
+                tree_rss += child.memory_info().rss
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        proc_tree_rss_mb = round(tree_rss / 1024 / 1024, 1)
+
         vmem = psutil.virtual_memory()
         mem_total_mb = round(vmem.total / 1024 / 1024, 0)
         mem_percent = vmem.percent
     except ImportError:
         # psutil not available — fallback to /proc on Linux
         try:
-            with open("/proc/self/status") as f:
-                for line in f:
-                    if line.startswith("VmRSS:"):
-                        mem_rss_mb = round(int(line.split()[1]) / 1024, 1)
+            # Read all descendant PIDs via /proc
+            import glob
+            my_pid = os.getpid()
+            total_rss_kb = 0
+            for status_file in glob.glob("/proc/[0-9]*/status"):
+                try:
+                    pid_data = {}
+                    with open(status_file) as f:
+                        for line in f:
+                            if line.startswith("PPid:"):
+                                pid_data["ppid"] = int(line.split()[1])
+                            elif line.startswith("VmRSS:"):
+                                pid_data["rss_kb"] = int(line.split()[1])
+                            elif line.startswith("Pid:"):
+                                pid_data["pid"] = int(line.split()[1])
+                    # Include self and direct/indirect children
+                    if pid_data.get("pid") == my_pid or pid_data.get("ppid") == my_pid:
+                        total_rss_kb += pid_data.get("rss_kb", 0)
+                        if pid_data.get("ppid") == my_pid:
+                            child_count += 1
+                except Exception:
+                    pass
+            proc_tree_rss_mb = round(total_rss_kb / 1024, 1)
+
             with open("/proc/meminfo") as f:
                 for line in f:
                     if line.startswith("MemTotal:"):
@@ -157,8 +193,18 @@ def _system_stats() -> tuple[float, float, float, float]:
                         avail = int(line.split()[1]) / 1024
                         if mem_total_mb:
                             mem_percent = round((1 - avail / mem_total_mb) * 100, 1)
+
+            # System-wide CPU from /proc/stat (instantaneous, rough)
+            try:
+                with open("/proc/loadavg") as f:
+                    load1 = float(f.read().split()[0])
+                    ncpu = os.cpu_count() or 1
+                    cpu_percent = round(load1 / ncpu * 100, 1)
+            except Exception:
+                pass
         except Exception:
             pass
     except Exception:
         pass
-    return cpu_percent, mem_rss_mb, mem_total_mb, mem_percent
+    return cpu_percent, proc_tree_rss_mb, mem_total_mb, mem_percent, child_count
+
