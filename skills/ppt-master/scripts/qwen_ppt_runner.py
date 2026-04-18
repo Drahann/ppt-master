@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Automate PPT Master generation with Qwen Code CLI.
 
 Usage:
@@ -102,18 +102,18 @@ DEFAULT_RULES: dict[str, Any] = {
     "highlight_key_points": True,
     "pagination": {
         "default": "each_h2_one_slide",
-        "expand_h2_titles": ["鍒涙柊鎶€鏈?, "浜т笟楠岃瘉"],
+        "expand_h2_titles": ["创新技术", "产业验证"],
         "expand_rule": "each_h3_one_slide_no_parent_h2_slide",
     },
 }
 
 RESOURCE_ONLY_H2_TITLES = {
-    "鐩稿叧鍥剧墖淇℃伅",
-    "鍥剧墖淇℃伅",
-    "鐩稿叧鍥惧儚淇℃伅",
-    "鍙傝€冨浘鐗?,
-    "鍥剧墖璧勬簮",
-    "鍥惧儚璧勬簮",
+    "相关图片信息",
+    "图片信息",
+    "相关图像信息",
+    "参考图片",
+    "图片资源",
+    "图像资源",
 }
 
 DESIGN_SPEC_REQUIRED_HEADERS = (
@@ -139,12 +139,12 @@ REVIEW_REPORT_FILENAME = "spec_review_report.json"
 REVIEW_INPUT_FILENAME = "spec_review_input.json"
 
 REVIEW_FOCUS_SLIDES = (
-    "甯傚満瀹氫綅",
-    "鎺ㄥ箍妯″紡",
-    "鍟嗕笟妯″紡",
-    "璐㈠姟瑙勫垝",
-    "鐩堝埄鍒嗘瀽",
-    "鍥㈤槦缁撴瀯",
+    "市场定位",
+    "推广模式",
+    "商业模式",
+    "财务规划",
+    "盈利分析",
+    "团队结构",
 )
 
 TEMPLATE_BLOCKING_PATTERNS = (
@@ -157,10 +157,10 @@ TEMPLATE_BLOCKING_PATTERNS = (
 CONFIRMATION_BLOCKING_PATTERNS = (
     "Eight Confirmations",
     "confirm the design spec",
-    "璇风‘璁?,
-    "璇峰厛纭",
-    "纭璁捐瑙勬牸",
-    "鍏」纭",
+    "请确认",
+    "请先确认",
+    "确认设计规格",
+    "八项确认",
 )
 
 @dataclass
@@ -555,14 +555,14 @@ def choose_existing_icons(
 def suggest_icons_for_heading(heading: str, available_icons: set[str]) -> list[str]:
     text = heading.lower()
     keyword_map = [
-        (("鍒涙柊", "鎶€鏈?, "tech", "鐮斿彂", "绠楁硶", "绯荤粺"), ["lightbulb", "microchip", "bolt", "cog"]),
-        (("浜т笟", "甯傚満", "鍟嗕笟", "business", "杩愯惀", "鎺ㄥ箍"), ["building", "chart-bar", "target", "money"]),
-        (("璐㈠姟", "鐩堝埄", "鏀剁泭", "finance", "profit"), ["money", "coin", "chart-pie", "chart-line"]),
-        (("鍥㈤槦", "涓撳", "鏁欏笀", "缁勭粐", "team"), ["users", "user", "book-open", "star"]),
-        (("鑳屾櫙", "鐜扮姸", "璋冪爺", "鍒嗘瀽", "research"), ["book-open", "chart-line", "globe", "chart-bar"]),
-        (("楠岃瘉", "瀹夊叏", "椋庨櫓", "quality"), ["shield-check", "shield", "chart-line", "target"]),
-        (("钀藉湴", "瀹炴柦", "roadmap", "瑙勫垝", "鎺ㄨ繘"), ["rocket", "target-arrow", "calendar", "link"]),
-        (("鐢熸€?, "鍗忓悓", "鍚堜綔", "缃戠粶", "platform"), ["link", "globe", "building", "users"]),
+        (("创新", "技术", "tech", "研发", "算法", "系统"), ["lightbulb", "microchip", "bolt", "cog"]),
+        (("产业", "市场", "商业", "business", "运营", "推广"), ["building", "chart-bar", "target", "money"]),
+        (("财务", "盈利", "收益", "finance", "profit"), ["money", "coin", "chart-pie", "chart-line"]),
+        (("团队", "专家", "教师", "组织", "team"), ["users", "user", "book-open", "star"]),
+        (("背景", "现状", "调研", "分析", "research"), ["book-open", "chart-line", "globe", "chart-bar"]),
+        (("验证", "安全", "风险", "quality"), ["shield-check", "shield", "chart-line", "target"]),
+        (("落地", "实施", "roadmap", "规划", "推进"), ["rocket", "target-arrow", "calendar", "link"]),
+        (("生态", "协同", "合作", "网络", "platform"), ["link", "globe", "building", "users"]),
     ]
     fallback = ["chart-bar", "lightbulb", "target", "building", "users"]
     preferred: list[str] = []
@@ -673,7 +673,7 @@ def build_slide_plan(request: dict[str, Any], markdown_path: Path) -> list[Slide
         raw_entries.append(
             {
                 "kind": "cover",
-                "heading": "灏侀潰",
+                "heading": "封面",
                 "source_h2": None,
                 "source_h3": None,
                 "absorb_parent_intro": False,
@@ -715,7 +715,7 @@ def build_slide_plan(request: dict[str, Any], markdown_path: Path) -> list[Slide
         raw_entries.append(
             {
                 "kind": "ending",
-                "heading": "缁撳熬椤?,
+                "heading": "结尾页",
                 "source_h2": None,
                 "source_h3": None,
                 "absorb_parent_intro": False,
@@ -1588,7 +1588,7 @@ def execute_generation(
         log_path=log_path,
     )
 
-    # 鈹€鈹€ SVG Quality Check (deterministic script, no AI call) 鈹€鈹€
+    # ── SVG Quality Check (deterministic script, no AI call) ──
     svg_review_session_ids: list[str] = []
     svg_review_session_id = "skipped_script_only"
     svg_quality_report_path = runner_dir / SVG_QUALITY_REPORT_FILENAME
@@ -1609,7 +1609,7 @@ def execute_generation(
     except Exception as exc:
         append_log(log_path, f"SVG quality check completed with issues: {exc}")
 
-    # 鈹€鈹€ SVG Auto Repair (deterministic fixes for charts, icons, syntax) 鈹€鈹€
+    # ── SVG Auto Repair (deterministic fixes for charts, icons, syntax) ──
     append_log(log_path, "Running SVG auto repair (pie charts, title icons, syntax)")
     try:
         run_python_tool(
