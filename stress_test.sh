@@ -2,18 +2,29 @@
 # =========================================================
 # PPT Master 并发压测脚本
 # 用法:
-#   bash stress_test.sh               # 默认 3 个并发任务
-#   bash stress_test.sh 5             # 5 个并发任务
-#   bash stress_test.sh 3 http://1.2.3.4:3001  # 指定服务器地址
+#   bash stress_test.sh               # 默认 3 并发，短内容
+#   bash stress_test.sh 5             # 5 个并发
+#   bash stress_test.sh 15 http://localhost:3001 /path/to/postppt.json
+#                                     # 15 并发 + 从 JSON 读长内容（30+页）
 # =========================================================
 
 set -euo pipefail
 
 CONCURRENCY=${1:-3}
 BASE_URL=${2:-"http://localhost:3001"}
+CONTENT_JSON=${3:-""}
 API="${BASE_URL}/api/generate-ppt"
 METRICS="${BASE_URL}/metrics"
 DASHBOARD="${BASE_URL}/dashboard"
+
+# 如果提供了 JSON 模板，提取 content 字段
+LONG_CONTENT=""
+if [ -n "$CONTENT_JSON" ] && [ -f "$CONTENT_JSON" ]; then
+    LONG_CONTENT=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1],'r',encoding='utf-8')); print(d['content'])" "$CONTENT_JSON" 2>/dev/null || echo "")
+    if [ -n "$LONG_CONTENT" ]; then
+        echo "📄 使用外部内容: $CONTENT_JSON"
+    fi
+fi
 
 echo "╔══════════════════════════════════════════════════╗"
 echo "║       PPT Master 并发压力测试                     ║"
@@ -151,11 +162,23 @@ LOG_DIR="/tmp/ppt_stress_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$LOG_DIR"
 
 for i in $(seq 1 "$CONCURRENCY"); do
-    CONTENT_IDX=$(( (i - 1) % ${#CONTENTS[@]} ))
     REPORT_ID="stress_test_$(date +%s)_$i"
     
     # 构造 JSON payload
-    PAYLOAD=$(cat <<ENDJSON
+    if [ -n "$LONG_CONTENT" ]; then
+        # 使用外部长内容（30+页）
+        PAYLOAD=$(python3 -c "
+import json,sys
+content = open(sys.argv[1],'r',encoding='utf-8').read()
+d = json.loads(content)
+d['report_id'] = sys.argv[2]
+d['title'] = '压测任务 ' + sys.argv[3]
+print(json.dumps(d, ensure_ascii=False))
+" "$CONTENT_JSON" "$REPORT_ID" "$i")
+    else
+        # 使用内嵌短内容
+        CONTENT_IDX=$(( (i - 1) % ${#CONTENTS[@]} ))
+        PAYLOAD=$(cat <<ENDJSON
 {
     "report_id": "$REPORT_ID",
     "title": "压测任务 $i",
@@ -163,6 +186,7 @@ for i in $(seq 1 "$CONCURRENCY"); do
 }
 ENDJSON
 )
+    fi
     
     LOG_FILE="$LOG_DIR/task_${i}.log"
     
