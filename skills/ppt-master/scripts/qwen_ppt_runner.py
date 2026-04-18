@@ -3148,71 +3148,41 @@ def execute_generation(
         log_path=log_path,
     )
 
-    svg_review_report_path = runner_dir / SVG_REVIEW_REPORT_FILENAME
-    svg_review_input_path = runner_dir / SVG_REVIEW_INPUT_FILENAME
-    write_json(
-        svg_review_input_path,
-        build_svg_review_input(
-            project_path,
-            plan,
-            valid_chart_keys,
-            runner_dir,
-        ),
-    )
-    svg_review_prompt = build_svg_review_bootstrap_prompt(
-        project_path,
-        svg_review_input_path,
-        svg_review_report_path,
-        svg_anchor_context_path,
-    )
-    (runner_dir / "svg_review_prompt.txt").write_text(svg_review_prompt, encoding="utf-8")
+    # ── SVG Quality Check (deterministic script, no AI call) ──
     svg_review_session_ids: list[str] = []
-    if use_parallel_svg or use_batched_svg:
-        append_log(
-            log_path,
-            "Using parallel batched SVG review: "
-            f"pages={len(plan)} batch_size={batch_size} "
-            f"workers={int(request.get('parallel_batch_workers', DEFAULT_PARALLEL_BATCH_WORKERS))}",
-        )
-        svg_review_session_ids = execute_parallel_svg_review(
-            request=request,
-            project_path=project_path,
-            svg_anchor_context_path=svg_anchor_context_path,
-            plan=plan,
-            valid_chart_keys=valid_chart_keys,
-            runner_dir=runner_dir,
+    svg_review_session_id = "skipped_script_only"
+    svg_quality_report_path = runner_dir / SVG_QUALITY_REPORT_FILENAME
+    append_log(log_path, "Running deterministic SVG quality check (no AI review)")
+    try:
+        run_python_tool(
+            [
+                "skills/ppt-master/scripts/svg_quality_checker.py",
+                str(project_path),
+                "--export",
+                "--output",
+                str(svg_quality_report_path),
+            ],
+            cwd=REPO_ROOT,
             log_path=log_path,
         )
-        svg_review_session_id = svg_review_session_ids[-1]
-    else:
-        svg_review_session_id = execute_qwen_stage(
-            stage_name="svg_review",
-            artifact_prefix="svg_review",
-            initial_prompt=svg_review_prompt,
-            completion_sentinel_prefix=SVG_REVIEW_COMPLETION_SENTINEL_PREFIX,
-            state_checker=lambda: check_svg_review_state(
-                project_path,
-                plan,
-                valid_chart_keys,
-                svg_review_report_path,
-                runner_dir,
-            ),
-            continue_prompt_builder=lambda errors: build_svg_review_continue_prompt(
-                project_path,
-                svg_review_report_path,
-                errors,
-                svg_anchor_context_path,
-            ),
-            confirmation_prompt_builder=lambda errors: build_svg_review_continue_prompt(
-                project_path,
-                svg_review_report_path,
-                errors,
-                svg_anchor_context_path,
-            ),
-            model=request.get("review_model"),
-            runner_dir=runner_dir,
+        append_log(log_path, f"SVG quality report saved to {svg_quality_report_path}")
+    except Exception as exc:
+        append_log(log_path, f"SVG quality check completed with issues: {exc}")
+
+    # ── SVG Auto Repair (deterministic fixes for charts, icons, syntax) ──
+    append_log(log_path, "Running SVG auto repair (pie charts, title icons, syntax)")
+    try:
+        run_python_tool(
+            [
+                "skills/ppt-master/scripts/svg_auto_repair.py",
+                str(project_path),
+            ],
+            cwd=REPO_ROOT,
             log_path=log_path,
         )
+        append_log(log_path, "SVG auto repair completed")
+    except Exception as exc:
+        append_log(log_path, f"SVG auto repair finished with issues: {exc}")
 
     write_json(
         runner_dir / "stage_sessions.json",

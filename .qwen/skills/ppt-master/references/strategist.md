@@ -105,10 +105,11 @@ Proactively provide a color scheme (HEX values) based on content characteristics
 
 | Option | Approach | Suitable Scenarios |
 |--------|----------|-------------------|
-| **A** | Emoji | Casual, playful, social media |
-| **B** | AI-generated | Custom style needed |
-| **C** | Built-in icon library | Professional scenarios (recommended) |
-| **D** | Custom icons | Has brand assets |
+| **A** | AI-generated | Custom style needed |
+| **B** | Built-in icon library | Professional scenarios (recommended) |
+| **C** | Custom icons | Has brand assets |
+
+> ⛔ **Emoji icons are FORBIDDEN.** They render inconsistently and are rejected by the automated quality checker. Do NOT offer emoji as an option.
 
 Built-in library contains 6700+ icons across three libraries:
 
