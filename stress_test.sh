@@ -59,18 +59,27 @@ if [ -z "$POSTPPT_JSON" ] || [ ! -f "$POSTPPT_JSON" ]; then
 fi
 
 echo "📄 内容来源: $POSTPPT_JSON"
-# 提取 content 字段并 JSON 编码
-CONTENT_JSON=$(python3 -c "
+
+# 预生成 payload 模板到临时文件（避免 shell 变量传递大 JSON 出错）
+PAYLOAD_TEMPLATE="$LOG_DIR/_payload_template.json"
+LOG_DIR="/tmp/ppt_stress_$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$LOG_DIR"
+
+python3 -c "
 import json, sys
 with open('$POSTPPT_JSON', 'r', encoding='utf-8') as f:
     data = json.load(f)
-print(json.dumps(data.get('content', '')))
-")
-CONTENT_LEN=$(python3 -c "
-import json
-print(len(json.loads($CONTENT_JSON)))
-")
-echo "📝 内容长度: ${CONTENT_LEN} 字符"
+content = data.get('content', '')
+print(f'📝 内容长度: {len(content)} 字符', file=sys.stderr)
+# 保存为模板，report_id 和 title 用占位符
+template = {
+    'report_id': '__REPORT_ID__',
+    'title': '__TITLE__',
+    'content': content
+}
+with open('$LOG_DIR/_payload_template.json', 'w', encoding='utf-8') as out:
+    json.dump(template, out, ensure_ascii=False)
+" 2>&1 | head -1
 echo ""
 
 # ── 发起并发请求 ──
@@ -78,23 +87,21 @@ echo "[2/3] 发起 $CONCURRENCY 个并发请求..."
 echo ""
 
 PIDS=()
-LOG_DIR="/tmp/ppt_stress_$(date +%Y%m%d_%H%M%S)"
-mkdir -p "$LOG_DIR"
 
 for i in $(seq 1 "$CONCURRENCY"); do
     REPORT_ID="stress_test_$(date +%s)_$i"
     
-    # 构造 JSON payload（每个任务用相同内容，不同 report_id）
-    PAYLOAD=$(python3 -c "
+    # 从模板生成每个任务的 payload 文件
+    PAYLOAD_FILE="$LOG_DIR/payload_${i}.json"
+    python3 -c "
 import json
-content = json.loads($CONTENT_JSON)
-payload = {
-    'report_id': '$REPORT_ID',
-    'title': '压测任务 $i',
-    'content': content
-}
-print(json.dumps(payload, ensure_ascii=False))
-")
+with open('$LOG_DIR/_payload_template.json', 'r', encoding='utf-8') as f:
+    payload = json.load(f)
+payload['report_id'] = '$REPORT_ID'
+payload['title'] = '压测任务 $i'
+with open('$PAYLOAD_FILE', 'w', encoding='utf-8') as out:
+    json.dump(payload, out, ensure_ascii=False)
+"
     
     LOG_FILE="$LOG_DIR/task_${i}.log"
     
@@ -108,7 +115,7 @@ print(json.dumps(payload, ensure_ascii=False))
         HTTP_RESPONSE=$(curl -s -w "\n%{http_code}\n%{time_total}" \
             -X POST "$API" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
+            -d @"$PAYLOAD_FILE" \
             2>&1)
         
         END_TS=$(date +%s)
