@@ -40,7 +40,7 @@ python3 scripts/qwen_ppt_runner.py scripts/assets/qwen_runner_request.example.js
 python3 scripts/stop_qwen_runner.py --dry-run
 ```
 
-The runner uses staged Qwen sessions with deterministic precomputed references, batched serial SVG generation for long decks, a separate design-spec review gate, a dedicated notes stage, and a final SVG review pass.
+The runner uses staged Qwen sessions with deterministic precomputed references, batched serial SVG generation for long decks, a separate design-spec review gate, a dedicated notes stage, and deterministic SVG quality-check and auto-repair scripts before export.
 For Qwen Code project-native discovery, see [QWEN.md](../../../QWEN.md) and [`.qwen/skills/ppt-master/SKILL.md`](../../../.qwen/skills/ppt-master/SKILL.md).
 
 ## Script Index

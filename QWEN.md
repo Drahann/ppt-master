@@ -27,8 +27,6 @@ Core pipeline:
 
 - Project skill wrapper: `.qwen/skills/ppt-master/SKILL.md`
 - Spec review skill: `.qwen/skills/ppt-spec-review/SKILL.md`
-- SVG review skill: `.qwen/skills/ppt-svg-review/SKILL.md`
-- SVG review workflow: `.qwen/skills/ppt-svg-review/workflows/svg-review.md`
 - Mirrored workflow references: `.qwen/skills/ppt-master/references/`
 - Mirrored template references: `.qwen/skills/ppt-master/templates/`
 

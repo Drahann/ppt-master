@@ -942,6 +942,1037 @@ def build_spec_review_input(
     }
 
 
+def validate_design_spec(
+    project_path: Path,
+    plan: list[SlidePlanEntry],
+    valid_chart_keys: set[str],
+    *,
+    strict_icons: bool,
+) -> list[str]:
+    design_spec_path = project_path / "design_spec.md"
+    if not design_spec_path.exists():
+        return ["Missing design_spec.md"]
+
+    content = design_spec_path.read_text(encoding="utf-8", errors="replace")
+    errors: list[str] = []
+
+    for header in DESIGN_SPEC_REQUIRED_HEADERS:
+        if header not in content:
+            errors.append(f"design_spec.md missing required section: {header}")
+
+    if "### Part " not in content:
+        errors.append("design_spec.md content outline is not grouped into Part chapters")
+
+    icon_section = extract_markdown_section(
+        content,
+        "## VI. Icon Usage",
+        "## VII. Visualization Reference List",
+    )
+    if f"`{DEFAULT_ICON_LIBRARY}/" not in icon_section:
+        errors.append(f"design_spec.md does not lock the icon library to `{DEFAULT_ICON_LIBRARY}`")
+
+    icon_mentions = re.findall(rf"`{re.escape(DEFAULT_ICON_LIBRARY)}/[^`]+`", icon_section)
+    content_slide_count = len([entry for entry in plan if entry.kind == "content"])
+    minimum_icon_rows = min(6, max(ICON_COVERAGE_MIN_SLIDES, math.ceil(content_slide_count * 0.3)))
+    if len(icon_mentions) < minimum_icon_rows:
+        errors.append(
+            "design_spec.md icon inventory is too thin; "
+            f"expected at least {minimum_icon_rows} `{DEFAULT_ICON_LIBRARY}/...` entries, got {len(icon_mentions)}"
+        )
+
+    unknown_chart_refs = find_unknown_chart_references(content, valid_chart_keys)
+    if unknown_chart_refs:
+        errors.append(
+            "design_spec.md references unknown visualization templates: "
+            + ", ".join(unknown_chart_refs)
+        )
+
+    if strict_icons:
+        invalid_icon_refs = find_invalid_icon_refs(content, load_available_icons())
+        if invalid_icon_refs:
+            errors.append(
+                "design_spec.md references invalid icon names: "
+                + ", ".join(invalid_icon_refs)
+            )
+
+    return errors
+
+
+def validate_svg_outputs(project_path: Path, plan: list[SlidePlanEntry]) -> list[str]:
+    svg_dir = project_path / "svg_output"
+    errors: list[str] = []
+    icon_slide_count = 0
+    content_slide_count = 0
+    available_icons = load_available_icons()
+
+    for entry in plan:
+        svg_path = svg_dir / entry.filename
+        if not svg_path.exists():
+            continue
+
+        text = svg_path.read_text(encoding="utf-8", errors="replace")
+        try:
+            ET.fromstring(text)
+        except ET.ParseError as exc:
+            errors.append(f"Invalid SVG XML: {entry.filename} ({exc})")
+            continue
+
+        if contains_emoji(text):
+            errors.append(f"SVG contains emoji text instead of icon-library icons: {entry.filename}")
+
+        icon_refs = re.findall(r'data-icon="([^"]+)"', text)
+        invalid_icon_refs: list[str] = []
+        for ref in icon_refs:
+            if not ref.startswith(f"{DEFAULT_ICON_LIBRARY}/"):
+                invalid_icon_refs.append(ref)
+                continue
+            icon_name = ref.split("/", 1)[1]
+            if icon_name not in available_icons:
+                invalid_icon_refs.append(ref)
+        if invalid_icon_refs:
+            errors.append(
+                f"SVG uses invalid or non-existent icon refs in {entry.filename}: {', '.join(sorted(set(invalid_icon_refs)))}"
+            )
+
+        if entry.kind == "content":
+            content_slide_count += 1
+            if icon_refs:
+                icon_slide_count += 1
+
+    if content_slide_count:
+        minimum_icon_slides = min(
+            content_slide_count,
+            max(ICON_COVERAGE_MIN_SLIDES, math.ceil(content_slide_count * ICON_COVERAGE_RATIO)),
+        )
+        if icon_slide_count < minimum_icon_slides:
+            errors.append(
+                "Too few content SVGs use icon placeholders; "
+                f"expected at least {minimum_icon_slides}, got {icon_slide_count}"
+            )
+
+    return errors
+
+
+def check_svg_only_state(
+    project_path: Path,
+    plan: list[SlidePlanEntry],
+    valid_chart_keys: set[str],
+    runner_dir: Path,
+) -> tuple[bool, list[str]]:
+    errors: list[str] = []
+    expected_svg_names = collect_expected_svg_names(plan)
+    svg_dir = project_path / "svg_output"
+    errors.extend(validate_design_spec(project_path, plan, valid_chart_keys, strict_icons=True))
+
+    actual_svg_names = {path.name for path in svg_dir.glob("*.svg")}
+    missing_svg = sorted(expected_svg_names - actual_svg_names)
+    extra_svg = sorted(actual_svg_names - expected_svg_names)
+    if missing_svg:
+        errors.append(f"Missing SVG files: {', '.join(missing_svg)}")
+    if extra_svg:
+        errors.append(f"Unexpected SVG files: {', '.join(extra_svg)}")
+
+    errors.extend(validate_svg_outputs(project_path, plan))
+    errors.extend(run_svg_quality_check(project_path, runner_dir))
+    return not errors, errors
+
+
+def check_batch_state(
+    project_path: Path,
+    batch_plan: list[SlidePlanEntry],
+    full_plan: list[SlidePlanEntry],
+) -> tuple[bool, list[str]]:
+    errors: list[str] = []
+    svg_dir = project_path / "svg_output"
+    expected_batch_names = collect_expected_svg_names(batch_plan)
+    all_expected_names = collect_expected_svg_names(full_plan)
+    actual_svg_names = {path.name for path in svg_dir.glob("*.svg")}
+
+    missing_svg = sorted(expected_batch_names - actual_svg_names)
+    extra_svg = sorted(actual_svg_names - all_expected_names)
+    if missing_svg:
+        errors.append(f"Missing batch SVG files: {', '.join(missing_svg)}")
+    if extra_svg:
+        errors.append(f"Unexpected SVG files: {', '.join(extra_svg)}")
+
+    errors.extend(validate_svg_outputs(project_path, batch_plan))
+    return not errors, errors
+
+
+def check_notes_state(project_path: Path, plan: list[SlidePlanEntry]) -> tuple[bool, list[str]]:
+    errors: list[str] = []
+    notes_path = project_path / "notes" / "total.md"
+    if not notes_path.exists():
+        errors.append("Missing notes/total.md")
+        return False, errors
+
+    expected_note_headings = [entry.note_heading for entry in plan]
+    actual_note_headings = parse_notes_headings(notes_path)
+    if actual_note_headings != expected_note_headings:
+        errors.append(
+            "notes/total.md headings do not exactly match slide filenames: "
+            f"expected {expected_note_headings}, got {actual_note_headings}"
+        )
+    return not errors, errors
+
+
+def check_spec_state(
+    project_path: Path,
+    plan: list[SlidePlanEntry],
+    valid_chart_keys: set[str],
+) -> tuple[bool, list[str]]:
+    errors = validate_design_spec(project_path, plan, valid_chart_keys, strict_icons=False)
+    return not errors, errors
+
+
+def check_review_state(
+    project_path: Path,
+    plan: list[SlidePlanEntry],
+    valid_chart_keys: set[str],
+    review_report_path: Path,
+) -> tuple[bool, list[str]]:
+    errors = validate_design_spec(project_path, plan, valid_chart_keys, strict_icons=True)
+    if not review_report_path.exists():
+        errors.append(f"Missing {review_report_path.name}")
+    else:
+        try:
+            payload = json.loads(review_report_path.read_text(encoding="utf-8", errors="replace"))
+        except json.JSONDecodeError as exc:
+            errors.append(f"Invalid JSON in {review_report_path.name}: {exc}")
+        else:
+            if not isinstance(payload, dict):
+                errors.append(f"{review_report_path.name} must be a JSON object")
+            else:
+                if not payload.get("status"):
+                    errors.append(f"{review_report_path.name} is missing status")
+                if "summary" not in payload:
+                    errors.append(f"{review_report_path.name} is missing summary")
+    return not errors, errors
+
+
+def build_sentinel_variants(prefix: str) -> set[str]:
+    base = prefix.strip()
+    return {
+        base,
+        base.replace("_", ""),
+        base.replace("_", " "),
+    }
+
+
+def run_svg_quality_check(project_path: Path, runner_dir: Path) -> list[str]:
+    """Run svg_quality_checker.py and return per-file error details.
+
+    Instead of returning a single generic message, we parse the checker's
+    JSON export and surface each individual error string so that
+    ``deterministic_issues`` presented to the AI reviewer contains the
+    precise coordinates and correction suggestions.
+    """
+    report_path = runner_dir / SVG_QUALITY_REPORT_FILENAME
+    command = [
+        sys.executable,
+        str(REPO_ROOT / "skills" / "ppt-master" / "scripts" / "svg_quality_checker.py"),
+        str(project_path),
+        "--export",
+        "--output",
+        str(report_path),
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if completed.returncode == 0:
+        return []
+
+    # Try to parse the exported report for detailed errors
+    errors: list[str] = []
+    try:
+        report_text = report_path.read_text(encoding="utf-8", errors="replace")
+        # The report format has lines like "  - Chart sector 2 inner start..."
+        current_file = ""
+        for line in report_text.splitlines():
+            if line.startswith("[ERROR] Failed - "):
+                current_file = line.split(" - ", 1)[1].strip()
+            elif line.strip().startswith("- ") and current_file:
+                error_detail = line.strip().removeprefix("- ").strip()
+                errors.append(f"[{current_file}] {error_detail}")
+    except Exception:
+        pass
+
+    if not errors:
+        errors.append(f"svg_quality_checker reported SVG errors; see {report_path}")
+    return errors
+
+
+def is_recoverable_svg_notes_failure(
+    stage_name: str,
+    returncode: int,
+    generation_errors: list[str],
+) -> bool:
+    if stage_name != "svg_generation" or returncode == 0:
+        return False
+    return bool(generation_errors) and all(item == "Missing notes/total.md" for item in generation_errors)
+
+
+def select_executor_style_reference(project_path: Path) -> Path:
+    design_spec_path = project_path / "design_spec.md"
+    if not design_spec_path.exists():
+        return QWEN_EXECUTOR_GENERAL_PATH
+
+    content = design_spec_path.read_text(encoding="utf-8", errors="replace").lower()
+    if any(token in content for token in ("consulting", "consultant", "mckinsey", "mbb")):
+        return QWEN_EXECUTOR_CONSULTANT_PATH
+    return QWEN_EXECUTOR_GENERAL_PATH
+
+
+def classify_turn(
+    stdout: str,
+    stderr: str,
+    latest_assistant_text: str,
+    completion_sentinel_prefix: str = COMPLETION_SENTINEL_PREFIX,
+) -> str:
+    haystacks = [latest_assistant_text, stdout, stderr]
+    sentinel_variants = build_sentinel_variants(completion_sentinel_prefix)
+    if any(any(variant in text for variant in sentinel_variants) for text in haystacks):
+        return "complete"
+
+    combined = "\n".join(text for text in haystacks if text)
+    stderr_lower = stderr.lower()
+    stdout_lower = stdout.lower()
+    if (
+        "traceback" in stderr_lower
+        or "exception" in stderr_lower
+        or "[error]" in stderr_lower
+        or "error:" in stderr_lower
+        or "[error]" in stdout_lower
+    ):
+        return "error"
+
+    if any(pattern in combined for pattern in TEMPLATE_BLOCKING_PATTERNS):
+        return "template_blocked"
+    if any(pattern in combined for pattern in CONFIRMATION_BLOCKING_PATTERNS):
+        return "confirm_blocked"
+    return "ordinary"
+
+
+def build_slide_plan_text(plan: list[SlidePlanEntry]) -> str:
+    lines: list[str] = []
+    for entry in plan:
+        source = []
+        if entry.source_h2:
+            source.append(f'H2="{entry.source_h2}"')
+        if entry.source_h3:
+            source.append(f'H3="{entry.source_h3}"')
+        source_text = ", ".join(source) if source else "synthetic"
+        absorb_note = ""
+        if entry.absorb_parent_intro:
+            absorb_note = " | must absorb intro text under parent H2 before the first H3"
+        lines.append(
+            f"- {entry.filename} | {entry.kind} | title: {entry.heading} | source: {source_text}{absorb_note}"
+        )
+    return "\n".join(lines)
+
+
+def split_plan_into_batches(plan: list[SlidePlanEntry], batch_size: int) -> list[list[SlidePlanEntry]]:
+    return [plan[index : index + batch_size] for index in range(0, len(plan), batch_size)]
+
+
+def read_json_any(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
+def write_batch_reference_file(
+    source_path: Path,
+    output_path: Path,
+    batch_plan: list[SlidePlanEntry],
+) -> Path:
+    payload = read_json_any(source_path)
+    batch_names = {entry.filename for entry in batch_plan}
+
+    filtered = payload
+    if isinstance(payload, list):
+        filtered = [
+            item
+            for item in payload
+            if not isinstance(item, dict)
+            or item.get("slide") in batch_names
+        ]
+    elif isinstance(payload, dict):
+        filtered = {
+            key: value
+            for key, value in payload.items()
+            if not isinstance(value, dict)
+            or value.get("slide") in batch_names
+            or key in batch_names
+        }
+
+    write_json(output_path, filtered)
+    return output_path
+
+
+def build_spec_bootstrap_prompt(
+    request: dict[str, Any],
+    project_path: Path,
+    imported_markdown_path: Path,
+    slide_plan_path: Path,
+    slide_digest_path: Path,
+    chart_reference_path: Path,
+    icon_reference_path: Path,
+    plan: list[SlidePlanEntry],
+) -> str:
+    total_pages = len(plan)
+    return f"""You are in the Strategist phase for an already-initialized PPT Master project.
+
+Read these files before doing anything else:
+1. {REPO_ROOT / "AGENTS.md"}
+2. {QWEN_PROJECT_GUIDE_PATH}
+3. {QWEN_SKILL_WRAPPER_PATH}
+4. {QWEN_REPO_SKILL_PATH}
+5. {QWEN_STRATEGIST_REFERENCE_PATH}
+6. {QWEN_DESIGN_SPEC_REFERENCE_PATH}
+7. {QWEN_CHARTS_INDEX_PATH}
+8. {QWEN_EXECUTOR_REFERENCE_PATH}
+9. {SVG_DESIGN_COOKBOOK_PATH}
+10. {QWEN_SHARED_STANDARDS_PATH}
+11. {QWEN_IMAGE_LAYOUT_REFERENCE_PATH}
+12. {slide_plan_path}
+13. {slide_digest_path}
+14. {chart_reference_path}
+15. {icon_reference_path}
+16. {imported_markdown_path}
+
+Project boundaries:
+- Project path: {project_path}
+- Do not re-run `project_manager init` or `import-sources`
+- Do not run `total_md_split.py`, `finalize_svg.py`, or `svg_to_pptx.py`
+- Only produce or update:
+  - {project_path / "design_spec.md"}
+- Do NOT create any SVG files in this stage
+- Do NOT create `notes/total.md` in this stage
+
+Hard constraints:
+- Use free design. Do not use a page template.
+- For this local test run, use a light theme. Do not use a dark theme.
+- Free design does NOT mean inventing arbitrary asset names. Visualization templates must come only from `{chart_reference_path}` and `templates/charts/`.
+- Lock the icon library to `{DEFAULT_ICON_LIBRARY}`. Do not mix icon libraries.
+- Use the icon candidates in `{icon_reference_path}` as the default icon source.
+- Do not use emoji as visual bullets, markers, or pseudo-icons. Use only the locked icon library and normal SVG shapes.
+- Use only icon names that actually exist in `{DEFAULT_ICON_LIBRARY}`.
+- Content pages must include 1-3 semantic `data-icon="{DEFAULT_ICON_LIBRARY}/..."` placeholders by default. Only skip icons on a content page if that page is dominated by one primary chart or image.
+- Do not invent new chart or icon names outside the reference files unless the real template catalog clearly requires a justified override.
+- Keep the downstream SVG execution anchor-friendly: do not invent page-specific header/footer coordinate systems that would break a fixed top bar, title zone, icon zone, or footer zone across the deck.
+- Follow the exact Design Spec template structure from `design_spec_reference.md` with sections I through XI.
+- In the Design Spec content outline, group slides under `### Part N: ...` chapter headings.
+- In the Design Spec icon inventory, include enough `{DEFAULT_ICON_LIBRARY}/...` icons for downstream execution.
+- In the Design Spec visualization section, reference only real templates from `templates/charts/<name>.svg`.
+- Treat resource-only sections such as image-resource notes as `VIII. Image Resource List`, not as standalone slides.
+- Canvas format: {request["canvas_format"]}
+- Total page count must be exactly {total_pages}
+- No TOC page
+- No section header / chapter divider page
+- Must include cover and ending pages
+- Content density should be moderately high
+- Stay faithful to the source markdown and emphasize key points
+- For H2 `创新技术` and `产业验证`, do not create a parent H2 slide; create one slide per H3 instead.
+- If those H2 sections contain intro text before the first H3, absorb that intro into the first child slide.
+- For all other H2 sections, create one slide per H2 and absorb H3 details into that slide.
+
+Output constraints:
+- This stage must stop after a valid `design_spec.md` is written
+
+Exact slide plan:
+{build_slide_plan_text(plan)}
+
+Automation rules:
+- If the skill flow still requires a blocking confirmation, ask only once; the caller will resume the same session
+- Do not ask unrelated clarification questions
+- When the design spec is complete, print exactly one final sentinel line:
+{SPEC_COMPLETION_SENTINEL_PREFIX} {project_path}
+"""
+
+
+def build_spec_confirmation_prompt(plan: list[SlidePlanEntry], request: dict[str, Any]) -> str:
+    return f"""Approved. Continue generation in the same session.
+
+Keep these constraints locked:
+- Template choice: B) Free design
+- Theme: Light theme only
+- Canvas: {request["canvas_format"]}
+- Total page count: exactly {len(plan)}
+- No TOC page
+- No section header / chapter divider page
+- Cover and ending pages are required
+- Content density should stay moderately high
+- Stay faithful to the source and highlight key points
+- Lock icon usage to `{DEFAULT_ICON_LIBRARY}` only
+- Do not use emoji in the design spec
+- Use only real visualization templates from `templates/charts/`
+- Generate only `design_spec.md` in this stage
+- Do not create SVG or notes files yet
+- Do not stop again for another confirmation
+
+Finish `design_spec.md`, then print:
+{SPEC_COMPLETION_SENTINEL_PREFIX}
+"""
+
+
+def build_spec_continue_prompt(
+    request: dict[str, Any],
+    project_path: Path,
+    plan: list[SlidePlanEntry],
+    generation_errors: list[str],
+) -> str:
+    bullet_errors = "\n".join(f"- {item}" for item in generation_errors)
+    return f"""Continue this same task. Do not restart and do not recreate the project.
+
+Project path: {project_path}
+The current output is still failing these checks:
+{bullet_errors}
+
+Repair the existing files in place and keep all original hard constraints:
+- Before repairing, re-read these files: `{QWEN_PROJECT_GUIDE_PATH.name}`, `{QWEN_SKILL_WRAPPER_PATH.name}`, `{QWEN_REPO_SKILL_PATH.name}`, `{QWEN_STRATEGIST_REFERENCE_PATH.name}`, `{QWEN_DESIGN_SPEC_REFERENCE_PATH.name}`, and `{SVG_DESIGN_COOKBOOK_PATH.name}`
+- free design
+- light theme only
+- no TOC page
+- no section header page
+- total page count must stay exactly {len(plan)}
+- cover and ending pages are required
+- stay faithful to the source and keep the content dense
+- keep icon usage locked to `{DEFAULT_ICON_LIBRARY}`
+- do not use emoji in the design spec
+- use only real visualization templates from `templates/charts/`
+- do not create any SVG or notes files in this stage
+
+When `design_spec.md` satisfies the checks, print:
+{SPEC_COMPLETION_SENTINEL_PREFIX} {project_path}
+"""
+
+
+def build_review_bootstrap_prompt(
+    request: dict[str, Any],
+    project_path: Path,
+    review_input_path: Path,
+    review_report_path: Path,
+) -> str:
+    return f"""You are in the Design Spec review gate for PPT Master.
+
+Read these files before doing anything else:
+1. {REPO_ROOT / "AGENTS.md"}
+2. {QWEN_PROJECT_GUIDE_PATH}
+3. {QWEN_SKILL_WRAPPER_PATH}
+4. {QWEN_REPO_SKILL_PATH}
+5. {QWEN_STRATEGIST_REFERENCE_PATH}
+6. {QWEN_DESIGN_SPEC_REFERENCE_PATH}
+7. {QWEN_EXECUTOR_REFERENCE_PATH}
+8. {SVG_DESIGN_COOKBOOK_PATH}
+9. {QWEN_SHARED_STANDARDS_PATH}
+10. {QWEN_IMAGE_LAYOUT_REFERENCE_PATH}
+11. {project_path / "design_spec.md"}
+12. {review_input_path}
+13. {QWEN_SPEC_REVIEW_SKILL_PATH}
+
+Review boundaries:
+- Project path: {project_path}
+- You may edit only:
+  - {project_path / "design_spec.md"}
+  - {review_report_path}
+- Do NOT create SVG files
+- Do NOT create notes files
+- Do NOT change the slide plan or page count
+
+Review checklist:
+1. All icon names in the design spec must exist in `{DEFAULT_ICON_LIBRARY}`
+2. All chart template names must exist in `templates/charts/`
+3. No emoji should appear in the design spec
+4. Reassess these pages with extra care: {", ".join(REVIEW_FOCUS_SLIDES)}
+5. Improve weak icon choices or weak visualization choices when a clearly better existing option fits
+6. Keep the deck in light theme and free design
+7. Preserve downstream anchorability: reviewed layouts should still support a stable header/title/icon/footer geometry across long sequential SVG generation
+
+Output requirements:
+- Repair `design_spec.md` if needed
+- Write `{review_report_path.name}` as JSON with:
+  - `status`
+  - `summary`
+  - `issues_found`
+  - `issues_fixed`
+  - `remaining_risks`
+- When review is complete, print exactly:
+{REVIEW_COMPLETION_SENTINEL_PREFIX} {project_path}
+"""
+
+
+def build_review_continue_prompt(
+    project_path: Path,
+    review_report_path: Path,
+    generation_errors: list[str],
+) -> str:
+    bullet_errors = "\n".join(f"- {item}" for item in generation_errors)
+    return f"""Continue the design-spec review gate.
+
+Project path: {project_path}
+The review is still failing these checks:
+{bullet_errors}
+
+Repair only:
+- {project_path / "design_spec.md"}
+- {review_report_path}
+- Before repairing, re-read these files: `{QWEN_PROJECT_GUIDE_PATH.name}`, `{QWEN_SKILL_WRAPPER_PATH.name}`, `{QWEN_REPO_SKILL_PATH.name}`, `{QWEN_STRATEGIST_REFERENCE_PATH.name}`, `{QWEN_SPEC_REVIEW_SKILL_PATH.name}`, and `{SVG_DESIGN_COOKBOOK_PATH.name}`
+
+Do not generate SVG or notes in this stage.
+When review is complete, print:
+{REVIEW_COMPLETION_SENTINEL_PREFIX} {project_path}
+"""
+
+
+def build_svg_bootstrap_prompt(
+    request: dict[str, Any],
+    project_path: Path,
+    imported_markdown_path: Path,
+    slide_plan_path: Path,
+    icon_reference_path: Path,
+    svg_anchor_context_path: Path,
+    executor_style_path: Path,
+    plan: list[SlidePlanEntry],
+) -> str:
+    total_pages = len(plan)
+    exact_filenames = ", ".join(entry.filename for entry in plan)
+    return f"""You are in the Executor phase for an already-initialized PPT Master project.
+
+Read these files before doing anything else:
+1. {REPO_ROOT / "AGENTS.md"}
+2. {QWEN_PROJECT_GUIDE_PATH}
+3. {QWEN_SKILL_WRAPPER_PATH}
+4. {SVG_DESIGN_COOKBOOK_PATH}
+5. {QWEN_REPO_SKILL_PATH}
+6. {QWEN_EXECUTOR_REFERENCE_PATH}
+7. {executor_style_path}
+8. {QWEN_SHARED_STANDARDS_PATH}
+9. {QWEN_IMAGE_LAYOUT_REFERENCE_PATH}
+10. {project_path / "design_spec.md"}
+11. {slide_plan_path}
+12. {icon_reference_path}
+13. {svg_anchor_context_path}
+14. {imported_markdown_path}
+
+Project boundaries:
+- Project path: {project_path}
+- Do not edit the slide plan
+- Do not rewrite `design_spec.md` unless a minor fix is absolutely required for valid SVG generation
+- Do not run `total_md_split.py`, `finalize_svg.py`, or `svg_to_pptx.py`
+- Produce only:
+  - {project_path / "svg_output"}
+- Do NOT create `notes/total.md` in this stage
+
+Executor constraints:
+- Use the reviewed `design_spec.md` as the single source of truth
+- Keep free design and light theme
+- Treat `{SVG_DESIGN_COOKBOOK_PATH.name}` as a mandatory SVG visual design guide after design-parameter confirmation
+- Treat `{svg_anchor_context_path.name}` as the immutable execution anchor for geometry, defs, icon placement, footer position, and filename consistency
+- Treat `{executor_style_path.name}` as the style-specific visual execution guide for this deck
+- Use only real `templates/charts/<name>.svg` references from the design spec
+- Lock icon usage to `{DEFAULT_ICON_LIBRARY}`
+- Do not use emoji in SVG
+- Most content slides must include valid `data-icon="{DEFAULT_ICON_LIBRARY}/..."` placeholders
+- Every SVG must be valid XML
+- Generate pages sequentially in slide-plan order
+- Re-read both `{SVG_DESIGN_COOKBOOK_PATH.name}` and `{svg_anchor_context_path.name}` after every {COOKBOOK_REREAD_INTERVAL} completed SVG pages, and immediately if visual quality starts drifting
+- Total page count must be exactly {total_pages}
+- No TOC page
+- No section header page
+
+Output constraints:
+- Generate exactly these SVG files, no more and no fewer:
+  {exact_filenames}
+- Read chart templates before first use, then adapt them creatively instead of copying them verbatim
+- Templates are structural references, not full-page presets; keep one clear primary visual structure per page and adapt the rest of the page to support it
+- Use this re-anchor cadence during sequential generation: before slides {COOKBOOK_REREAD_INTERVAL + 1}, {COOKBOOK_REREAD_INTERVAL * 2 + 1}, {COOKBOOK_REREAD_INTERVAL * 3 + 1}, etc., pause internally, re-read both `{SVG_DESIGN_COOKBOOK_PATH.name}` and `{svg_anchor_context_path.name}`, restate the fixed header/footer/defs/naming anchors to yourself, and then continue
+- Never switch to a second naming convention mid-run. Every SVG filename and every notes heading must continue matching the exact stems in `{slide_plan_path.name}`
+
+Exact slide plan:
+{build_slide_plan_text(plan)}
+
+When all SVGs are complete, print exactly:
+{COMPLETION_SENTINEL_PREFIX} {project_path}
+"""
+
+
+def build_batch_svg_prompt(
+    request: dict[str, Any],
+    project_path: Path,
+    slide_plan_path: Path,
+    batch_slide_plan_path: Path,
+    batch_digest_path: Path,
+    batch_icon_reference_path: Path,
+    svg_anchor_context_path: Path,
+    executor_style_path: Path,
+    batch_plan: list[SlidePlanEntry],
+    batch_index: int,
+    total_batches: int,
+    prev_last_svg_path: Path | None,
+) -> str:
+    exact_filenames = ", ".join(entry.filename for entry in batch_plan)
+    prev_anchor_block = ""
+    if prev_last_svg_path is not None and prev_last_svg_path.exists():
+        prev_anchor_block = f"""
+Previous-batch visual anchor:
+- Read this completed SVG before generating the current batch: {prev_last_svg_path}
+- Keep header/footer/defs/color roles consistent with that page
+- Do not reuse the same main layout pattern for the first page of this batch if a clearly different layout can express the content better
+"""
+
+    return f"""You are in the Executor SVG batch phase for an already-initialized PPT Master project.
+
+This is batch {batch_index + 1} of {total_batches}. Generate only this batch's SVG files.
+
+Read these files before doing anything else:
+1. {REPO_ROOT / "AGENTS.md"}
+2. {QWEN_PROJECT_GUIDE_PATH}
+3. {QWEN_SKILL_WRAPPER_PATH}
+4. {SVG_DESIGN_COOKBOOK_PATH}
+5. {QWEN_REPO_SKILL_PATH}
+6. {QWEN_EXECUTOR_REFERENCE_PATH}
+7. {executor_style_path}
+8. {QWEN_SHARED_STANDARDS_PATH}
+9. {QWEN_IMAGE_LAYOUT_REFERENCE_PATH}
+10. {project_path / "design_spec.md"}
+11. {slide_plan_path}
+12. {batch_slide_plan_path}
+13. {batch_digest_path}
+14. {batch_icon_reference_path}
+15. {svg_anchor_context_path}
+
+Project boundaries:
+- Project path: {project_path}
+- Generate only this batch's SVG files in `{project_path / "svg_output"}`
+- Do NOT create or overwrite `notes/total.md` in this batch stage
+- Do NOT rewrite `design_spec.md`
+- Do NOT run `total_md_split.py`, `finalize_svg.py`, or `svg_to_pptx.py`
+
+Executor constraints:
+- Use the reviewed `design_spec.md` as the single source of truth
+- Keep free design and light theme
+- Treat `{SVG_DESIGN_COOKBOOK_PATH.name}` as the mandatory visual execution guide
+- Treat `{svg_anchor_context_path.name}` as the immutable execution anchor
+- Use only real `templates/charts/<name>.svg` references from the design spec
+- Lock icon usage to `{DEFAULT_ICON_LIBRARY}`
+- Do not use emoji in SVG
+- Every SVG must be valid XML
+- Generate pages sequentially within this batch in the order listed below
+- Re-read both `{SVG_DESIGN_COOKBOOK_PATH.name}` and `{svg_anchor_context_path.name}` before the first page of this batch and again if visual quality starts drifting
+{prev_anchor_block}
+Batch output constraints:
+- Generate exactly these SVG files for this batch, no more and no fewer:
+  {exact_filenames}
+- Do not rename files into another naming convention
+- Do not touch already-completed SVG files from earlier batches unless absolutely necessary to repair a structural defect discovered during this batch
+
+Exact batch slide plan:
+{build_slide_plan_text(batch_plan)}
+
+When this batch's SVG files are complete, print exactly:
+{SVG_BATCH_COMPLETION_SENTINEL_PREFIX} {project_path}
+"""
+
+
+def build_svg_confirmation_prompt(plan: list[SlidePlanEntry], request: dict[str, Any]) -> str:
+    return f"""Approved. Continue the Executor phase.
+
+Keep these constraints locked:
+- Free design
+- Light theme only
+- Canvas: {request["canvas_format"]}
+- Total page count: exactly {len(plan)}
+- No TOC page
+- No section header / chapter divider page
+- Cover and ending pages are required
+- Lock icon usage to `{DEFAULT_ICON_LIBRARY}` only
+- Do not use emoji in SVG
+- Use only real visualization templates from `templates/charts/`
+- Keep following the loaded executor style guide, image layout rules, and shared SVG standards
+- Re-read both `{SVG_DESIGN_COOKBOOK_PATH.name}` and `svg_anchor_context.json` after every {COOKBOOK_REREAD_INTERVAL} completed SVG pages
+- Most content slides must include valid `data-icon="{DEFAULT_ICON_LIBRARY}/..."` placeholders
+- Generate only SVG in this stage
+
+When done, print:
+{COMPLETION_SENTINEL_PREFIX}
+"""
+
+
+def build_batch_svg_confirmation_prompt(batch_plan: list[SlidePlanEntry], request: dict[str, Any]) -> str:
+    return f"""Approved. Continue the current SVG batch.
+
+Keep these constraints locked:
+- Free design
+- Light theme only
+- Canvas: {request["canvas_format"]}
+- Lock icon usage to `{DEFAULT_ICON_LIBRARY}` only
+- Do not use emoji in SVG
+- Use only real visualization templates from `templates/charts/`
+- Re-read both `{SVG_DESIGN_COOKBOOK_PATH.name}` and `svg_anchor_context.json` before continuing if quality drifted
+- Generate only this batch's SVG files
+- Do not write notes in this stage
+
+When done, print:
+{SVG_BATCH_COMPLETION_SENTINEL_PREFIX}
+"""
+
+
+def build_svg_continue_prompt(
+    request: dict[str, Any],
+    project_path: Path,
+    plan: list[SlidePlanEntry],
+    generation_errors: list[str],
+    svg_anchor_context_path: Path,
+) -> str:
+    bullet_errors = "\n".join(f"- {item}" for item in generation_errors)
+    notes_only_recovery = bool(generation_errors) and all(
+        item == "Missing notes/total.md" for item in generation_errors
+    )
+    recovery_block = ""
+    if notes_only_recovery:
+        recovery_block = """- Existing SVG pages already passed the current structural checks.
+- Do not rewrite existing SVG files unless you discover a concrete structural defect.
+- Only create or repair `notes/total.md` so its headings exactly match the slide-plan SVG filenames.
+"""
+    return f"""Continue the Executor phase.
+
+Project path: {project_path}
+The current output is still failing these checks:
+{bullet_errors}
+
+Repair the SVG and notes outputs in place and keep all hard constraints:
+- free design
+- light theme only
+- no TOC page
+- no section header page
+- total page count must stay exactly {len(plan)}
+- keep icon usage locked to `{DEFAULT_ICON_LIBRARY}`
+- do not use emoji in SVG
+- use only real visualization templates from `templates/charts/`
+- keep following the loaded executor style guide, image layout rules, and shared SVG standards
+- re-read both `{SVG_DESIGN_COOKBOOK_PATH.name}` and `{svg_anchor_context_path.name}` after every {COOKBOOK_REREAD_INTERVAL} completed SVG pages
+- most content slides must contain valid `data-icon="{DEFAULT_ICON_LIBRARY}/..."` placeholders
+- SVG filenames must exactly match the slide plan
+- every SVG must remain valid XML
+- before continuing after this interruption, re-read `{svg_anchor_context_path.name}` and restate the immutable header/footer/defs/naming anchors to yourself
+{recovery_block}
+
+When `svg_output` satisfies the checks, print:
+{COMPLETION_SENTINEL_PREFIX} {project_path}
+"""
+
+
+def build_batch_svg_continue_prompt(
+    request: dict[str, Any],
+    project_path: Path,
+    batch_plan: list[SlidePlanEntry],
+    generation_errors: list[str],
+    svg_anchor_context_path: Path,
+) -> str:
+    bullet_errors = "\n".join(f"- {item}" for item in generation_errors)
+    return f"""Continue the current SVG batch.
+
+Project path: {project_path}
+The current batch output is still failing these checks:
+{bullet_errors}
+
+Repair only the current batch SVG files in place and keep all hard constraints:
+- free design
+- light theme only
+- lock icon usage to `{DEFAULT_ICON_LIBRARY}`
+- do not use emoji in SVG
+- use only real visualization templates from `templates/charts/`
+- re-read both `{SVG_DESIGN_COOKBOOK_PATH.name}` and `{svg_anchor_context_path.name}` before continuing
+- do not create or overwrite `notes/total.md` in this batch stage
+- do not rename files into another naming convention
+- every SVG must remain valid XML
+
+Current batch slide plan:
+{build_slide_plan_text(batch_plan)}
+
+When this batch's SVG files satisfy the checks, print:
+{SVG_BATCH_COMPLETION_SENTINEL_PREFIX} {project_path}
+"""
+
+
+def build_notes_bootstrap_prompt(
+    project_path: Path,
+    imported_markdown_path: Path,
+    slide_plan_path: Path,
+    svg_anchor_context_path: Path,
+) -> str:
+    return f"""You are in the speaker-notes completion phase for PPT Master.
+
+Read these files before doing anything else:
+1. {REPO_ROOT / "AGENTS.md"}
+2. {QWEN_PROJECT_GUIDE_PATH}
+3. {QWEN_SKILL_WRAPPER_PATH}
+4. {QWEN_REPO_SKILL_PATH}
+5. {project_path / "design_spec.md"}
+6. {slide_plan_path}
+7. {svg_anchor_context_path}
+8. {imported_markdown_path}
+
+Project boundaries:
+- Project path: {project_path}
+- All SVG files are already generated in `{project_path / "svg_output"}`
+- Do NOT rewrite SVG files in this stage
+- Do NOT rewrite `design_spec.md`
+- Produce only: {project_path / "notes" / "total.md"}
+
+Notes requirements:
+- Generate one unified `notes/total.md`
+- Each page must start with `# <svg_stem>`
+- H1 headings must exactly match the slide-plan SVG stems
+- Keep the presentation language consistent with the deck content
+- Use the reviewed design spec and source markdown as the narrative source of truth
+- Write coherent transitions across the full deck; do not treat batches as separate decks
+
+When notes are complete, print exactly:
+{NOTES_COMPLETION_SENTINEL_PREFIX} {project_path}
+"""
+
+
+def build_notes_continue_prompt(
+    project_path: Path,
+    plan: list[SlidePlanEntry],
+    generation_errors: list[str],
+) -> str:
+    bullet_errors = "\n".join(f"- {item}" for item in generation_errors)
+    return f"""Continue the speaker-notes completion phase.
+
+Project path: {project_path}
+The notes output is still failing these checks:
+{bullet_errors}
+
+Repair only:
+- {project_path / "notes" / "total.md"}
+
+Keep these constraints locked:
+- Do not rewrite SVG files
+- Do not rewrite `design_spec.md`
+- Notes headings must exactly match these SVG stems:
+  {", ".join(entry.note_heading for entry in plan)}
+
+When notes are complete, print:
+{NOTES_COMPLETION_SENTINEL_PREFIX} {project_path}
+"""
+
+
+def execute_qwen_stage(
+    *,
+    stage_name: str,
+    artifact_prefix: str,
+    initial_prompt: str,
+    completion_sentinel_prefix: str,
+    state_checker: Any,
+    continue_prompt_builder: Any,
+    confirmation_prompt_builder: Any,
+    model: str | None,
+    runner_dir: Path,
+    log_path: Path,
+) -> str:
+    session_id = str(uuid.uuid4())
+    follow_ups = 0
+    turn_index = 1
+    resume = False
+    next_prompt = initial_prompt
+
+    while True:
+        result = run_qwen_prompt(
+            prompt=next_prompt,
+            session_id=session_id,
+            repo_root=REPO_ROOT,
+            model=model,
+            resume=resume,
+            turn_index=turn_index,
+            runner_dir=runner_dir,
+            log_path=log_path,
+            artifact_prefix=artifact_prefix,
+        )
+
+        chat_path = wait_for_chat_recording_path(session_id)
+        if chat_path is not None:
+            append_log(log_path, f"{stage_name}: chat recording found at {chat_path}")
+        debug_path = find_debug_log_path(session_id)
+        if debug_path is not None:
+            append_log(log_path, f"{stage_name}: Qwen debug log found at {debug_path}")
+        latest_assistant_text = read_latest_assistant_message(chat_path, session_id)
+        if latest_assistant_text:
+            (runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.assistant.txt").write_text(
+                latest_assistant_text,
+                encoding="utf-8",
+            )
+
+        state_complete, generation_errors = state_checker()
+        classification = classify_turn(
+            result.stdout,
+            result.stderr,
+            latest_assistant_text,
+            completion_sentinel_prefix=completion_sentinel_prefix,
+        )
+        recoverable_notes_failure = is_recoverable_svg_notes_failure(
+            stage_name,
+            result.returncode,
+            generation_errors,
+        )
+        if recoverable_notes_failure and classification == "error":
+            classification = "incomplete"
+        append_log(
+            log_path,
+            f"{stage_name}: turn {turn_index} classified as {classification}; "
+            f"state_complete={state_complete}; recoverable_notes_failure={recoverable_notes_failure}; "
+            f"generation_errors={generation_errors}",
+        )
+
+        if result.returncode != 0 and not recoverable_notes_failure:
+            raise RunnerError(
+                f"{stage_name} failed with rc={result.returncode}. "
+                f"See {runner_dir / f'{artifact_prefix}_turn_{turn_index:02d}.stderr.txt'}"
+            )
+
+        if classification == "complete" and state_complete:
+            append_log(log_path, f"{stage_name} completed successfully")
+            return session_id
+
+        if follow_ups >= DEFAULT_MAX_FOLLOW_UPS:
+            raise RunnerError(
+                f"Exceeded maximum qwen follow-up turns ({DEFAULT_MAX_FOLLOW_UPS}) during {stage_name}"
+            )
+
+        if classification == "error":
+            raise RunnerError(
+                f"{stage_name} reported an error before completion. "
+                f"Latest assistant message: {latest_assistant_text[:500]}"
+            )
+
+        if classification in {"template_blocked", "confirm_blocked"}:
+            next_prompt = confirmation_prompt_builder(generation_errors)
+        else:
+            next_prompt = continue_prompt_builder(generation_errors)
+
+        follow_ups += 1
+        turn_index += 1
+        resume = True
+
+
+def cleanup_pre_execution_outputs(project_path: Path, log_path: Path) -> None:
+    svg_dir = project_path / "svg_output"
+    if svg_dir.exists():
+        for path in svg_dir.glob("*.svg"):
+            path.unlink(missing_ok=True)
+        append_log(log_path, f"Cleared pre-existing SVG outputs in {svg_dir}")
+    notes_total = project_path / "notes" / "total.md"
+    if notes_total.exists():
+        notes_total.unlink(missing_ok=True)
+        append_log(log_path, f"Removed pre-existing notes file {notes_total}")
+
+
 def run_qwen_prompt(
     prompt: str,
     session_id: str,
@@ -1318,7 +2349,6 @@ def build_svg_anchor_context(
     design_style = extract_markdown_table_value(design_spec_text, "Design Style")
     content_entries = [entry for entry in plan if entry.kind == "content"]
     content_titles = [entry.filename for entry in content_entries]
-    baseline_content_page = content_entries[0].filename if content_entries else None
     anchor_pages = [entry.filename for entry in plan[: min(3, len(plan))]]
     reanchor_before = [
         plan[index].filename
@@ -1588,11 +2618,8 @@ def execute_generation(
         log_path=log_path,
     )
 
-    # ── SVG Quality Check (deterministic script, no AI call) ──
-    svg_review_session_ids: list[str] = []
-    svg_review_session_id = "skipped_script_only"
-    svg_quality_report_path = runner_dir / SVG_QUALITY_REPORT_FILENAME
     append_log(log_path, "Running deterministic SVG quality check (no AI review)")
+    svg_quality_report_path = runner_dir / SVG_QUALITY_REPORT_FILENAME
     try:
         run_python_tool(
             [
@@ -1609,7 +2636,6 @@ def execute_generation(
     except Exception as exc:
         append_log(log_path, f"SVG quality check completed with issues: {exc}")
 
-    # ── SVG Auto Repair (deterministic fixes for charts, icons, syntax) ──
     append_log(log_path, "Running SVG auto repair (pie charts, title icons, syntax)")
     try:
         run_python_tool(
@@ -1632,11 +2658,9 @@ def execute_generation(
             "svg_session_id": svg_session_id,
             "svg_batch_sessions": svg_batch_session_ids,
             "notes_session_id": notes_session_id,
-            "svg_review_session_id": svg_review_session_id,
-            "svg_review_batch_sessions": svg_review_session_ids,
         },
     )
-    return svg_review_session_id
+    return notes_session_id
 
 
 def run_post_processing(project_path: Path, log_path: Path) -> tuple[Path, Path]:

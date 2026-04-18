@@ -57,12 +57,11 @@ Behavior:
 - Precomputes real chart-template references from `templates/charts/charts_index.json`
 - Precomputes per-slide `chunk` icon candidates from the real icon library
 - Precomputes a slide content digest so the model starts from structured source notes instead of raw markdown only
-- Runs five isolated Qwen stages:
+- Runs four isolated Qwen stages:
   - `spec_generation`: writes `design_spec.md`
   - `spec_review`: re-reads the generated spec in a separate session and repairs icon/template issues
   - `svg_generation`: generates `svg_output/`
   - `notes_generation`: writes `notes/total.md` after SVG generation has finished
-  - `svg_review`: repairs SVG naming, XML, and local layout/render issues in a separate session
 - Uses batched serial SVG generation automatically for long decks by default
   - `batch_mode=auto`: enable batching when page count exceeds the threshold
   - `batch_mode=always`: always use batched serial SVG generation
@@ -82,7 +81,8 @@ Behavior:
 - Writes deterministic review input with invalid-icon candidates and unknown chart-template findings before the review stage
 - Rejects invalid `design_spec.md` outputs when required sections are missing, chart template names are fake, icon planning is too thin, or icon names do not exist in the locked library
 - Rejects invalid SVG outputs when XML parsing fails, icon coverage is too low, `data-icon` names do not exist in the locked icon library, or emoji are used instead of proper icons
-- Runs `svg_quality_checker.py`, `total_md_split.py`, `finalize_svg.py`, and `svg_to_pptx.py -s final`
+- Runs deterministic `svg_quality_checker.py` and `svg_auto_repair.py` after notes generation
+- Runs `total_md_split.py`, `finalize_svg.py`, and `svg_to_pptx.py -s final`
 
 Output:
 
@@ -91,7 +91,7 @@ Output:
   "job_id": "local-test-001",
   "status": "succeeded",
   "project_path": "W:/.../projects/my_deck_ppt169_20260417",
-  "qwen_session_id": "svg-review-session-uuid",
+  "qwen_session_id": "notes-session-uuid",
   "native_pptx_path": "W:/.../exports/my_deck.pptx",
   "svg_pptx_path": "W:/.../exports/my_deck_svg.pptx",
   "log_path": "W:/.../runner/runner.log",
@@ -112,11 +112,8 @@ Runner artifacts are written to `<project_path>/runner/`:
 - `review_prompt.txt`
 - `bootstrap_prompt.txt`
 - `notes_prompt.txt`
-- `svg_review_prompt.txt`
 - `spec_review_input.json`
 - `spec_review_report.json`
-- `svg_review_input.json`
-- `svg_review_report.json`
 - `svg_quality_report.txt`
 - `stage_sessions.json`
 - `spec_turn_*.stdout.txt`
@@ -129,9 +126,6 @@ Runner artifacts are written to `<project_path>/runner/`:
 - `notes_turn_*.stdout.txt`
 - `notes_turn_*.stderr.txt`
 - `notes_turn_*.assistant.txt`
-- `svg_review_turn_*.stdout.txt`
-- `svg_review_turn_*.stderr.txt`
-- `svg_review_turn_*.assistant.txt`
 - `qwen_turn_*.stdout.txt`
 - `qwen_turn_*.stderr.txt`
 - `qwen_turn_*.assistant.txt`
@@ -140,8 +134,8 @@ Runner artifacts are written to `<project_path>/runner/`:
 
 Notes:
 - `model` drives the Strategist, SVG, and Notes stages
-- `review_model` drives both isolated review stages; if omitted, it defaults to `qwen3-max`
-- The returned `qwen_session_id` is the final SVG review session id; all stage session ids are written to `stage_sessions.json`
+- `review_model` drives the isolated design-spec review stage; if omitted, it defaults to `qwen3-max`
+- The returned `qwen_session_id` is the final completed Qwen stage session id, which is currently `notes_generation`
 - Completion is accepted only when the stage sentinel appears and the generated files pass deterministic validation
 - To stop a stuck local run cleanly on Windows, prefer `stop_qwen_runner.py` instead of killing only the outer `python` process
 - The current local test prompt locks the deck to a light theme; adjust the prompt later if you want dark-theme experiments
