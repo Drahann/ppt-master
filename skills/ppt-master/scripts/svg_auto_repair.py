@@ -233,81 +233,26 @@ def _repair_svg_syntax(content: str) -> tuple[str, list[str]]:
     Covers:
     - Unescaped < > in text content → &lt; &gt;
     - Unescaped & in text content → &amp;
-    - Duplicate <defs> blocks → merge into one
-    - Duplicate element IDs (gradients, filters) → deduplicate
     - rgba() → rgb() + fill-opacity/stroke-opacity
     - <g opacity> / <image opacity> → remove
     """
     fixes: list[str] = []
 
     # --- Fix unescaped < > & in text content ---
-    # Text content is between >...</text> or >...</tspan>
-    # We match text nodes: content between > and <
     def escape_text_node(m: re.Match) -> str:
         text = m.group(1)
         original = text
-        # Don't touch CDATA or already-escaped entities
         # Fix unescaped & first (but not existing entities)
         text = re.sub(r'&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)', '&amp;', text)
         # Fix unescaped < (a real < in text content, not a tag start)
-        # Heuristic: < followed by non-tag characters (digits, spaces, CJK, etc.)
         text = re.sub(r'<(?![a-zA-Z/!?])', '&lt;', text)
-        # Fix unescaped > in text (not part of a tag close)
-        # Heuristic: > that is NOT preceded by a tag-like pattern
+        # Fix unescaped > in text
         text = re.sub(r'(?<!["\'/a-zA-Z0-9\-])>', '&gt;', text)
         if text != original:
             fixes.append(f"Syntax fix: escaped < > & in text content")
         return '>' + text + '<'
 
-    # Only process text between closing > and opening <
-    # Avoid processing inside tags or attributes
     content = re.sub(r'>([^<]+)<', escape_text_node, content)
-
-    # --- Merge duplicate <defs> blocks ---
-    defs_pattern = re.compile(r'<defs[^>]*>(.*?)</defs>', re.DOTALL)
-    defs_matches = list(defs_pattern.finditer(content))
-    if len(defs_matches) > 1:
-        # Collect all defs content
-        all_defs_content = []
-        for dm in defs_matches:
-            inner = dm.group(1).strip()
-            if inner:
-                all_defs_content.append(inner)
-
-        # Remove all defs blocks
-        content = defs_pattern.sub('', content)
-        # Insert merged defs after opening <svg> tag
-        merged_defs = '\n<defs>\n' + '\n'.join(all_defs_content) + '\n</defs>'
-        svg_open_end = re.search(r'<svg[^>]*>', content)
-        if svg_open_end:
-            insert_pos = svg_open_end.end()
-            content = content[:insert_pos] + merged_defs + content[insert_pos:]
-        fixes.append(f"Syntax fix: merged {len(defs_matches)} <defs> blocks into one")
-
-    # --- Deduplicate element IDs within defs ---
-    id_pattern = re.compile(r'id="([^"]+)"')
-    seen_ids: dict[str, int] = {}
-    for id_match in id_pattern.finditer(content):
-        id_val = id_match.group(1)
-        seen_ids[id_val] = seen_ids.get(id_val, 0) + 1
-
-    duplicate_ids = {k: v for k, v in seen_ids.items() if v > 1}
-    if duplicate_ids:
-        # For each duplicate, keep the first occurrence and remove subsequent
-        # complete elements with the same id
-        for dup_id, count in duplicate_ids.items():
-            # Find all elements with this id
-            # Match complete elements: <tagname id="dup_id" ...>...</tagname> or self-closing
-            elem_pattern = re.compile(
-                rf'(<(\w+)[^>]*\bid="{re.escape(dup_id)}"[^>]*/?>(?:.*?</\2>)?)',
-                re.DOTALL,
-            )
-            occurrences = list(elem_pattern.finditer(content))
-            if len(occurrences) > 1:
-                # Remove all but the first occurrence (process in reverse)
-                for occ in reversed(occurrences[1:]):
-                    content = content[:occ.start()] + content[occ.end():]
-                fixes.append(f"Syntax fix: removed {len(occurrences) - 1} duplicate element(s) with id=\"{dup_id}\"")
 
     # --- Fix rgba() colors ---
     rgba_pattern = re.compile(
