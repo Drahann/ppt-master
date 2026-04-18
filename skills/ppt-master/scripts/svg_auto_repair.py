@@ -16,6 +16,8 @@ import json
 import math
 import re
 import sys
+import unicodedata
+from html import unescape
 from pathlib import Path
 from typing import Any
 
@@ -151,14 +153,50 @@ def _repair_arc_geometry(content: str) -> tuple[str, list[str]]:
 # Repair 2: Title Icon Position Standardization
 # ────────────────────────────────────────────────────────────────
 
+def _format_num(value: float) -> str:
+    """Format SVG numbers without unnecessary trailing zeroes."""
+    rounded = round(value, 1)
+    if abs(rounded - round(rounded)) < 0.05:
+        return str(int(round(rounded)))
+    return f"{rounded:.1f}"
+
+
+def _get_attr_float(attrs: str, name: str) -> float | None:
+    match = re.search(rf'\b{name}="([\d.]+)"', attrs)
+    return float(match.group(1)) if match else None
+
+
+def _estimate_text_width(text: str, font_size: float) -> float:
+    """Estimate the visual width of a title for icon re-anchoring."""
+    clean = re.sub(r"<[^>]+>", "", unescape(text or "")).strip()
+    width_units = 0.0
+
+    for ch in clean:
+        if ch.isspace():
+            width_units += 0.30
+        elif unicodedata.east_asian_width(ch) in {"W", "F"}:
+            width_units += 0.92
+        elif ch.isdigit():
+            width_units += 0.56
+        elif ch.isalpha() and ord(ch) < 128:
+            width_units += 0.62
+        elif ch in ".,:;!|/\\'\"`-()[]{}":
+            width_units += 0.34
+        else:
+            width_units += 0.58
+
+    return round(width_units * font_size, 1)
+
+
 def _repair_title_icon_position(
     content: str,
     anchor: dict[str, Any] | None,
 ) -> tuple[str, list[str]]:
     """Standardize title icon position based on anchor context.
 
-    Ensures <use data-icon="..."> elements in the title zone
-    have consistent y, width, and height values.
+    Repairs the first title icon inside the header whether it is emitted as a
+    <use data-icon="..."> element or as an inline <g transform="translate(...)">
+    icon group.
     """
     fixes: list[str] = []
     if anchor is None:
@@ -167,59 +205,137 @@ def _repair_title_icon_position(
     geom = anchor.get("immutable_geometry", {})
     icon_rules = anchor.get("icon_rules", {})
 
+    expected_title_x = geom.get("title_text", {}).get("x", 80)
+    expected_title_y = geom.get("title_text", {}).get("y", 70)
+    expected_font_size = geom.get("title_text", {}).get("font_size", 32)
     expected_y = icon_rules.get("title_icon_y") or geom.get("title_icon", {}).get("y")
     expected_w = icon_rules.get("title_icon_size") or geom.get("title_icon", {}).get("width")
-    expected_h = expected_w  # square icons
+    expected_h = expected_w
+    expected_gap = (
+        icon_rules.get("title_icon_gap_from_text")
+        or geom.get("title_icon", {}).get("gap_from_title")
+        or 12
+    )
+    content_min_y = geom.get("content_min_y", 105)
 
     if expected_y is None or expected_w is None:
         return content, fixes
 
-    # Match <use data-icon="..."> elements
-    use_pattern = re.compile(
-        r'(<use\s[^>]*data-icon="[^"]+")([^>]*/?>)',
+    header_pattern = re.compile(r'(<g id="header">\s*)(.*?)(\s*</g>)', re.IGNORECASE | re.DOTALL)
+    title_pattern = re.compile(
+        r'(<text\b(?P<attrs>[^>]*)>(?P<title>.*?)</text>)',
+        re.IGNORECASE | re.DOTALL,
+    )
+    use_pattern = re.compile(r'<use\b[^>]*data-icon="[^"]+"[^>]*/?>', re.IGNORECASE)
+    group_pattern = re.compile(
+        r'<g\b(?P<attrs>[^>]*)\btransform="translate\('
+        r'(?P<x>[\d.]+),\s*(?P<y>[\d.]+)\)\s*scale\((?P<scale>[\d.]+)\)"'
+        r'(?P<suffix>[^>]*)>',
         re.IGNORECASE,
     )
 
-    def fix_use(m: re.Match) -> str:
-        prefix = m.group(1)
-        suffix = m.group(2)
-        full = prefix + suffix
+    def repair_header(m: re.Match) -> str:
+        header_inner = m.group(2)
+        title_match = None
 
-        # Extract current y
-        y_match = re.search(r'\by="([\d.]+)"', full)
-        w_match = re.search(r'\bwidth="([\d.]+)"', full)
-        h_match = re.search(r'\bheight="([\d.]+)"', full)
+        for candidate in title_pattern.finditer(header_inner):
+            title_y = _get_attr_float(candidate.group("attrs"), "y")
+            if title_y is None or title_y >= content_min_y:
+                continue
+            title_match = candidate
+            break
 
-        if not y_match:
-            return full
+        if title_match is None:
+            return m.group(0)
 
-        cur_y = float(y_match.group(1))
-        # Only fix icons in the title zone (y < content_min_y)
-        content_min_y = geom.get("content_min_y", 105)
-        if cur_y >= content_min_y:
-            return full  # Not a title icon, skip
+        title_attrs = title_match.group("attrs")
+        title_x = _get_attr_float(title_attrs, "x") or expected_title_x
+        title_y = _get_attr_float(title_attrs, "y") or expected_title_y
+        title_font_size = _get_attr_float(title_attrs, "font-size") or expected_font_size
 
+        if title_y >= content_min_y:
+            return m.group(0)
+
+        expected_x = round(
+            title_x + _estimate_text_width(title_match.group("title"), title_font_size) + expected_gap,
+            1,
+        )
+
+        after_title = header_inner[title_match.end():]
+        candidates: list[tuple[int, str, re.Match]] = []
+
+        use_match = use_pattern.search(after_title)
+        if use_match:
+            candidates.append((use_match.start(), "use", use_match))
+
+        group_match = group_pattern.search(after_title)
+        if group_match:
+            candidates.append((group_match.start(), "group", group_match))
+
+        if not candidates:
+            return m.group(0)
+
+        _, icon_type, icon_match = min(candidates, key=lambda item: item[0])
+        updated_header = header_inner
         changed = False
-        result = full
 
-        if abs(cur_y - expected_y) > 2:
-            result = re.sub(r'\by="[\d.]+"', f'y="{expected_y}"', result)
-            changed = True
+        if icon_type == "use":
+            icon_node = icon_match.group(0)
+            cur_x = _get_attr_float(icon_node, "x")
+            cur_y = _get_attr_float(icon_node, "y")
+            cur_w = _get_attr_float(icon_node, "width")
+            cur_h = _get_attr_float(icon_node, "height")
 
-        if w_match and abs(float(w_match.group(1)) - expected_w) > 2:
-            result = re.sub(r'\bwidth="[\d.]+"', f'width="{expected_w}"', result, count=1)
-            changed = True
+            if cur_y is None or cur_y >= content_min_y:
+                return m.group(0)
 
-        if h_match and abs(float(h_match.group(1)) - expected_h) > 2:
-            result = re.sub(r'\bheight="[\d.]+"', f'height="{expected_h}"', result, count=1)
-            changed = True
+            result = icon_node
+            if cur_x is not None and abs(cur_x - expected_x) > 2:
+                result = re.sub(r'\bx="[\d.]+"', f'x="{_format_num(expected_x)}"', result, count=1)
+                changed = True
+            if abs(cur_y - expected_y) > 2:
+                result = re.sub(r'\by="[\d.]+"', f'y="{_format_num(expected_y)}"', result, count=1)
+                changed = True
+            if cur_w is not None and abs(cur_w - expected_w) > 2:
+                result = re.sub(r'\bwidth="[\d.]+"', f'width="{_format_num(expected_w)}"', result, count=1)
+                changed = True
+            if cur_h is not None and abs(cur_h - expected_h) > 2:
+                result = re.sub(r'\bheight="[\d.]+"', f'height="{_format_num(expected_h)}"', result, count=1)
+                changed = True
+
+            if changed:
+                start = title_match.end() + icon_match.start()
+                end = title_match.end() + icon_match.end()
+                updated_header = header_inner[:start] + result + header_inner[end:]
+        else:
+            cur_x = float(icon_match.group("x"))
+            cur_y = float(icon_match.group("y"))
+            cur_scale = icon_match.group("scale")
+
+            if cur_y >= content_min_y:
+                return m.group(0)
+
+            if abs(cur_x - expected_x) > 2 or abs(cur_y - expected_y) > 2:
+                new_open_tag = (
+                    f'<g{icon_match.group("attrs")}transform="translate('
+                    f'{_format_num(expected_x)}, {_format_num(expected_y)}) scale({cur_scale})"'
+                    f'{icon_match.group("suffix")}>'
+                )
+                start = title_match.end() + icon_match.start()
+                end = title_match.end() + icon_match.end()
+                updated_header = header_inner[:start] + new_open_tag + header_inner[end:]
+                changed = True
 
         if changed:
-            fixes.append(f"Title icon fix: y/size snapped to anchor ({expected_y}, {expected_w}x{expected_h})")
+            fixes.append(
+                "Title icon fix: header icon re-anchored to title width "
+                f"(x={_format_num(expected_x)}, y={_format_num(expected_y)})"
+            )
+            return m.group(1) + updated_header + m.group(3)
 
-        return result
+        return m.group(0)
 
-    content = use_pattern.sub(fix_use, content)
+    content = header_pattern.sub(repair_header, content, count=1)
     return content, fixes
 
 
@@ -341,13 +457,20 @@ def repair_svg_file(
 
 def repair_project(project_path: Path, dry_run: bool = False) -> dict[str, Any]:
     """Repair all SVGs in a project's svg_output/ directory."""
-    svg_dir = project_path / "svg_output"
-    if not svg_dir.exists():
-        print(f"[ERROR] svg_output/ not found in {project_path}")
-        return {"error": "svg_output not found", "files": []}
+    if project_path.name in {"svg_output", "svg_final"} and project_path.is_dir():
+        svg_dir = project_path
+        project_root = project_path.parent
+    else:
+        project_root = project_path
+        svg_dir = project_root / "svg_output"
+        if not svg_dir.exists():
+            svg_dir = project_root / "svg_final"
+        if not svg_dir.exists():
+            print(f"[ERROR] svg_output/ or svg_final/ not found in {project_path}")
+            return {"error": "svg directory not found", "files": []}
 
     # Load anchor context if available
-    anchor_path = project_path / "runner" / "svg_anchor_context.json"
+    anchor_path = project_root / "runner" / "svg_anchor_context.json"
     anchor: dict[str, Any] | None = None
     if anchor_path.exists():
         try:
@@ -357,11 +480,11 @@ def repair_project(project_path: Path, dry_run: bool = False) -> dict[str, Any]:
 
     svg_files = sorted(svg_dir.glob("*.svg"))
     if not svg_files:
-        print("[WARN] No SVG files found in svg_output/")
+        print(f"[WARN] No SVG files found in {svg_dir.name}/")
         return {"files": []}
 
     mode = "DRY RUN" if dry_run else "REPAIR"
-    print(f"\n[{mode}] Processing {len(svg_files)} SVG file(s)...\n")
+    print(f"\n[{mode}] Processing {len(svg_files)} SVG file(s) in {svg_dir}...\n")
 
     file_reports: list[dict[str, Any]] = []
     total_repairs = 0
@@ -386,7 +509,7 @@ def repair_project(project_path: Path, dry_run: bool = False) -> dict[str, Any]:
         print("[INFO] Dry run mode — no files were modified. Remove --dry-run to apply fixes.")
 
     # Save repair report
-    report_path = project_path / "runner" / "svg_repair_report.json"
+    report_path = project_root / "runner" / "svg_repair_report.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_data = {
         "mode": mode.lower(),
