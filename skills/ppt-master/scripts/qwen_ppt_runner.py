@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import io
+import hashlib
 import math
 import os
 import re
@@ -48,6 +49,9 @@ DEFAULT_QWEN_MODEL = "qwen3.6-plus"
 DEFAULT_REVIEW_MODEL = "qwen3.6-plus"
 DEFAULT_MAX_FOLLOW_UPS = 8
 QWEN_CALL_TIMEOUT_SECONDS = 60 * 60
+CACHE_SCHEMA_VERSION = "2026-04-19-cost-save-v1"
+STAGE_CACHE_DIRNAME = ".runner-stage-cache"
+SKILL_PACK_DIRNAME = "skill_packs"
 QWEN_CHAT_ROOT = Path.home() / ".qwen" / "projects"
 QWEN_DEBUG_ROOT = Path.home() / ".qwen" / "debug"
 RUNNER_DIRNAME = "runner"
@@ -244,6 +248,300 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
+def hash_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def hash_json(payload: Any) -> str:
+    return hash_text(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+
+def hash_file(path: Path) -> str:
+    if not path.exists():
+        return "missing"
+    return hash_text(read_text(path))
+
+
+def resolve_project_base_dir(request: dict[str, Any]) -> Path:
+    base_dir = Path(request["project_base_dir"])
+    if not base_dir.is_absolute():
+        base_dir = REPO_ROOT / base_dir
+    return base_dir
+
+
+def resolve_stage_cache_root(request: dict[str, Any]) -> Path:
+    root = resolve_project_base_dir(request) / STAGE_CACHE_DIRNAME
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def build_stage_cache_key(stage_name: str, payload: dict[str, Any]) -> str:
+    return hash_json(
+        {
+            "schema": CACHE_SCHEMA_VERSION,
+            "stage": stage_name,
+            "payload": payload,
+        }
+    )
+
+
+def build_stage_cache_dir(cache_root: Path, stage_name: str, cache_key: str) -> Path:
+    return cache_root / stage_name / cache_key
+
+
+def ensure_clean_directory(path: Path) -> None:
+    if path.exists():
+        shutil.rmtree(path, ignore_errors=True)
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def copy_file(src: Path, dst: Path) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+
+
+def copy_svg_directory(src_dir: Path, dst_dir: Path) -> None:
+    ensure_clean_directory(dst_dir)
+    for svg_path in sorted(src_dir.glob("*.svg")):
+        copy_file(svg_path, dst_dir / svg_path.name)
+
+
+def build_compact_skill_excerpt(path: Path) -> str:
+    content = read_text(path)
+    lines = content.splitlines()
+    kept: list[str] = []
+    in_code_block = False
+    important_tokens = (
+        "must",
+        "must not",
+        "do not",
+        "don't",
+        "never",
+        "always",
+        "only",
+        "required",
+        "forbidden",
+        "exact",
+        "lock",
+        "theme",
+        "icon",
+        "chart",
+        "svg",
+        "notes",
+        "title",
+        "footer",
+        "header",
+        "canvas",
+        "page",
+        "layout",
+        "review",
+        "valid",
+        "xml",
+        "emoji",
+        "cache",
+    )
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_code_block = not in_code_block
+            continue
+        if in_code_block:
+            continue
+        if not stripped:
+            if kept and kept[-1] != "":
+                kept.append("")
+            continue
+
+        lower = stripped.lower()
+        keep_line = False
+        if stripped.startswith("#"):
+            keep_line = True
+        elif re.match(r"^[-*+]\s+", stripped):
+            keep_line = True
+        elif re.match(r"^\d+[.)]\s+", stripped):
+            keep_line = True
+        elif stripped.startswith("|") and stripped.endswith("|"):
+            keep_line = True
+        elif "`" in stripped:
+            keep_line = True
+        elif len(stripped) <= 180 and any(token in lower for token in important_tokens):
+            keep_line = True
+
+        if keep_line:
+            kept.append(stripped)
+
+    compact = "\n".join(kept).strip()
+    if not compact:
+        compact = "\n".join(lines[:200]).strip()
+    return compact
+
+
+def write_skill_pack(
+    runner_dir: Path,
+    pack_name: str,
+    source_paths: list[Path],
+    critical_rules: list[str] | None = None,
+) -> tuple[Path, str]:
+    skill_pack_dir = runner_dir / SKILL_PACK_DIRNAME
+    skill_pack_dir.mkdir(parents=True, exist_ok=True)
+    pack_path = skill_pack_dir / pack_name
+
+    sections: list[str] = [
+        f"# {pack_name}",
+        "",
+        "This is a compact local skill pack generated to reduce repeated static-context reads.",
+        "",
+    ]
+    if critical_rules:
+        sections.extend(
+            [
+                "## Critical Rules",
+                *[f"- {rule}" for rule in critical_rules],
+                "",
+            ]
+        )
+    for path in source_paths:
+        sections.extend(
+            [
+                f"## Source: {path.name}",
+                f"Path: {path}",
+                "",
+                build_compact_skill_excerpt(path),
+                "",
+            ]
+        )
+
+    pack_text = "\n".join(sections).strip() + "\n"
+    pack_path.write_text(pack_text, encoding="utf-8")
+    return pack_path, hash_text(pack_text)
+
+
+def write_deterministic_review_report(
+    project_path: Path,
+    review_input_path: Path,
+    review_report_path: Path,
+    review_errors: list[str],
+) -> None:
+    review_payload = {
+        "status": "passed" if not review_errors else "needs_ai_review",
+        "summary": (
+            "Deterministic review passed; skipped AI review to reduce cost."
+            if not review_errors
+            else "Deterministic review found issues; AI review is required."
+        ),
+        "issues_found": review_errors,
+        "issues_fixed": [],
+        "remaining_risks": [],
+        "review_input_path": str(review_input_path),
+        "design_spec_path": str(project_path / "design_spec.md"),
+    }
+    write_json(review_report_path, review_payload)
+
+
+def try_restore_spec_stage(
+    cache_dir: Path,
+    project_path: Path,
+    plan: list[SlidePlanEntry],
+    valid_chart_keys: set[str],
+    log_path: Path,
+) -> bool:
+    cached_spec_path = cache_dir / "design_spec.md"
+    if not cached_spec_path.exists():
+        return False
+    copy_file(cached_spec_path, project_path / "design_spec.md")
+    state_complete, errors = check_spec_state(project_path, plan, valid_chart_keys)
+    if state_complete:
+        append_log(log_path, f"Spec stage cache hit: {cache_dir}")
+        return True
+    append_log(log_path, f"Spec stage cache miss after validation: {errors}")
+    return False
+
+
+def save_spec_stage(cache_dir: Path, project_path: Path) -> None:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    copy_file(project_path / "design_spec.md", cache_dir / "design_spec.md")
+
+
+def try_restore_review_stage(
+    cache_dir: Path,
+    project_path: Path,
+    review_report_path: Path,
+    plan: list[SlidePlanEntry],
+    valid_chart_keys: set[str],
+    log_path: Path,
+) -> bool:
+    cached_spec_path = cache_dir / "design_spec.md"
+    cached_report_path = cache_dir / REVIEW_REPORT_FILENAME
+    if not cached_spec_path.exists() or not cached_report_path.exists():
+        return False
+    copy_file(cached_spec_path, project_path / "design_spec.md")
+    copy_file(cached_report_path, review_report_path)
+    state_complete, errors = check_review_state(project_path, plan, valid_chart_keys, review_report_path)
+    if state_complete:
+        append_log(log_path, f"Review stage cache hit: {cache_dir}")
+        return True
+    append_log(log_path, f"Review stage cache miss after validation: {errors}")
+    return False
+
+
+def save_review_stage(cache_dir: Path, project_path: Path, review_report_path: Path) -> None:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    copy_file(project_path / "design_spec.md", cache_dir / "design_spec.md")
+    copy_file(review_report_path, cache_dir / REVIEW_REPORT_FILENAME)
+
+
+def try_restore_svg_stage(
+    cache_dir: Path,
+    project_path: Path,
+    plan: list[SlidePlanEntry],
+    valid_chart_keys: set[str],
+    runner_dir: Path,
+    log_path: Path,
+) -> bool:
+    cached_svg_dir = cache_dir / "svg_output"
+    if not cached_svg_dir.exists():
+        return False
+    copy_svg_directory(cached_svg_dir, project_path / "svg_output")
+    state_complete, errors = check_svg_only_state(project_path, plan, valid_chart_keys, runner_dir)
+    if state_complete:
+        append_log(log_path, f"SVG stage cache hit: {cache_dir}")
+        return True
+    append_log(log_path, f"SVG stage cache miss after validation: {errors}")
+    ensure_clean_directory(project_path / "svg_output")
+    return False
+
+
+def save_svg_stage(cache_dir: Path, project_path: Path) -> None:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    copy_svg_directory(project_path / "svg_output", cache_dir / "svg_output")
+
+
+def try_restore_notes_stage(
+    cache_dir: Path,
+    project_path: Path,
+    plan: list[SlidePlanEntry],
+    log_path: Path,
+) -> bool:
+    cached_notes_path = cache_dir / "total.md"
+    if not cached_notes_path.exists():
+        return False
+    copy_file(cached_notes_path, project_path / "notes" / "total.md")
+    state_complete, errors = check_notes_state(project_path, plan)
+    if state_complete:
+        append_log(log_path, f"Notes stage cache hit: {cache_dir}")
+        return True
+    append_log(log_path, f"Notes stage cache miss after validation: {errors}")
+    (project_path / "notes" / "total.md").unlink(missing_ok=True)
+    return False
+
+
+def save_notes_stage(cache_dir: Path, project_path: Path) -> None:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    copy_file(project_path / "notes" / "total.md", cache_dir / "total.md")
+
+
 def is_resource_only_heading(title: str) -> bool:
     normalized = re.sub(r"\s+", "", title).strip()
     return normalized in RESOURCE_ONLY_H2_TITLES
@@ -438,7 +736,7 @@ def load_request(request_path: Path) -> dict[str, Any]:
         raise RunnerError("model must be null or a string")
     if "review_model" in request and request["review_model"] is not None and not isinstance(request["review_model"], str):
         raise RunnerError("review_model must be null or a string")
-    batch_mode = (request.get("batch_mode") or "auto")
+    batch_mode = (request.get("batch_mode") or "always")
     if not isinstance(batch_mode, str) or batch_mode not in {"auto", "always", "never", "parallel"}:
         raise RunnerError("batch_mode must be one of: auto, always, never, parallel")
     request["batch_mode"] = batch_mode
@@ -903,6 +1201,63 @@ def suggest_icon_replacements(invalid_ref: str, available_icons: set[str], limit
     return selected
 
 
+def choose_fallback_icon_ref(
+    entry_filename: str,
+    invalid_ref: str,
+    used_icon_refs: set[str],
+    available_icons: set[str],
+) -> str:
+    unused_refs = [
+        f"{DEFAULT_ICON_LIBRARY}/{icon_name}"
+        for icon_name in sorted(available_icons)
+        if f"{DEFAULT_ICON_LIBRARY}/{icon_name}" not in used_icon_refs
+    ]
+    candidate_refs = unused_refs or [f"{DEFAULT_ICON_LIBRARY}/{icon_name}" for icon_name in sorted(available_icons)]
+    if not candidate_refs:
+        raise RunnerError(f"No available icons found in {ICON_LIBRARY_DIR}")
+
+    digest = hashlib.sha256(f"{entry_filename}:{invalid_ref}".encode("utf-8")).hexdigest()
+    index = int(digest[:8], 16) % len(candidate_refs)
+    return candidate_refs[index]
+
+
+def auto_repair_invalid_svg_icons(
+    svg_path: Path,
+    text: str,
+    available_icons: set[str],
+) -> tuple[str, list[tuple[str, str]]]:
+    icon_refs = re.findall(r'data-icon="([^"]+)"', text)
+    invalid_icon_refs: list[str] = []
+    used_icon_refs = {
+        ref
+        for ref in icon_refs
+        if ref.startswith(f"{DEFAULT_ICON_LIBRARY}/") and ref.split("/", 1)[1] in available_icons
+    }
+
+    for ref in icon_refs:
+        if not ref.startswith(f"{DEFAULT_ICON_LIBRARY}/"):
+            invalid_icon_refs.append(ref)
+            continue
+        icon_name = ref.split("/", 1)[1]
+        if icon_name not in available_icons:
+            invalid_icon_refs.append(ref)
+
+    if not invalid_icon_refs:
+        return text, []
+
+    replacements: list[tuple[str, str]] = []
+    updated_text = text
+    for invalid_ref in sorted(set(invalid_icon_refs)):
+        replacement_ref = choose_fallback_icon_ref(svg_path.name, invalid_ref, used_icon_refs, available_icons)
+        updated_text = updated_text.replace(f'data-icon="{invalid_ref}"', f'data-icon="{replacement_ref}"')
+        replacements.append((invalid_ref, replacement_ref))
+        used_icon_refs.add(replacement_ref)
+
+    if updated_text != text:
+        svg_path.write_text(updated_text, encoding="utf-8")
+    return updated_text, replacements
+
+
 def build_spec_review_input(
     project_path: Path,
     plan: list[SlidePlanEntry],
@@ -1011,6 +1366,7 @@ def validate_svg_outputs(project_path: Path, plan: list[SlidePlanEntry]) -> list
             continue
 
         text = svg_path.read_text(encoding="utf-8", errors="replace")
+        text, _icon_repairs = auto_repair_invalid_svg_icons(svg_path, text, available_icons)
         try:
             ET.fromstring(text)
         except ET.ParseError as exc:
@@ -1318,6 +1674,7 @@ def build_spec_bootstrap_prompt(
     request: dict[str, Any],
     project_path: Path,
     imported_markdown_path: Path,
+    strategist_skill_pack_path: Path,
     slide_plan_path: Path,
     slide_digest_path: Path,
     chart_reference_path: Path,
@@ -1328,22 +1685,12 @@ def build_spec_bootstrap_prompt(
     return f"""You are in the Strategist phase for an already-initialized PPT Master project.
 
 Read these files before doing anything else:
-1. {REPO_ROOT / "AGENTS.md"}
-2. {QWEN_PROJECT_GUIDE_PATH}
-3. {QWEN_SKILL_WRAPPER_PATH}
-4. {QWEN_REPO_SKILL_PATH}
-5. {QWEN_STRATEGIST_REFERENCE_PATH}
-6. {QWEN_DESIGN_SPEC_REFERENCE_PATH}
-7. {QWEN_CHARTS_INDEX_PATH}
-8. {QWEN_EXECUTOR_REFERENCE_PATH}
-9. {SVG_DESIGN_COOKBOOK_PATH}
-10. {QWEN_SHARED_STANDARDS_PATH}
-11. {QWEN_IMAGE_LAYOUT_REFERENCE_PATH}
-12. {slide_plan_path}
-13. {slide_digest_path}
-14. {chart_reference_path}
-15. {icon_reference_path}
-16. {imported_markdown_path}
+1. {strategist_skill_pack_path}
+2. {slide_plan_path}
+3. {slide_digest_path}
+4. {chart_reference_path}
+5. {icon_reference_path}
+6. {imported_markdown_path}
 
 Project boundaries:
 - Project path: {project_path}
@@ -1425,6 +1772,7 @@ def build_spec_continue_prompt(
     project_path: Path,
     plan: list[SlidePlanEntry],
     generation_errors: list[str],
+    strategist_skill_pack_path: Path,
 ) -> str:
     bullet_errors = "\n".join(f"- {item}" for item in generation_errors)
     return f"""Continue this same task. Do not restart and do not recreate the project.
@@ -1434,7 +1782,7 @@ The current output is still failing these checks:
 {bullet_errors}
 
 Repair the existing files in place and keep all original hard constraints:
-- Before repairing, re-read these files: `{QWEN_PROJECT_GUIDE_PATH.name}`, `{QWEN_SKILL_WRAPPER_PATH.name}`, `{QWEN_REPO_SKILL_PATH.name}`, `{QWEN_STRATEGIST_REFERENCE_PATH.name}`, `{QWEN_DESIGN_SPEC_REFERENCE_PATH.name}`, and `{SVG_DESIGN_COOKBOOK_PATH.name}`
+- Before repairing, re-read `{strategist_skill_pack_path.name}`
 - free design
 - light theme only
 - no TOC page
@@ -1457,23 +1805,14 @@ def build_review_bootstrap_prompt(
     project_path: Path,
     review_input_path: Path,
     review_report_path: Path,
+    review_skill_pack_path: Path,
 ) -> str:
     return f"""You are in the Design Spec review gate for PPT Master.
 
 Read these files before doing anything else:
-1. {REPO_ROOT / "AGENTS.md"}
-2. {QWEN_PROJECT_GUIDE_PATH}
-3. {QWEN_SKILL_WRAPPER_PATH}
-4. {QWEN_REPO_SKILL_PATH}
-5. {QWEN_STRATEGIST_REFERENCE_PATH}
-6. {QWEN_DESIGN_SPEC_REFERENCE_PATH}
-7. {QWEN_EXECUTOR_REFERENCE_PATH}
-8. {SVG_DESIGN_COOKBOOK_PATH}
-9. {QWEN_SHARED_STANDARDS_PATH}
-10. {QWEN_IMAGE_LAYOUT_REFERENCE_PATH}
-11. {project_path / "design_spec.md"}
-12. {review_input_path}
-13. {QWEN_SPEC_REVIEW_SKILL_PATH}
+1. {review_skill_pack_path}
+2. {project_path / "design_spec.md"}
+3. {review_input_path}
 
 Review boundaries:
 - Project path: {project_path}
@@ -1510,6 +1849,7 @@ def build_review_continue_prompt(
     project_path: Path,
     review_report_path: Path,
     generation_errors: list[str],
+    review_skill_pack_path: Path,
 ) -> str:
     bullet_errors = "\n".join(f"- {item}" for item in generation_errors)
     return f"""Continue the design-spec review gate.
@@ -1521,7 +1861,7 @@ The review is still failing these checks:
 Repair only:
 - {project_path / "design_spec.md"}
 - {review_report_path}
-- Before repairing, re-read these files: `{QWEN_PROJECT_GUIDE_PATH.name}`, `{QWEN_SKILL_WRAPPER_PATH.name}`, `{QWEN_REPO_SKILL_PATH.name}`, `{QWEN_STRATEGIST_REFERENCE_PATH.name}`, `{QWEN_SPEC_REVIEW_SKILL_PATH.name}`, and `{SVG_DESIGN_COOKBOOK_PATH.name}`
+- Before repairing, re-read `{review_skill_pack_path.name}`
 
 Do not generate SVG or notes in this stage.
 When review is complete, print:
@@ -1537,6 +1877,7 @@ def build_svg_bootstrap_prompt(
     icon_reference_path: Path,
     svg_anchor_context_path: Path,
     executor_style_path: Path,
+    executor_skill_pack_path: Path,
     plan: list[SlidePlanEntry],
 ) -> str:
     total_pages = len(plan)
@@ -1544,20 +1885,12 @@ def build_svg_bootstrap_prompt(
     return f"""You are in the Executor phase for an already-initialized PPT Master project.
 
 Read these files before doing anything else:
-1. {REPO_ROOT / "AGENTS.md"}
-2. {QWEN_PROJECT_GUIDE_PATH}
-3. {QWEN_SKILL_WRAPPER_PATH}
-4. {SVG_DESIGN_COOKBOOK_PATH}
-5. {QWEN_REPO_SKILL_PATH}
-6. {QWEN_EXECUTOR_REFERENCE_PATH}
-7. {executor_style_path}
-8. {QWEN_SHARED_STANDARDS_PATH}
-9. {QWEN_IMAGE_LAYOUT_REFERENCE_PATH}
-10. {project_path / "design_spec.md"}
-11. {slide_plan_path}
-12. {icon_reference_path}
-13. {svg_anchor_context_path}
-14. {imported_markdown_path}
+1. {executor_skill_pack_path}
+2. {project_path / "design_spec.md"}
+3. {slide_plan_path}
+4. {icon_reference_path}
+5. {svg_anchor_context_path}
+6. {imported_markdown_path}
 
 Project boundaries:
 - Project path: {project_path}
@@ -1577,6 +1910,9 @@ Executor constraints:
 - Use only real `templates/charts/<name>.svg` references from the design spec
 - Lock icon usage to `{DEFAULT_ICON_LIBRARY}`
 - Do not use emoji in SVG
+- Emoji are forbidden everywhere in SVG output: title text, labels, badges, bullets, annotations, and decorative marks
+- Never substitute emoji for icons. If an icon is needed, use `data-icon="{DEFAULT_ICON_LIBRARY}/..."` with a real icon name
+- Never use characters like `✅`, `❌`, `📌`, `⭐`, `🚀`, `🎯`, `📊`, `🔹`, `🔸`, or similar pictographic glyphs
 - Most content slides must include valid `data-icon="{DEFAULT_ICON_LIBRARY}/..."` placeholders
 - Every SVG must be valid XML
 - Generate pages sequentially in slide-plan order
@@ -1610,6 +1946,7 @@ def build_batch_svg_prompt(
     batch_icon_reference_path: Path,
     svg_anchor_context_path: Path,
     executor_style_path: Path,
+    executor_skill_pack_path: Path,
     batch_plan: list[SlidePlanEntry],
     batch_index: int,
     total_batches: int,
@@ -1630,21 +1967,13 @@ Previous-batch visual anchor:
 This is batch {batch_index + 1} of {total_batches}. Generate only this batch's SVG files.
 
 Read these files before doing anything else:
-1. {REPO_ROOT / "AGENTS.md"}
-2. {QWEN_PROJECT_GUIDE_PATH}
-3. {QWEN_SKILL_WRAPPER_PATH}
-4. {SVG_DESIGN_COOKBOOK_PATH}
-5. {QWEN_REPO_SKILL_PATH}
-6. {QWEN_EXECUTOR_REFERENCE_PATH}
-7. {executor_style_path}
-8. {QWEN_SHARED_STANDARDS_PATH}
-9. {QWEN_IMAGE_LAYOUT_REFERENCE_PATH}
-10. {project_path / "design_spec.md"}
-11. {slide_plan_path}
-12. {batch_slide_plan_path}
-13. {batch_digest_path}
-14. {batch_icon_reference_path}
-15. {svg_anchor_context_path}
+1. {executor_skill_pack_path}
+2. {project_path / "design_spec.md"}
+3. {slide_plan_path}
+4. {batch_slide_plan_path}
+5. {batch_digest_path}
+6. {batch_icon_reference_path}
+7. {svg_anchor_context_path}
 
 Project boundaries:
 - Project path: {project_path}
@@ -1661,6 +1990,9 @@ Executor constraints:
 - Use only real `templates/charts/<name>.svg` references from the design spec
 - Lock icon usage to `{DEFAULT_ICON_LIBRARY}`
 - Do not use emoji in SVG
+- Emoji are forbidden everywhere in SVG output: title text, labels, badges, bullets, annotations, and decorative marks
+- Never substitute emoji for icons. If an icon is needed, use `data-icon="{DEFAULT_ICON_LIBRARY}/..."` with a real icon name
+- Never use characters like `✅`, `❌`, `📌`, `⭐`, `🚀`, `🎯`, `📊`, `🔹`, `🔸`, or similar pictographic glyphs
 - Every SVG must be valid XML
 - Generate pages sequentially within this batch in the order listed below
 - Re-read both `{SVG_DESIGN_COOKBOOK_PATH.name}` and `{svg_anchor_context_path.name}` before the first page of this batch and again if visual quality starts drifting
@@ -1805,18 +2137,16 @@ def build_notes_bootstrap_prompt(
     imported_markdown_path: Path,
     slide_plan_path: Path,
     svg_anchor_context_path: Path,
+    notes_skill_pack_path: Path,
 ) -> str:
     return f"""You are in the speaker-notes completion phase for PPT Master.
 
 Read these files before doing anything else:
-1. {REPO_ROOT / "AGENTS.md"}
-2. {QWEN_PROJECT_GUIDE_PATH}
-3. {QWEN_SKILL_WRAPPER_PATH}
-4. {QWEN_REPO_SKILL_PATH}
-5. {project_path / "design_spec.md"}
-6. {slide_plan_path}
-7. {svg_anchor_context_path}
-8. {imported_markdown_path}
+1. {notes_skill_pack_path}
+2. {project_path / "design_spec.md"}
+3. {slide_plan_path}
+4. {svg_anchor_context_path}
+5. {imported_markdown_path}
 
 Project boundaries:
 - Project path: {project_path}
@@ -2179,6 +2509,7 @@ def execute_batched_svg_generation(
     icon_reference_path: Path,
     svg_anchor_context_path: Path,
     executor_style_path: Path,
+    executor_skill_pack_path: Path,
     plan: list[SlidePlanEntry],
     runner_dir: Path,
     log_path: Path,
@@ -2211,6 +2542,7 @@ def execute_batched_svg_generation(
             batch_icon_reference_path=batch_icon_reference_path,
             svg_anchor_context_path=svg_anchor_context_path,
             executor_style_path=executor_style_path,
+            executor_skill_pack_path=executor_skill_pack_path,
             batch_plan=batch_plan,
             batch_index=batch_index,
             total_batches=len(batches),
@@ -2249,6 +2581,7 @@ def execute_parallel_svg_generation(
     icon_reference_path: Path,
     svg_anchor_context_path: Path,
     executor_style_path: Path,
+    executor_skill_pack_path: Path,
     plan: list[SlidePlanEntry],
     runner_dir: Path,
     log_path: Path,
@@ -2280,6 +2613,7 @@ def execute_parallel_svg_generation(
             batch_icon_reference_path=batch_icon_reference_path,
             svg_anchor_context_path=svg_anchor_context_path,
             executor_style_path=executor_style_path,
+            executor_skill_pack_path=executor_skill_pack_path,
             batch_plan=batch_plan,
             batch_index=batch_index,
             total_batches=len(batches),
@@ -2425,8 +2759,10 @@ def execute_generation(
     runner_dir: Path,
     log_path: Path,
 ) -> str:
+    cache_root = resolve_stage_cache_root(request)
+    slide_plan_payload = [asdict(entry) for entry in plan]
     slide_plan_path = runner_dir / "slide_plan.json"
-    write_json(slide_plan_path, [asdict(entry) for entry in plan])
+    write_json(slide_plan_path, slide_plan_payload)
     (
         slide_digest_path,
         chart_reference_path,
@@ -2438,10 +2774,92 @@ def execute_generation(
         plan,
         runner_dir,
     )
+
+    strategist_skill_pack_path, strategist_skill_pack_hash = write_skill_pack(
+        runner_dir,
+        "strategist_skill_pack.md",
+        [
+            REPO_ROOT / "AGENTS.md",
+            QWEN_PROJECT_GUIDE_PATH,
+            QWEN_SKILL_WRAPPER_PATH,
+            QWEN_REPO_SKILL_PATH,
+            QWEN_STRATEGIST_REFERENCE_PATH,
+            QWEN_DESIGN_SPEC_REFERENCE_PATH,
+            SVG_DESIGN_COOKBOOK_PATH,
+        ],
+        critical_rules=[
+            "Emoji are forbidden in design_spec.md and downstream SVG output.",
+            f"Do not use emoji as bullets, labels, callouts, status markers, pseudo-icons, or decorative accents; use normal text or `{DEFAULT_ICON_LIBRARY}/...` icon placeholders instead.",
+            f"If an icon is needed, use only real `{DEFAULT_ICON_LIBRARY}/...` names from the allowed icon inventory.",
+        ],
+    )
+    review_skill_pack_path, review_skill_pack_hash = write_skill_pack(
+        runner_dir,
+        "review_skill_pack.md",
+        [
+            REPO_ROOT / "AGENTS.md",
+            QWEN_PROJECT_GUIDE_PATH,
+            QWEN_SKILL_WRAPPER_PATH,
+            QWEN_REPO_SKILL_PATH,
+            QWEN_STRATEGIST_REFERENCE_PATH,
+            QWEN_SPEC_REVIEW_SKILL_PATH,
+            SVG_DESIGN_COOKBOOK_PATH,
+        ],
+        critical_rules=[
+            "Emoji are forbidden in design_spec.md and downstream SVG output.",
+            "Treat any emoji usage as a hard error, not a style preference.",
+            f"If a visual marker is needed, replace it with plain text wording or a legal `{DEFAULT_ICON_LIBRARY}/...` icon reference.",
+        ],
+    )
+    notes_skill_pack_path, notes_skill_pack_hash = write_skill_pack(
+        runner_dir,
+        "notes_skill_pack.md",
+        [
+            REPO_ROOT / "AGENTS.md",
+            QWEN_PROJECT_GUIDE_PATH,
+            QWEN_SKILL_WRAPPER_PATH,
+            QWEN_REPO_SKILL_PATH,
+        ],
+    )
+
+    skill_pack_index: dict[str, dict[str, str]] = {
+        "strategist": {"path": str(strategist_skill_pack_path), "hash": strategist_skill_pack_hash},
+        "review": {"path": str(review_skill_pack_path), "hash": review_skill_pack_hash},
+        "notes": {"path": str(notes_skill_pack_path), "hash": notes_skill_pack_hash},
+    }
+    write_json(runner_dir / "skill_pack_index.json", skill_pack_index)
+
+    source_md_hash = hash_file(imported_markdown_path)
+    plan_hash = hash_json(slide_plan_payload)
+    request_hash = hash_json(
+        {
+            "canvas_format": request["canvas_format"],
+            "rules": request["rules"],
+            "model": request.get("model"),
+            "review_model": request.get("review_model"),
+            "batch_mode": request.get("batch_mode"),
+            "batch_size": request.get("batch_size"),
+            "parallel_batch_workers": request.get("parallel_batch_workers"),
+        }
+    )
+
+    spec_cache_key = build_stage_cache_key(
+        "spec",
+        {
+            "source_md_hash": source_md_hash,
+            "plan_hash": plan_hash,
+            "request_hash": request_hash,
+            "chart_reference_hash": hash_file(chart_reference_path),
+            "icon_reference_hash": hash_file(icon_reference_path),
+            "skill_pack_hash": strategist_skill_pack_hash,
+        },
+    )
+    spec_cache_dir = build_stage_cache_dir(cache_root, "spec", spec_cache_key)
     spec_prompt = build_spec_bootstrap_prompt(
         request,
         project_path,
         imported_markdown_path,
+        strategist_skill_pack_path,
         slide_plan_path,
         slide_digest_path,
         chart_reference_path,
@@ -2450,18 +2868,28 @@ def execute_generation(
     )
     (runner_dir / "spec_prompt.txt").write_text(spec_prompt, encoding="utf-8")
 
-    spec_session_id = execute_qwen_stage(
-        stage_name="spec_generation",
-        artifact_prefix="spec",
-        initial_prompt=spec_prompt,
-        completion_sentinel_prefix=SPEC_COMPLETION_SENTINEL_PREFIX,
-        state_checker=lambda: check_spec_state(project_path, plan, valid_chart_keys),
-        continue_prompt_builder=lambda errors: build_spec_continue_prompt(request, project_path, plan, errors),
-        confirmation_prompt_builder=lambda _errors: build_spec_confirmation_prompt(plan, request),
-        model=request.get("model"),
-        runner_dir=runner_dir,
-        log_path=log_path,
-    )
+    if try_restore_spec_stage(spec_cache_dir, project_path, plan, valid_chart_keys, log_path):
+        spec_session_id = "cache_hit"
+    else:
+        spec_session_id = execute_qwen_stage(
+            stage_name="spec_generation",
+            artifact_prefix="spec",
+            initial_prompt=spec_prompt,
+            completion_sentinel_prefix=SPEC_COMPLETION_SENTINEL_PREFIX,
+            state_checker=lambda: check_spec_state(project_path, plan, valid_chart_keys),
+            continue_prompt_builder=lambda errors: build_spec_continue_prompt(
+                request,
+                project_path,
+                plan,
+                errors,
+                strategist_skill_pack_path,
+            ),
+            confirmation_prompt_builder=lambda _errors: build_spec_confirmation_prompt(plan, request),
+            model=request.get("model"),
+            runner_dir=runner_dir,
+            log_path=log_path,
+        )
+        save_spec_stage(spec_cache_dir, project_path)
 
     review_report_path = runner_dir / REVIEW_REPORT_FILENAME
     review_input_path = runner_dir / REVIEW_INPUT_FILENAME
@@ -2480,24 +2908,93 @@ def execute_generation(
         project_path,
         review_input_path,
         review_report_path,
+        review_skill_pack_path,
     )
     (runner_dir / "review_prompt.txt").write_text(review_prompt, encoding="utf-8")
 
-    review_session_id = execute_qwen_stage(
-        stage_name="spec_review",
-        artifact_prefix="review",
-        initial_prompt=review_prompt,
-        completion_sentinel_prefix=REVIEW_COMPLETION_SENTINEL_PREFIX,
-        state_checker=lambda: check_review_state(project_path, plan, valid_chart_keys, review_report_path),
-        continue_prompt_builder=lambda errors: build_review_continue_prompt(project_path, review_report_path, errors),
-        confirmation_prompt_builder=lambda errors: build_review_continue_prompt(project_path, review_report_path, errors),
-        model=request.get("review_model"),
-        runner_dir=runner_dir,
-        log_path=log_path,
+    review_cache_key = build_stage_cache_key(
+        "review",
+        {
+            "spec_hash": hash_file(project_path / "design_spec.md"),
+            "plan_hash": plan_hash,
+            "request_hash": request_hash,
+            "review_input_hash": hash_file(review_input_path),
+            "skill_pack_hash": review_skill_pack_hash,
+        },
     )
+    review_cache_dir = build_stage_cache_dir(cache_root, "review", review_cache_key)
+    if try_restore_review_stage(
+        review_cache_dir,
+        project_path,
+        review_report_path,
+        plan,
+        valid_chart_keys,
+        log_path,
+    ):
+        review_session_id = "cache_hit"
+    else:
+        deterministic_review_errors = validate_design_spec(project_path, plan, valid_chart_keys, strict_icons=True)
+        write_deterministic_review_report(
+            project_path,
+            review_input_path,
+            review_report_path,
+            deterministic_review_errors,
+        )
+        deterministic_review_complete, _ = check_review_state(project_path, plan, valid_chart_keys, review_report_path)
+        if deterministic_review_complete:
+            append_log(log_path, "Deterministic review passed; skipping AI review stage")
+            review_session_id = "skipped_deterministic"
+        else:
+            review_session_id = execute_qwen_stage(
+                stage_name="spec_review",
+                artifact_prefix="review",
+                initial_prompt=review_prompt,
+                completion_sentinel_prefix=REVIEW_COMPLETION_SENTINEL_PREFIX,
+                state_checker=lambda: check_review_state(project_path, plan, valid_chart_keys, review_report_path),
+                continue_prompt_builder=lambda errors: build_review_continue_prompt(
+                    project_path,
+                    review_report_path,
+                    errors,
+                    review_skill_pack_path,
+                ),
+                confirmation_prompt_builder=lambda errors: build_review_continue_prompt(
+                    project_path,
+                    review_report_path,
+                    errors,
+                    review_skill_pack_path,
+                ),
+                model=request.get("review_model"),
+                runner_dir=runner_dir,
+                log_path=log_path,
+            )
+        save_review_stage(review_cache_dir, project_path, review_report_path)
 
     cleanup_pre_execution_outputs(project_path, log_path)
     executor_style_path = select_executor_style_reference(project_path)
+    executor_skill_pack_path, executor_skill_pack_hash = write_skill_pack(
+        runner_dir,
+        "executor_skill_pack.md",
+        [
+            REPO_ROOT / "AGENTS.md",
+            QWEN_PROJECT_GUIDE_PATH,
+            QWEN_SKILL_WRAPPER_PATH,
+            QWEN_REPO_SKILL_PATH,
+            QWEN_EXECUTOR_REFERENCE_PATH,
+            executor_style_path,
+            QWEN_SHARED_STANDARDS_PATH,
+            QWEN_IMAGE_LAYOUT_REFERENCE_PATH,
+            SVG_DESIGN_COOKBOOK_PATH,
+        ],
+        critical_rules=[
+            "Emoji are forbidden everywhere in SVG output.",
+            f"Never substitute emoji for icons; use only `data-icon=\"{DEFAULT_ICON_LIBRARY}/...\"` with a real icon name from the inventory.",
+            "Do not use pictographic Unicode characters in titles, labels, bullets, badges, captions, annotations, or decorative marks.",
+            "If a bullet needs emphasis, use layout, color, weight, or a legal icon placeholder instead of emoji.",
+        ],
+    )
+    skill_pack_index["executor"] = {"path": str(executor_skill_pack_path), "hash": executor_skill_pack_hash}
+    write_json(runner_dir / "skill_pack_index.json", skill_pack_index)
+
     svg_anchor_context_path = runner_dir / SVG_ANCHOR_CONTEXT_FILENAME
     write_json(
         svg_anchor_context_path,
@@ -2523,11 +3020,26 @@ def execute_generation(
         icon_reference_path,
         svg_anchor_context_path,
         executor_style_path,
+        executor_skill_pack_path,
         plan,
     )
     (runner_dir / "bootstrap_prompt.txt").write_text(svg_prompt, encoding="utf-8")
 
-    batch_mode = str(request.get("batch_mode", "auto"))
+    svg_cache_key = build_stage_cache_key(
+        "svg",
+        {
+            "spec_hash": hash_file(project_path / "design_spec.md"),
+            "source_md_hash": source_md_hash,
+            "plan_hash": plan_hash,
+            "request_hash": request_hash,
+            "icon_reference_hash": hash_file(icon_reference_path),
+            "anchor_context_hash": hash_file(svg_anchor_context_path),
+            "executor_skill_pack_hash": executor_skill_pack_hash,
+        },
+    )
+    svg_cache_dir = build_stage_cache_dir(cache_root, "svg", svg_cache_key)
+
+    batch_mode = str(request.get("batch_mode", "always"))
     batch_size = int(request.get("batch_size", BATCH_SIZE))
     use_parallel_svg = batch_mode == "parallel" or (
         batch_mode == "auto" and len(plan) > BATCH_MODE_THRESHOLD
@@ -2536,87 +3048,111 @@ def execute_generation(
 
     svg_session_id: str
     svg_batch_session_ids: list[str] = []
-    if use_parallel_svg:
-        append_log(
-            log_path,
-            "Using parallel batched SVG generation: "
-            f"pages={len(plan)} batch_size={batch_size} "
-            f"workers={int(request.get('parallel_batch_workers', DEFAULT_PARALLEL_BATCH_WORKERS))}",
-        )
-        svg_batch_session_ids = execute_parallel_svg_generation(
-            request=request,
-            project_path=project_path,
-            slide_plan_path=slide_plan_path,
-            slide_digest_path=slide_digest_path,
-            icon_reference_path=icon_reference_path,
-            svg_anchor_context_path=svg_anchor_context_path,
-            executor_style_path=executor_style_path,
-            plan=plan,
-            runner_dir=runner_dir,
-            log_path=log_path,
-        )
-        svg_session_id = svg_batch_session_ids[-1]
-    elif use_batched_svg:
-        append_log(
-            log_path,
-            f"Using batched serial SVG generation: pages={len(plan)} batch_size={batch_size} batch_mode={batch_mode}",
-        )
-        svg_batch_session_ids = execute_batched_svg_generation(
-            request=request,
-            project_path=project_path,
-            slide_plan_path=slide_plan_path,
-            slide_digest_path=slide_digest_path,
-            icon_reference_path=icon_reference_path,
-            svg_anchor_context_path=svg_anchor_context_path,
-            executor_style_path=executor_style_path,
-            plan=plan,
-            runner_dir=runner_dir,
-            log_path=log_path,
-        )
-        svg_session_id = svg_batch_session_ids[-1]
+    if try_restore_svg_stage(svg_cache_dir, project_path, plan, valid_chart_keys, runner_dir, log_path):
+        svg_session_id = "cache_hit"
     else:
-        append_log(
-            log_path,
-            f"Using single-session SVG generation: pages={len(plan)} batch_mode={batch_mode}",
-        )
-        svg_session_id = execute_qwen_stage(
-            stage_name="svg_generation",
-            artifact_prefix="qwen",
-            initial_prompt=svg_prompt,
-            completion_sentinel_prefix=COMPLETION_SENTINEL_PREFIX,
-            state_checker=lambda: check_svg_only_state(project_path, plan, valid_chart_keys, runner_dir),
-            continue_prompt_builder=lambda errors: build_svg_continue_prompt(
-                request,
-                project_path,
-                plan,
-                errors,
-                svg_anchor_context_path,
-            ),
-            confirmation_prompt_builder=lambda _errors: build_svg_confirmation_prompt(plan, request),
-            model=request.get("model"),
-            runner_dir=runner_dir,
-            log_path=log_path,
-        )
+        if use_parallel_svg:
+            append_log(
+                log_path,
+                "Using parallel batched SVG generation: "
+                f"pages={len(plan)} batch_size={batch_size} "
+                f"workers={int(request.get('parallel_batch_workers', DEFAULT_PARALLEL_BATCH_WORKERS))}",
+            )
+            svg_batch_session_ids = execute_parallel_svg_generation(
+                request=request,
+                project_path=project_path,
+                slide_plan_path=slide_plan_path,
+                slide_digest_path=slide_digest_path,
+                icon_reference_path=icon_reference_path,
+                svg_anchor_context_path=svg_anchor_context_path,
+                executor_style_path=executor_style_path,
+                executor_skill_pack_path=executor_skill_pack_path,
+                plan=plan,
+                runner_dir=runner_dir,
+                log_path=log_path,
+            )
+            svg_session_id = svg_batch_session_ids[-1]
+        elif use_batched_svg:
+            append_log(
+                log_path,
+                f"Using batched serial SVG generation: pages={len(plan)} batch_size={batch_size} batch_mode={batch_mode}",
+            )
+            svg_batch_session_ids = execute_batched_svg_generation(
+                request=request,
+                project_path=project_path,
+                slide_plan_path=slide_plan_path,
+                slide_digest_path=slide_digest_path,
+                icon_reference_path=icon_reference_path,
+                svg_anchor_context_path=svg_anchor_context_path,
+                executor_style_path=executor_style_path,
+                executor_skill_pack_path=executor_skill_pack_path,
+                plan=plan,
+                runner_dir=runner_dir,
+                log_path=log_path,
+            )
+            svg_session_id = svg_batch_session_ids[-1]
+        else:
+            append_log(
+                log_path,
+                f"Using single-session SVG generation: pages={len(plan)} batch_mode={batch_mode}",
+            )
+            svg_session_id = execute_qwen_stage(
+                stage_name="svg_generation",
+                artifact_prefix="qwen",
+                initial_prompt=svg_prompt,
+                completion_sentinel_prefix=COMPLETION_SENTINEL_PREFIX,
+                state_checker=lambda: check_svg_only_state(project_path, plan, valid_chart_keys, runner_dir),
+                continue_prompt_builder=lambda errors: build_svg_continue_prompt(
+                    request,
+                    project_path,
+                    plan,
+                    errors,
+                    svg_anchor_context_path,
+                ),
+                confirmation_prompt_builder=lambda _errors: build_svg_confirmation_prompt(plan, request),
+                model=request.get("model"),
+                runner_dir=runner_dir,
+                log_path=log_path,
+            )
+        save_svg_stage(svg_cache_dir, project_path)
 
     notes_prompt = build_notes_bootstrap_prompt(
         project_path=project_path,
         imported_markdown_path=imported_markdown_path,
         slide_plan_path=slide_plan_path,
         svg_anchor_context_path=svg_anchor_context_path,
+        notes_skill_pack_path=notes_skill_pack_path,
     )
     (runner_dir / "notes_prompt.txt").write_text(notes_prompt, encoding="utf-8")
-    notes_session_id = execute_qwen_stage(
-        stage_name="notes_generation",
-        artifact_prefix="notes",
-        initial_prompt=notes_prompt,
-        completion_sentinel_prefix=NOTES_COMPLETION_SENTINEL_PREFIX,
-        state_checker=lambda: check_notes_state(project_path, plan),
-        continue_prompt_builder=lambda errors: build_notes_continue_prompt(project_path, plan, errors),
-        confirmation_prompt_builder=lambda errors: build_notes_continue_prompt(project_path, plan, errors),
-        model=request.get("model"),
-        runner_dir=runner_dir,
-        log_path=log_path,
+
+    notes_cache_key = build_stage_cache_key(
+        "notes",
+        {
+            "spec_hash": hash_file(project_path / "design_spec.md"),
+            "source_md_hash": source_md_hash,
+            "plan_hash": plan_hash,
+            "svg_cache_key": svg_cache_key,
+            "notes_skill_pack_hash": notes_skill_pack_hash,
+            "request_hash": request_hash,
+        },
     )
+    notes_cache_dir = build_stage_cache_dir(cache_root, "notes", notes_cache_key)
+    if try_restore_notes_stage(notes_cache_dir, project_path, plan, log_path):
+        notes_session_id = "cache_hit"
+    else:
+        notes_session_id = execute_qwen_stage(
+            stage_name="notes_generation",
+            artifact_prefix="notes",
+            initial_prompt=notes_prompt,
+            completion_sentinel_prefix=NOTES_COMPLETION_SENTINEL_PREFIX,
+            state_checker=lambda: check_notes_state(project_path, plan),
+            continue_prompt_builder=lambda errors: build_notes_continue_prompt(project_path, plan, errors),
+            confirmation_prompt_builder=lambda errors: build_notes_continue_prompt(project_path, plan, errors),
+            model=request.get("model"),
+            runner_dir=runner_dir,
+            log_path=log_path,
+        )
+        save_notes_stage(notes_cache_dir, project_path)
 
     append_log(log_path, "Running deterministic SVG quality check (no AI review)")
     svg_quality_report_path = runner_dir / SVG_QUALITY_REPORT_FILENAME

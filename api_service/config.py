@@ -48,7 +48,7 @@ class Settings:
 def load_settings() -> Settings:
     project_base_dir = Path(os.getenv("PPT_API_PROJECT_BASE_DIR", str(REPO_ROOT / "projects"))).expanduser()
     jobs_dir = Path(os.getenv("PPT_API_JOBS_DIR", str(REPO_ROOT / "tmp" / "api-jobs"))).expanduser()
-    batch_mode = (os.getenv("PPT_API_BATCH_MODE", "auto") or "auto").strip().lower()
+    batch_mode = (os.getenv("PPT_API_BATCH_MODE", "always") or "always").strip().lower()
     if batch_mode not in {"auto", "always", "never", "parallel"}:
         batch_mode = "auto"
     return Settings(
