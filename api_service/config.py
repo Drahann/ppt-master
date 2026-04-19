@@ -65,7 +65,7 @@ def load_settings() -> Settings:
         qwen_review_model=(os.getenv("PPT_API_QWEN_REVIEW_MODEL") or "").strip() or None,
         batch_mode=batch_mode,
         batch_size=max(1, _env_int("PPT_API_BATCH_SIZE", 8)),
-        parallel_batch_workers=max(1, _env_int("PPT_API_PARALLEL_BATCH_WORKERS", 4)),
+        parallel_batch_workers=max(1, _env_int("PPT_API_PARALLEL_BATCH_WORKERS", 7)),
         cos_secret_id=os.getenv("COS_SECRET_ID", "").strip(),
         cos_secret_key=os.getenv("COS_SECRET_KEY", "").strip(),
         cos_region=os.getenv("COS_REGION", "ap-shanghai").strip() or "ap-shanghai",
