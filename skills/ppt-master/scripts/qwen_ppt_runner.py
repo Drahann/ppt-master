@@ -88,7 +88,7 @@ DEFAULT_ICON_LIBRARY = "chunk"
 ICON_COVERAGE_RATIO = 0.75
 ICON_COVERAGE_MIN_SLIDES = 12
 COOKBOOK_REREAD_INTERVAL = 8
-BATCH_SIZE = 8
+BATCH_SIZE = 5
 BATCH_MODE_THRESHOLD = 15
 DEFAULT_PARALLEL_BATCH_WORKERS = 7
 QWEN_ALLOWED_TOOLS = (
@@ -144,6 +144,7 @@ GENERIC_CHART_TOKENS = {
 
 REVIEW_REPORT_FILENAME = "spec_review_report.json"
 REVIEW_INPUT_FILENAME = "spec_review_input.json"
+SPEC_REPAIR_REPORT_FILENAME = "spec_repair_report.json"
 
 REVIEW_FOCUS_SLIDES = (
     "市场定位",
@@ -1078,6 +1079,30 @@ def build_chart_template_reference() -> list[dict[str, Any]]:
     return reference
 
 
+def score_chart_candidate(candidate: str, invalid_name: str) -> tuple[int, int, str]:
+    invalid_tokens = set(invalid_name.split("_"))
+    candidate_tokens = set(candidate.split("_"))
+    overlap = len(invalid_tokens & candidate_tokens)
+    same_prefix = int(candidate[:1] == invalid_name[:1])
+    return (overlap, same_prefix, candidate)
+
+
+def suggest_chart_replacements(invalid_name: str, valid_chart_keys: set[str], limit: int = 5) -> list[str]:
+    close = get_close_matches(invalid_name, sorted(valid_chart_keys), n=limit, cutoff=0.3)
+    token_ranked = sorted(
+        valid_chart_keys,
+        key=lambda candidate: score_chart_candidate(candidate, invalid_name),
+        reverse=True,
+    )
+    selected: list[str] = []
+    for candidate in [*close, *token_ranked]:
+        if candidate not in selected:
+            selected.append(candidate)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
 def choose_existing_icons(
     available_icons: set[str],
     preferred: list[str],
@@ -1544,6 +1569,86 @@ def build_spec_review_input(
         "invalid_icon_refs": icon_replacements,
         "unknown_chart_refs": invalid_chart_refs,
     }
+
+
+def repair_design_spec(
+    project_path: Path,
+    valid_chart_keys: set[str],
+    *,
+    log_path: Path | None = None,
+    report_path: Path | None = None,
+) -> dict[str, Any]:
+    design_spec_path = project_path / "design_spec.md"
+    report: dict[str, Any] = {
+        "status": "missing_design_spec",
+        "design_spec_path": str(design_spec_path),
+        "icon_fixes": [],
+        "chart_fixes": [],
+    }
+    if not design_spec_path.exists():
+        if report_path is not None:
+            write_json(report_path, report)
+        return report
+
+    content = design_spec_path.read_text(encoding="utf-8", errors="replace")
+    updated = content
+    available_icons = load_available_icons()
+
+    icon_fixes: list[dict[str, str]] = []
+    for invalid_ref in find_invalid_icon_refs(updated, available_icons):
+        suggestions = suggest_icon_replacements(invalid_ref, available_icons, limit=1)
+        replacement = suggestions[0] if suggestions else choose_fallback_icon_ref(
+            design_spec_path.name,
+            invalid_ref,
+            set(extract_icon_refs_from_text(updated)),
+            available_icons,
+        )
+        updated = updated.replace(invalid_ref, replacement)
+        icon_fixes.append({"invalid": invalid_ref, "replacement": replacement})
+
+    section_header = "## VII. Visualization Reference List"
+    next_header = "## VIII. Image Resource List"
+    section_vii = extract_markdown_section(updated, section_header, next_header)
+    chart_fixes: list[dict[str, str]] = []
+    if section_vii:
+        updated_section = section_vii
+        for invalid_name in find_unknown_chart_references(updated, valid_chart_keys):
+            suggestions = suggest_chart_replacements(invalid_name, valid_chart_keys, limit=1)
+            if not suggestions:
+                continue
+            replacement = suggestions[0]
+            updated_section = updated_section.replace(
+                f"templates/charts/{invalid_name}.svg",
+                f"templates/charts/{replacement}.svg",
+            )
+            updated_section = re.sub(
+                rf"\b{re.escape(invalid_name)}\b",
+                replacement,
+                updated_section,
+            )
+            chart_fixes.append({"invalid": invalid_name, "replacement": replacement})
+        if updated_section != section_vii:
+            updated = updated.replace(section_vii, updated_section, 1)
+
+    if updated != content:
+        design_spec_path.write_text(updated, encoding="utf-8")
+        if log_path is not None:
+            if icon_fixes:
+                append_log(log_path, f"Spec repair: fixed icon refs {icon_fixes}")
+            if chart_fixes:
+                append_log(log_path, f"Spec repair: fixed chart refs {chart_fixes}")
+    elif log_path is not None:
+        append_log(log_path, "Spec repair: no icon/chart fixes needed")
+
+    report = {
+        "status": "repaired" if updated != content else "clean",
+        "design_spec_path": str(design_spec_path),
+        "icon_fixes": icon_fixes,
+        "chart_fixes": chart_fixes,
+    }
+    if report_path is not None:
+        write_json(report_path, report)
+    return report
 
 
 def validate_design_spec(
@@ -3087,24 +3192,6 @@ def execute_generation(
             f"If an icon is needed, use only real `{DEFAULT_ICON_LIBRARY}/...` names from the allowed icon inventory.",
         ],
     )
-    review_skill_pack_path, review_skill_pack_hash = write_skill_pack(
-        runner_dir,
-        "review_skill_pack.md",
-        [
-            REPO_ROOT / "AGENTS.md",
-            QWEN_PROJECT_GUIDE_PATH,
-            QWEN_SKILL_WRAPPER_PATH,
-            QWEN_REPO_SKILL_PATH,
-            QWEN_STRATEGIST_REFERENCE_PATH,
-            QWEN_SPEC_REVIEW_SKILL_PATH,
-            SVG_DESIGN_COOKBOOK_PATH,
-        ],
-        critical_rules=[
-            "Emoji are forbidden in design_spec.md and downstream SVG output.",
-            "Treat any emoji usage as a hard error, not a style preference.",
-            f"If a visual marker is needed, replace it with plain text wording or a legal `{DEFAULT_ICON_LIBRARY}/...` icon reference.",
-        ],
-    )
     notes_skill_pack_path, notes_skill_pack_hash = write_skill_pack(
         runner_dir,
         "notes_skill_pack.md",
@@ -3118,7 +3205,6 @@ def execute_generation(
 
     skill_pack_index: dict[str, dict[str, str]] = {
         "strategist": {"path": str(strategist_skill_pack_path), "hash": strategist_skill_pack_hash},
-        "review": {"path": str(review_skill_pack_path), "hash": review_skill_pack_hash},
         "notes": {"path": str(notes_skill_pack_path), "hash": notes_skill_pack_hash},
     }
     write_json(runner_dir / "skill_pack_index.json", skill_pack_index)
@@ -3130,7 +3216,6 @@ def execute_generation(
             "canvas_format": request["canvas_format"],
             "rules": request["rules"],
             "model": request.get("model"),
-            "review_model": request.get("review_model"),
             "batch_mode": request.get("batch_mode"),
             "batch_size": request.get("batch_size"),
             "parallel_batch_workers": request.get("parallel_batch_workers"),
@@ -3185,83 +3270,21 @@ def execute_generation(
         )
         save_spec_stage(spec_cache_dir, project_path)
 
-    review_report_path = runner_dir / REVIEW_REPORT_FILENAME
-    review_input_path = runner_dir / REVIEW_INPUT_FILENAME
-    write_json(
-        review_input_path,
-        build_spec_review_input(
-            project_path,
-            plan,
-            valid_chart_keys,
-            icon_reference_path,
-            icon_inventory_path,
-        ),
-    )
-    review_prompt = build_review_bootstrap_prompt(
-        request,
+    spec_repair_report_path = runner_dir / SPEC_REPAIR_REPORT_FILENAME
+    repair_design_spec(
         project_path,
-        review_input_path,
-        review_report_path,
-        review_skill_pack_path,
-    )
-    (runner_dir / "review_prompt.txt").write_text(review_prompt, encoding="utf-8")
-
-    review_cache_key = build_stage_cache_key(
-        "review",
-        {
-            "spec_hash": hash_file(project_path / "design_spec.md"),
-            "plan_hash": plan_hash,
-            "request_hash": request_hash,
-            "review_input_hash": hash_file(review_input_path),
-            "skill_pack_hash": review_skill_pack_hash,
-        },
-    )
-    review_cache_dir = build_stage_cache_dir(cache_root, "review", review_cache_key)
-    if try_restore_review_stage(
-        review_cache_dir,
-        project_path,
-        review_report_path,
-        plan,
         valid_chart_keys,
-        log_path,
-    ):
-        review_session_id = "cache_hit"
-    else:
-        deterministic_review_errors = validate_design_spec(project_path, plan, valid_chart_keys, strict_icons=True)
-        write_deterministic_review_report(
-            project_path,
-            review_input_path,
-            review_report_path,
-            deterministic_review_errors,
+        log_path=log_path,
+        report_path=spec_repair_report_path,
+    )
+    strict_spec_errors = validate_design_spec(project_path, plan, valid_chart_keys, strict_icons=True)
+    if strict_spec_errors:
+        raise RunnerError(
+            "Deterministic spec repair left unresolved issues: "
+            + "; ".join(strict_spec_errors)
         )
-        deterministic_review_complete, _ = check_review_state(project_path, plan, valid_chart_keys, review_report_path)
-        if deterministic_review_complete:
-            append_log(log_path, "Deterministic review passed; skipping AI review stage")
-            review_session_id = "skipped_deterministic"
-        else:
-            review_session_id = execute_qwen_stage(
-                stage_name="spec_review",
-                artifact_prefix="review",
-                initial_prompt=review_prompt,
-                completion_sentinel_prefix=REVIEW_COMPLETION_SENTINEL_PREFIX,
-                state_checker=lambda: check_review_state(project_path, plan, valid_chart_keys, review_report_path),
-                continue_prompt_builder=lambda errors: build_review_continue_prompt(
-                    project_path,
-                    review_report_path,
-                    errors,
-                    review_skill_pack_path,
-                ),
-                confirmation_prompt_builder=lambda errors: build_review_continue_prompt(
-                    project_path,
-                    review_report_path,
-                    errors,
-                    review_skill_pack_path,
-                ),
-                model=request.get("review_model"),
-                runner_dir=runner_dir,
-                log_path=log_path,
-            )
-        save_review_stage(review_cache_dir, project_path, review_report_path)
+    review_session_id = "disabled_deterministic"
+    append_log(log_path, f"Deterministic spec repair passed; report saved to {spec_repair_report_path}")
 
     cleanup_pre_execution_outputs(project_path, log_path)
     executor_style_path = select_executor_style_reference(project_path)
