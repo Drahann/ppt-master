@@ -31,6 +31,7 @@ class Settings:
     keep_job_files: bool
     qwen_model: str | None
     qwen_review_model: str | None
+    qwen_notes_model: str | None
     batch_mode: str
     batch_size: int
     parallel_batch_workers: int
@@ -48,7 +49,7 @@ class Settings:
 def load_settings() -> Settings:
     project_base_dir = Path(os.getenv("PPT_API_PROJECT_BASE_DIR", str(REPO_ROOT / "projects"))).expanduser()
     jobs_dir = Path(os.getenv("PPT_API_JOBS_DIR", str(REPO_ROOT / "tmp" / "api-jobs"))).expanduser()
-    batch_mode = (os.getenv("PPT_API_BATCH_MODE", "always") or "always").strip().lower()
+    batch_mode = (os.getenv("PPT_API_BATCH_MODE", "parallel") or "parallel").strip().lower()
     if batch_mode not in {"auto", "always", "never", "parallel"}:
         batch_mode = "auto"
     return Settings(
@@ -63,6 +64,7 @@ def load_settings() -> Settings:
         keep_job_files=os.getenv("PPT_API_KEEP_JOB_FILES", "1").strip().lower() not in {"0", "false", "no"},
         qwen_model=(os.getenv("PPT_API_QWEN_MODEL") or "").strip() or None,
         qwen_review_model=(os.getenv("PPT_API_QWEN_REVIEW_MODEL") or "").strip() or None,
+        qwen_notes_model=(os.getenv("PPT_API_QWEN_NOTES_MODEL") or "").strip() or None,
         batch_mode=batch_mode,
         batch_size=max(1, _env_int("PPT_API_BATCH_SIZE", 5)),
         parallel_batch_workers=max(1, _env_int("PPT_API_PARALLEL_BATCH_WORKERS", 7)),

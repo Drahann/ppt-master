@@ -986,7 +986,9 @@ def load_request(request_path: Path) -> dict[str, Any]:
         raise RunnerError("model must be null or a string")
     if "review_model" in request and request["review_model"] is not None and not isinstance(request["review_model"], str):
         raise RunnerError("review_model must be null or a string")
-    batch_mode = (request.get("batch_mode") or "always")
+    if "notes_model" in request and request["notes_model"] is not None and not isinstance(request["notes_model"], str):
+        raise RunnerError("notes_model must be null or a string")
+    batch_mode = (request.get("batch_mode") or "parallel")
     if not isinstance(batch_mode, str) or batch_mode not in {"auto", "always", "never", "parallel"}:
         raise RunnerError("batch_mode must be one of: auto, always, never, parallel")
     request["batch_mode"] = batch_mode
@@ -1005,6 +1007,11 @@ def load_request(request_path: Path) -> dict[str, Any]:
         request["review_model"] = review_model.strip()
     else:
         request["review_model"] = DEFAULT_REVIEW_MODEL
+    notes_model = request.get("notes_model")
+    if isinstance(notes_model, str) and notes_model.strip():
+        request["notes_model"] = notes_model.strip()
+    else:
+        request["notes_model"] = request["model"]
     return request
 
 
@@ -1532,6 +1539,52 @@ def auto_repair_invalid_svg_icons(
     return updated_text, replacements
 
 
+def load_svg_auto_repair_anchor(project_path: Path) -> dict[str, Any] | None:
+    anchor_path = project_path / "runner" / "svg_anchor_context.json"
+    if not anchor_path.exists():
+        return None
+    try:
+        return json.loads(anchor_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def auto_repair_svg_before_validation(
+    project_path: Path,
+    svg_path: Path,
+    anchor: dict[str, Any] | None,
+    log_path: Path | None = None,
+) -> dict[str, Any] | None:
+    """Run deterministic SVG repair before deciding whether AI follow-up is needed."""
+    tools_dir = Path(__file__).resolve().parent
+    if str(tools_dir) not in sys.path:
+        sys.path.insert(0, str(tools_dir))
+    try:
+        from svg_auto_repair import repair_svg_file  # type: ignore
+    except Exception as exc:
+        if log_path is not None:
+            append_log(log_path, f"SVG pre-validation repair unavailable for {svg_path.name}: {exc}")
+        return None
+
+    try:
+        report = repair_svg_file(svg_path, anchor, dry_run=False)
+    except Exception as exc:
+        if log_path is not None:
+            append_log(log_path, f"SVG pre-validation repair failed for {svg_path.name}: {exc}")
+        return None
+
+    if log_path is not None and (report.get("modified") or not report.get("valid_xml", True)):
+        repairs = report.get("repairs") or []
+        repair_text = "; ".join(str(item) for item in repairs) if repairs else "no deterministic repair"
+        append_log(
+            log_path,
+            f"SVG pre-validation repair {svg_path.name}: "
+            f"modified={bool(report.get('modified'))} valid_xml={bool(report.get('valid_xml', True))}; "
+            f"{repair_text}",
+        )
+    return report
+
+
 def build_spec_review_input(
     project_path: Path,
     plan: list[SlidePlanEntry],
@@ -1707,12 +1760,17 @@ def validate_design_spec(
     return errors
 
 
-def validate_svg_outputs(project_path: Path, plan: list[SlidePlanEntry]) -> list[str]:
+def validate_svg_outputs(
+    project_path: Path,
+    plan: list[SlidePlanEntry],
+    log_path: Path | None = None,
+) -> list[str]:
     svg_dir = project_path / "svg_output"
     errors: list[str] = []
     icon_slide_count = 0
     content_slide_count = 0
     available_icons = load_available_icons()
+    repair_anchor = load_svg_auto_repair_anchor(project_path)
 
     for entry in plan:
         svg_path = svg_dir / entry.filename
@@ -1721,6 +1779,8 @@ def validate_svg_outputs(project_path: Path, plan: list[SlidePlanEntry]) -> list
 
         text = svg_path.read_text(encoding="utf-8", errors="replace")
         text, _icon_repairs = auto_repair_invalid_svg_icons(svg_path, text, available_icons)
+        auto_repair_svg_before_validation(project_path, svg_path, repair_anchor, log_path)
+        text = svg_path.read_text(encoding="utf-8", errors="replace")
         try:
             ET.fromstring(text)
         except ET.ParseError as exc:
@@ -1782,7 +1842,7 @@ def check_svg_only_state(
     if extra_svg:
         errors.append(f"Unexpected SVG files: {', '.join(extra_svg)}")
 
-    errors.extend(validate_svg_outputs(project_path, plan))
+    errors.extend(validate_svg_outputs(project_path, plan, runner_dir / "runner.log"))
     errors.extend(run_svg_quality_check(project_path, runner_dir))
     return not errors, errors
 
@@ -1791,6 +1851,7 @@ def check_batch_state(
     project_path: Path,
     batch_plan: list[SlidePlanEntry],
     full_plan: list[SlidePlanEntry],
+    log_path: Path | None = None,
 ) -> tuple[bool, list[str]]:
     errors: list[str] = []
     svg_dir = project_path / "svg_output"
@@ -1805,7 +1866,7 @@ def check_batch_state(
     if extra_svg:
         errors.append(f"Unexpected SVG files: {', '.join(extra_svg)}")
 
-    errors.extend(validate_svg_outputs(project_path, batch_plan))
+    errors.extend(validate_svg_outputs(project_path, batch_plan, log_path))
     return not errors, errors
 
 
@@ -2084,6 +2145,8 @@ Hard constraints:
 
 Output constraints:
 - This stage must stop after a valid `design_spec.md` is written
+- After writing `design_spec.md`, do not output any explanation, summary, file list, or confirmation text.
+- The only allowed final assistant output is the sentinel line below.
 
 Exact slide plan:
 {build_slide_plan_text(plan)}
@@ -2115,8 +2178,10 @@ Keep these constraints locked:
 - Generate only `design_spec.md` in this stage
 - Do not create SVG or notes files yet
 - Do not stop again for another confirmation
+- After writing `design_spec.md`, do not output any explanation, summary, file list, or confirmation text.
+- The only allowed final assistant output is the sentinel line below.
 
-Finish `design_spec.md`, then print:
+Finish `design_spec.md`, then print exactly one line:
 {SPEC_COMPLETION_SENTINEL_PREFIX}
 """
 
@@ -2148,8 +2213,10 @@ Repair the existing files in place and keep all original hard constraints:
 - do not use emoji in the design spec
 - use only real visualization templates from `templates/charts/`
 - do not create any SVG or notes files in this stage
+- After repairing `design_spec.md`, do not output any explanation, summary, file list, or confirmation text.
+- The only allowed final assistant output is the sentinel line below.
 
-When `design_spec.md` satisfies the checks, print:
+When `design_spec.md` satisfies the checks, print exactly one line:
 {SPEC_COMPLETION_SENTINEL_PREFIX} {project_path}
 """
 
@@ -2194,6 +2261,8 @@ Output requirements:
   - `issues_found`
   - `issues_fixed`
   - `remaining_risks`
+- After writing the required files, do not output any explanation, summary, file list, or confirmation text.
+- The only allowed final assistant output is the sentinel line below.
 - When review is complete, print exactly:
 {REVIEW_COMPLETION_SENTINEL_PREFIX} {project_path}
 """
@@ -2218,7 +2287,8 @@ Repair only:
 - Before repairing, re-read `{review_skill_pack_path.name}`
 
 Do not generate SVG or notes in this stage.
-When review is complete, print:
+After writing the required files, do not output any explanation, summary, file list, or confirmation text.
+When review is complete, print exactly one line:
 {REVIEW_COMPLETION_SENTINEL_PREFIX} {project_path}
 """
 
@@ -2280,13 +2350,15 @@ Output constraints:
   {exact_filenames}
 - Read chart templates before first use, then adapt them creatively instead of copying them verbatim
 - Templates are structural references, not full-page presets; keep one clear primary visual structure per page and adapt the rest of the page to support it
-- Use this re-anchor cadence during sequential generation: before slides {COOKBOOK_REREAD_INTERVAL + 1}, {COOKBOOK_REREAD_INTERVAL * 2 + 1}, {COOKBOOK_REREAD_INTERVAL * 3 + 1}, etc., pause internally, re-read both `{SVG_DESIGN_COOKBOOK_PATH.name}` and `{svg_anchor_context_path.name}`, restate the fixed header/footer/defs/naming anchors to yourself, and then continue
+- Use this re-anchor cadence during sequential generation: before slides {COOKBOOK_REREAD_INTERVAL + 1}, {COOKBOOK_REREAD_INTERVAL * 2 + 1}, {COOKBOOK_REREAD_INTERVAL * 3 + 1}, etc., pause internally, re-read both `{SVG_DESIGN_COOKBOOK_PATH.name}` and `{svg_anchor_context_path.name}`, check the fixed header/footer/defs/naming anchors internally, and then continue
 - Never switch to a second naming convention mid-run. Every SVG filename and every notes heading must continue matching the exact stems in `{slide_plan_path.name}`
+- After writing the SVG files, do not output any explanation, summary, file list, or confirmation text.
+- The only allowed final assistant output is the sentinel line below.
 
 Exact slide plan:
 {build_slide_plan_text(plan)}
 
-When all SVGs are complete, print exactly:
+When all SVGs are complete, print exactly one line:
 {COMPLETION_SENTINEL_PREFIX} {project_path}
 """
 
@@ -2356,11 +2428,13 @@ Batch output constraints:
   {exact_filenames}
 - Do not rename files into another naming convention
 - Do not touch already-completed SVG files from earlier batches unless absolutely necessary to repair a structural defect discovered during this batch
+- After writing this batch's SVG files, do not output any explanation, summary, file list, or confirmation text.
+- The only allowed final assistant output is the sentinel line below.
 
 Exact batch slide plan:
 {build_slide_plan_text(batch_plan)}
 
-When this batch's SVG files are complete, print exactly:
+When this batch's SVG files are complete, print exactly one line:
 {SVG_BATCH_COMPLETION_SENTINEL_PREFIX} {project_path}
 """
 
@@ -2383,8 +2457,10 @@ Keep these constraints locked:
 - Re-read both `{SVG_DESIGN_COOKBOOK_PATH.name}` and `svg_anchor_context.json` after every {COOKBOOK_REREAD_INTERVAL} completed SVG pages
 - Most content slides must include valid `data-icon="{DEFAULT_ICON_LIBRARY}/..."` placeholders
 - Generate only SVG in this stage
+- After writing the SVG files, do not output any explanation, summary, file list, or confirmation text.
+- The only allowed final assistant output is the sentinel line below.
 
-When done, print:
+When done, print exactly one line:
 {COMPLETION_SENTINEL_PREFIX}
 """
 
@@ -2402,8 +2478,10 @@ Keep these constraints locked:
 - Re-read both `{SVG_DESIGN_COOKBOOK_PATH.name}` and `svg_anchor_context.json` before continuing if quality drifted
 - Generate only this batch's SVG files
 - Do not write notes in this stage
+- After writing this batch's SVG files, do not output any explanation, summary, file list, or confirmation text.
+- The only allowed final assistant output is the sentinel line below.
 
-When done, print:
+When done, print exactly one line:
 {SVG_BATCH_COMPLETION_SENTINEL_PREFIX}
 """
 
@@ -2445,10 +2523,12 @@ Repair the SVG and notes outputs in place and keep all hard constraints:
 - most content slides must contain valid `data-icon="{DEFAULT_ICON_LIBRARY}/..."` placeholders
 - SVG filenames must exactly match the slide plan
 - every SVG must remain valid XML
-- before continuing after this interruption, re-read `{svg_anchor_context_path.name}` and restate the immutable header/footer/defs/naming anchors to yourself
+- before continuing after this interruption, re-read `{svg_anchor_context_path.name}` and check the immutable header/footer/defs/naming anchors internally; do not print that check
 {recovery_block}
+- After repairing the required files, do not output any explanation, summary, file list, or confirmation text.
+- The only allowed final assistant output is the sentinel line below.
 
-When `svg_output` satisfies the checks, print:
+When `svg_output` satisfies the checks, print exactly one line:
 {COMPLETION_SENTINEL_PREFIX} {project_path}
 """
 
@@ -2477,11 +2557,13 @@ Repair only the current batch SVG files in place and keep all hard constraints:
 - do not create or overwrite `notes/total.md` in this batch stage
 - do not rename files into another naming convention
 - every SVG must remain valid XML
+- After repairing this batch's SVG files, do not output any explanation, summary, file list, or confirmation text.
+- The only allowed final assistant output is the sentinel line below.
 
 Current batch slide plan:
 {build_slide_plan_text(batch_plan)}
 
-When this batch's SVG files satisfy the checks, print:
+When this batch's SVG files satisfy the checks, print exactly one line:
 {SVG_BATCH_COMPLETION_SENTINEL_PREFIX} {project_path}
 """
 
@@ -2516,8 +2598,10 @@ Notes requirements:
 - Keep the presentation language consistent with the deck content
 - Use the reviewed design spec and source markdown as the narrative source of truth
 - Write coherent transitions across the full deck; do not treat batches as separate decks
+- After writing `notes/total.md`, do not output any explanation, summary, file list, or confirmation text.
+- The only allowed final assistant output is the sentinel line below.
 
-When notes are complete, print exactly:
+When notes are complete, print exactly one line:
 {NOTES_COMPLETION_SENTINEL_PREFIX} {project_path}
 """
 
@@ -2542,8 +2626,10 @@ Keep these constraints locked:
 - Do not rewrite `design_spec.md`
 - Notes headings must exactly match these SVG stems:
   {", ".join(entry.note_heading for entry in plan)}
+- After repairing `notes/total.md`, do not output any explanation, summary, file list, or confirmation text.
+- The only allowed final assistant output is the sentinel line below.
 
-When notes are complete, print:
+When notes are complete, print exactly one line:
 {NOTES_COMPLETION_SENTINEL_PREFIX} {project_path}
 """
 
@@ -2954,7 +3040,7 @@ def execute_batched_svg_generation(
             artifact_prefix=f"svg_batch_{batch_index + 1:02d}",
             initial_prompt=batch_prompt,
             completion_sentinel_prefix=SVG_BATCH_COMPLETION_SENTINEL_PREFIX,
-            state_checker=lambda bp=batch_plan: check_batch_state(project_path, bp, plan),
+            state_checker=lambda bp=batch_plan: check_batch_state(project_path, bp, plan, log_path),
             continue_prompt_builder=lambda errors, bp=batch_plan: build_batch_svg_continue_prompt(
                 request,
                 project_path,
@@ -3042,7 +3128,7 @@ def execute_parallel_svg_generation(
             artifact_prefix=f"svg_batch_{batch_index + 1:02d}",
             initial_prompt=batch_prompt,
             completion_sentinel_prefix=SVG_BATCH_COMPLETION_SENTINEL_PREFIX,
-            state_checker=lambda bp=batch_plan: check_batch_state(project_path, bp, plan),
+            state_checker=lambda bp=batch_plan: check_batch_state(project_path, bp, plan, log_path),
             continue_prompt_builder=lambda errors, bp=batch_plan: build_batch_svg_continue_prompt(
                 request,
                 project_path,
@@ -3216,6 +3302,7 @@ def execute_generation(
             "canvas_format": request["canvas_format"],
             "rules": request["rules"],
             "model": request.get("model"),
+            "notes_model": request.get("notes_model"),
             "batch_mode": request.get("batch_mode"),
             "batch_size": request.get("batch_size"),
             "parallel_batch_workers": request.get("parallel_batch_workers"),
@@ -3465,7 +3552,7 @@ def execute_generation(
             state_checker=lambda: check_notes_state(project_path, plan),
             continue_prompt_builder=lambda errors: build_notes_continue_prompt(project_path, plan, errors),
             confirmation_prompt_builder=lambda errors: build_notes_continue_prompt(project_path, plan, errors),
-            model=request.get("model"),
+            model=request.get("notes_model") or request.get("model"),
             runner_dir=runner_dir,
             log_path=log_path,
         )

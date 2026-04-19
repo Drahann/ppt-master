@@ -98,6 +98,10 @@ with open('$LOG_DIR/_payload_template.json', 'r', encoding='utf-8') as f:
     payload = json.load(f)
 payload['report_id'] = '$REPORT_ID'
 payload['title'] = '压测任务 $i'
+payload['batchMode'] = 'parallel'
+payload['batchSize'] = 5
+payload['parallelBatchWorkers'] = 7
+payload['notesModel'] = 'qwen-turbo'
 with open('$PAYLOAD_FILE', 'w', encoding='utf-8') as out:
     json.dump(payload, out, ensure_ascii=False)
 "

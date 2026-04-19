@@ -6,7 +6,8 @@
   "project_base_dir": "projects",
   "model": "qwen3.6-plus",
   "review_model": "qwen3-max",
-  "batch_mode": "always",
+  "notes_model": "qwen-turbo",
+  "batch_mode": "parallel",
   "batch_size": 5,
   "rules": {
     "template_mode": "free",

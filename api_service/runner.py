@@ -58,6 +58,7 @@ def execute_runner(
     batch_mode: str | None = None,
     batch_size: int | None = None,
     parallel_batch_workers: int | None = None,
+    notes_model: str | None = None,
 ) -> RunnerResult:
     job_id = build_job_id(report_id)
     working_dir.mkdir(parents=True, exist_ok=True)
@@ -73,6 +74,9 @@ def execute_runner(
         request_payload["model"] = settings.qwen_model
     if settings.qwen_review_model:
         request_payload["review_model"] = settings.qwen_review_model
+    effective_notes_model = notes_model or settings.qwen_notes_model
+    if effective_notes_model:
+        request_payload["notes_model"] = effective_notes_model
     if batch_mode:
         request_payload["batch_mode"] = batch_mode
     if batch_size is not None:

@@ -371,6 +371,16 @@ def _repair_svg_syntax(content: str) -> tuple[str, list[str]]:
 
     content = re.sub(r'>([^<]+)<', escape_text_node, content)
 
+    # XML also rejects bare ampersands in attribute values such as labels,
+    # URLs, or generated copy. Escape any remaining non-entity ampersands.
+    content, bare_amp_count = re.subn(
+        r'&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)',
+        '&amp;',
+        content,
+    )
+    if bare_amp_count > 0:
+        fixes.append(f"Syntax fix: escaped {bare_amp_count} bare ampersand(s)")
+
     # --- Fix rgba() colors ---
     rgba_pattern = re.compile(
         r'(fill|stroke)\s*=\s*"rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)"'
@@ -405,6 +415,56 @@ def _repair_svg_syntax(content: str) -> tuple[str, list[str]]:
         fixes.append(f"Syntax fix: removed opacity from {count_img} <image> element(s)")
 
     return content, fixes
+
+
+def _repair_duplicate_attributes(content: str) -> tuple[str, list[str]]:
+    """Remove duplicate attributes inside a single SVG/XML start tag.
+
+    ElementTree rejects duplicate attributes before it can build a tree. This
+    deterministic pass keeps the last occurrence, matching normal CSS-like
+    override expectations from generated markup.
+    """
+    fixes: list[str] = []
+    tag_pattern = re.compile(r'<(?P<name>[A-Za-z_][\w:.-]*)(?P<attrs>[^<>]*?)>', re.DOTALL)
+    attr_pattern = re.compile(
+        r'(?P<prefix>\s+)(?P<name>[A-Za-z_:][\w:.-]*)\s*=\s*'
+        r'(?P<quote>["\'])(?P<value>.*?)(?P=quote)',
+        re.DOTALL,
+    )
+
+    def repair_tag(match: re.Match) -> str:
+        tag_name = match.group("name")
+        attrs = match.group("attrs")
+        attr_matches = list(attr_pattern.finditer(attrs))
+        if len(attr_matches) < 2:
+            return match.group(0)
+
+        last_index_by_name: dict[str, int] = {}
+        for index, attr_match in enumerate(attr_matches):
+            last_index_by_name[attr_match.group("name")] = index
+
+        remove_spans: list[tuple[int, int, str]] = []
+        for index, attr_match in enumerate(attr_matches):
+            attr_name = attr_match.group("name")
+            if last_index_by_name[attr_name] != index:
+                remove_spans.append((attr_match.start(), attr_match.end(), attr_name))
+
+        if not remove_spans:
+            return match.group(0)
+
+        repaired_attrs = attrs
+        for start, end, _attr_name in reversed(remove_spans):
+            repaired_attrs = repaired_attrs[:start] + repaired_attrs[end:]
+
+        removed_names = sorted({attr_name for _start, _end, attr_name in remove_spans})
+        fixes.append(
+            "XML fix: removed duplicate attribute(s) on "
+            f"<{tag_name}>: {', '.join(removed_names)}"
+        )
+        return f"<{tag_name}{repaired_attrs}>"
+
+    repaired = tag_pattern.sub(repair_tag, content)
+    return repaired, fixes
 
 
 def _validate_svg_xml(content: str) -> str | None:
@@ -466,6 +526,9 @@ def _repair_xml_structure(content: str) -> tuple[str, list[str], str | None]:
     content, count_controls = control_char_pattern.subn("", content)
     if count_controls > 0:
         fixes.append(f"XML fix: removed {count_controls} invalid control character(s)")
+
+    content, duplicate_attr_fixes = _repair_duplicate_attributes(content)
+    fixes.extend(duplicate_attr_fixes)
 
     parse_error = _validate_svg_xml(content)
     if parse_error is None:

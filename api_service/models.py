@@ -16,6 +16,7 @@ class ReportRequest(BaseModel):
     batchMode: str | None = Field(default=None, pattern="^(auto|always|never|parallel)$")
     batchSize: int | None = Field(default=None, ge=1)
     parallelBatchWorkers: int | None = Field(default=None, ge=1)
+    notesModel: str | None = None
 
 
 class GeneratePptRequest(BaseModel):
@@ -34,6 +35,7 @@ class GeneratePptRequest(BaseModel):
     batchMode: str | None = Field(default=None, pattern="^(auto|always|never|parallel)$")
     batchSize: int | None = Field(default=None, ge=1)
     parallelBatchWorkers: int | None = Field(default=None, ge=1)
+    notesModel: str | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,7 @@ class NormalizedRequest:
     batch_mode: str | None
     batch_size: int | None
     parallel_batch_workers: int | None
+    notes_model: str | None
 
 
 class CallbackResult(BaseModel):
