@@ -54,7 +54,9 @@ DEFAULT_MAX_FOLLOW_UPS = 8
 QWEN_CALL_TIMEOUT_SECONDS = 60 * 60
 DIRECT_NOTES_TIMEOUT_SECONDS = 10 * 60
 DIRECT_NOTES_MAX_TOKENS = 12000
-CACHE_SCHEMA_VERSION = "2026-04-19-direct-notes-v2"
+DIRECT_SPEC_TIMEOUT_SECONDS = 15 * 60
+DIRECT_SPEC_MAX_TOKENS = 32000
+CACHE_SCHEMA_VERSION = "2026-04-19-direct-spec-v3"
 STAGE_CACHE_DIRNAME = ".runner-stage-cache"
 SKILL_PACK_DIRNAME = "skill_packs"
 QWEN_CHAT_ROOT = Path.home() / ".qwen" / "projects"
@@ -409,6 +411,7 @@ def write_skill_pack(
     pack_name: str,
     source_paths: list[Path],
     critical_rules: list[str] | None = None,
+    compact: bool = True,
 ) -> tuple[Path, str]:
     skill_pack_dir = runner_dir / SKILL_PACK_DIRNAME
     skill_pack_dir.mkdir(parents=True, exist_ok=True)
@@ -417,7 +420,11 @@ def write_skill_pack(
     sections: list[str] = [
         f"# {pack_name}",
         "",
-        "This is a compact local skill pack generated to reduce repeated static-context reads.",
+        (
+            "This is a compact local skill pack generated to reduce repeated static-context reads."
+            if compact
+            else "This is a full local skill pack generated without compression for maximum SVG execution fidelity."
+        ),
         "",
     ]
     if critical_rules:
@@ -434,7 +441,7 @@ def write_skill_pack(
                 f"## Source: {path.name}",
                 f"Path: {path}",
                 "",
-                build_compact_skill_excerpt(path),
+                build_compact_skill_excerpt(path) if compact else path.read_text(encoding="utf-8", errors="replace"),
                 "",
             ]
         )
@@ -998,6 +1005,8 @@ def load_request(request_path: Path) -> dict[str, Any]:
         raise RunnerError("model must be null or a string")
     if "review_model" in request and request["review_model"] is not None and not isinstance(request["review_model"], str):
         raise RunnerError("review_model must be null or a string")
+    if "spec_model" in request and request["spec_model"] is not None and not isinstance(request["spec_model"], str):
+        raise RunnerError("spec_model must be null or a string")
     if "notes_model" in request and request["notes_model"] is not None and not isinstance(request["notes_model"], str):
         raise RunnerError("notes_model must be null or a string")
     batch_mode = (request.get("batch_mode") or "parallel")
@@ -1014,6 +1023,11 @@ def load_request(request_path: Path) -> dict[str, Any]:
     request["parallel_batch_workers"] = parallel_batch_workers
     model = request.get("model")
     request["model"] = model.strip() if isinstance(model, str) and model.strip() else DEFAULT_QWEN_MODEL
+    spec_model = request.get("spec_model")
+    if isinstance(spec_model, str) and spec_model.strip():
+        request["spec_model"] = spec_model.strip()
+    else:
+        request["spec_model"] = request["model"]
     review_model = request.get("review_model")
     if isinstance(review_model, str) and review_model.strip():
         request["review_model"] = review_model.strip()
@@ -2656,17 +2670,29 @@ def direct_notes_max_tokens() -> int:
         return DIRECT_NOTES_MAX_TOKENS
 
 
-def strip_notes_model_output(text: str) -> str:
+def direct_spec_max_tokens() -> int:
+    raw = (os.getenv("PPT_API_QWEN_SPEC_MAX_TOKENS") or "").strip()
+    if not raw:
+        return DIRECT_SPEC_MAX_TOKENS
+    try:
+        return max(1, min(int(raw), 65536))
+    except ValueError:
+        return DIRECT_SPEC_MAX_TOKENS
+
+
+def strip_markdown_model_output(text: str, sentinel_prefix: str | None = None) -> str:
     stripped = (text or "").strip()
     fence_match = re.match(r"^```(?:markdown|md)?\s*\n(?P<body>.*)\n```$", stripped, re.DOTALL | re.IGNORECASE)
     if fence_match:
         stripped = fence_match.group("body").strip()
-    lines = [
-        line.rstrip()
-        for line in stripped.splitlines()
-        if not line.strip().startswith(NOTES_COMPLETION_SENTINEL_PREFIX)
-    ]
+    lines = [line.rstrip() for line in stripped.splitlines()]
+    if sentinel_prefix:
+        lines = [line for line in lines if not line.strip().startswith(sentinel_prefix)]
     return "\n".join(lines).strip() + "\n"
+
+
+def strip_notes_model_output(text: str) -> str:
+    return strip_markdown_model_output(text, NOTES_COMPLETION_SENTINEL_PREFIX)
 
 
 def notes_usage_from_response(payload: dict[str, Any], model: str) -> TurnUsageSummary:
@@ -2702,6 +2728,10 @@ def notes_usage_from_response(payload: dict[str, Any], model: str) -> TurnUsageS
     )
 
 
+def direct_chat_usage_from_response(payload: dict[str, Any], model: str) -> TurnUsageSummary:
+    return notes_usage_from_response(payload, model)
+
+
 def call_openai_compatible_chat(
     *,
     model: str,
@@ -2710,10 +2740,11 @@ def call_openai_compatible_chat(
     runner_dir: Path,
     artifact_prefix: str,
     turn_index: int,
+    timeout_seconds: int = DIRECT_NOTES_TIMEOUT_SECONDS,
 ) -> tuple[str, TurnUsageSummary, dict[str, Any]]:
     endpoint = resolve_openai_compatible_endpoint()
     if endpoint is None:
-        raise RunnerError("Direct notes API requires PPT_API_QWEN_API_KEY and PPT_API_QWEN_BASE_URL")
+        raise RunnerError("Direct API requires PPT_API_QWEN_API_KEY and PPT_API_QWEN_BASE_URL")
     api_key, url = endpoint
 
     request_payload = {
@@ -2737,28 +2768,28 @@ def call_openai_compatible_chat(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=DIRECT_NOTES_TIMEOUT_SECONDS) as response:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             response_text = response.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         error_text = exc.read().decode("utf-8", errors="replace")
-        raise RunnerError(f"Direct notes API HTTP {exc.code}: {error_text}") from exc
+        raise RunnerError(f"Direct API HTTP {exc.code}: {error_text}") from exc
     except urllib.error.URLError as exc:
-        raise RunnerError(f"Direct notes API request failed: {exc}") from exc
+        raise RunnerError(f"Direct API request failed: {exc}") from exc
 
     response_path = runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.response.json"
     response_path.write_text(response_text, encoding="utf-8")
     try:
         payload = json.loads(response_text)
     except json.JSONDecodeError as exc:
-        raise RunnerError(f"Direct notes API returned invalid JSON: {exc}") from exc
+        raise RunnerError(f"Direct API returned invalid JSON: {exc}") from exc
 
     choices = payload.get("choices")
     if not isinstance(choices, list) or not choices:
-        raise RunnerError("Direct notes API returned no choices")
+        raise RunnerError("Direct API returned no choices")
     message = choices[0].get("message") if isinstance(choices[0], dict) else None
     content = message.get("content") if isinstance(message, dict) else None
     if not isinstance(content, str) or not content.strip():
-        raise RunnerError("Direct notes API returned empty content")
+        raise RunnerError("Direct API returned empty content")
 
     usage = notes_usage_from_response(payload, model)
     (runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.assistant.txt").write_text(content, encoding="utf-8")
@@ -2836,6 +2867,172 @@ Source markdown:
     ]
 
 
+def build_direct_spec_messages(
+    *,
+    request: dict[str, Any],
+    project_path: Path,
+    imported_markdown_path: Path,
+    strategist_skill_pack_path: Path,
+    slide_plan_path: Path,
+    slide_digest_path: Path,
+    chart_reference_path: Path,
+    icon_reference_path: Path,
+    plan: list[SlidePlanEntry],
+    generation_errors: list[str] | None = None,
+    current_spec: str | None = None,
+) -> list[dict[str, str]]:
+    errors_block = ""
+    if generation_errors:
+        errors_block = "Current design_spec.md failed these checks:\n" + "\n".join(f"- {item}" for item in generation_errors)
+    current_spec_block = ""
+    if current_spec:
+        current_spec_block = f"\n\nExisting design_spec.md draft to repair:\n```markdown\n{current_spec}\n```"
+
+    user_content = f"""Generate `design_spec.md` directly as markdown.
+
+Hard output contract:
+- Return only the full contents of `design_spec.md`.
+- Do not wrap the output in a code fence.
+- Do not output explanations, summaries, file lists, or sentinel lines.
+- Follow the exact Design Spec template structure from `design_spec_reference.md` with sections I through XI.
+- Group content outline slides under `### Part N: ...` chapter headings.
+- Total page count must be exactly {len(plan)}.
+- Use free design, light theme only, no TOC page, no section header page.
+- Include cover and ending pages.
+- Lock icons to `{DEFAULT_ICON_LIBRARY}/...`; use only real icon names from the icon candidates.
+- Reference only real chart templates from the chart reference.
+- Do not use emoji in design_spec.md.
+- Stay faithful to source markdown and keep content density moderately high.
+
+Canvas format: {request["canvas_format"]}
+Project path: {project_path}
+
+{errors_block}
+
+Strategist skill pack:
+```markdown
+{strategist_skill_pack_path.read_text(encoding="utf-8", errors="replace")}
+```
+
+Slide plan:
+```json
+{slide_plan_path.read_text(encoding="utf-8", errors="replace")}
+```
+
+Slide content digest:
+```json
+{slide_digest_path.read_text(encoding="utf-8", errors="replace")}
+```
+
+Chart template reference:
+```json
+{chart_reference_path.read_text(encoding="utf-8", errors="replace")}
+```
+
+Icon candidates:
+```json
+{icon_reference_path.read_text(encoding="utf-8", errors="replace")}
+```
+
+Source markdown:
+```markdown
+{imported_markdown_path.read_text(encoding="utf-8", errors="replace")}
+```
+{current_spec_block}
+"""
+    return [
+        {
+            "role": "system",
+            "content": "You are a senior PPT strategist. You only return the requested markdown file content.",
+        },
+        {"role": "user", "content": user_content},
+    ]
+
+
+def execute_direct_spec_stage(
+    *,
+    request: dict[str, Any],
+    project_path: Path,
+    imported_markdown_path: Path,
+    strategist_skill_pack_path: Path,
+    slide_plan_path: Path,
+    slide_digest_path: Path,
+    chart_reference_path: Path,
+    icon_reference_path: Path,
+    plan: list[SlidePlanEntry],
+    valid_chart_keys: set[str],
+    model: str,
+    runner_dir: Path,
+    log_path: Path,
+) -> str | None:
+    stage_name = "spec_generation"
+    artifact_prefix = "spec_direct"
+    spec_path = project_path / "design_spec.md"
+    session_id = f"direct-{uuid.uuid4()}"
+    stage_turn_usages: list[TurnUsageSummary] = []
+    generation_errors: list[str] | None = None
+
+    for turn_index in range(1, 3):
+        messages = build_direct_spec_messages(
+            request=request,
+            project_path=project_path,
+            imported_markdown_path=imported_markdown_path,
+            strategist_skill_pack_path=strategist_skill_pack_path,
+            slide_plan_path=slide_plan_path,
+            slide_digest_path=slide_digest_path,
+            chart_reference_path=chart_reference_path,
+            icon_reference_path=icon_reference_path,
+            plan=plan,
+            generation_errors=generation_errors,
+            current_spec=spec_path.read_text(encoding="utf-8", errors="replace") if spec_path.exists() else None,
+        )
+        append_log(
+            log_path,
+            f"Starting direct spec turn {turn_index}: model={model} max_tokens={direct_spec_max_tokens()}",
+        )
+        try:
+            content, usage, _payload = call_openai_compatible_chat(
+                model=model,
+                messages=messages,
+                max_tokens=direct_spec_max_tokens(),
+                runner_dir=runner_dir,
+                artifact_prefix=artifact_prefix,
+                turn_index=turn_index,
+                timeout_seconds=DIRECT_SPEC_TIMEOUT_SECONDS,
+            )
+        except RunnerError as exc:
+            append_log(log_path, f"Direct spec turn {turn_index} failed: {exc}")
+            return None
+
+        stage_turn_usages.append(usage)
+        append_log(log_path, f"direct spec turn {turn_index} usage {format_usage_summary(usage)}")
+        update_usage_summary(
+            runner_dir,
+            stage_name=stage_name,
+            artifact_prefix=artifact_prefix,
+            turn_index=turn_index,
+            session_id=session_id,
+            usage=usage,
+        )
+
+        spec_path.write_text(strip_markdown_model_output(content, SPEC_COMPLETION_SENTINEL_PREFIX), encoding="utf-8")
+        repair_design_spec(project_path, valid_chart_keys, log_path=log_path, report_path=runner_dir / SPEC_REPAIR_REPORT_FILENAME)
+        state_complete, generation_errors = check_spec_state(project_path, plan, valid_chart_keys)
+        append_log(
+            log_path,
+            f"direct spec turn {turn_index}: state_complete={state_complete}; generation_errors={generation_errors}",
+        )
+        if state_complete:
+            append_log(
+                log_path,
+                f"{stage_name}: direct stage total usage {format_usage_summary(merge_turn_usage(stage_turn_usages))}",
+            )
+            append_log(log_path, f"{stage_name} completed successfully via direct API")
+            return session_id
+
+    return None
+
+
 def execute_direct_notes_stage(
     *,
     project_path: Path,
@@ -2879,6 +3076,7 @@ def execute_direct_notes_stage(
                 runner_dir=runner_dir,
                 artifact_prefix=artifact_prefix,
                 turn_index=turn_index,
+                timeout_seconds=DIRECT_NOTES_TIMEOUT_SECONDS,
             )
         except RunnerError as exc:
             append_log(log_path, f"Direct notes turn {turn_index} failed: {exc}")
@@ -3580,6 +3778,9 @@ def execute_generation(
             "canvas_format": request["canvas_format"],
             "rules": request["rules"],
             "model": request.get("model"),
+            "spec_model": request.get("spec_model"),
+            "spec_engine": "direct_api_v1",
+            "spec_max_tokens": direct_spec_max_tokens(),
             "notes_model": request.get("notes_model"),
             "notes_engine": "direct_api_v1",
             "notes_max_tokens": direct_notes_max_tokens(),
@@ -3617,24 +3818,42 @@ def execute_generation(
     if try_restore_spec_stage(spec_cache_dir, project_path, plan, valid_chart_keys, log_path):
         spec_session_id = "cache_hit"
     else:
-        spec_session_id = execute_qwen_stage(
-            stage_name="spec_generation",
-            artifact_prefix="spec",
-            initial_prompt=spec_prompt,
-            completion_sentinel_prefix=SPEC_COMPLETION_SENTINEL_PREFIX,
-            state_checker=lambda: check_spec_state(project_path, plan, valid_chart_keys),
-            continue_prompt_builder=lambda errors: build_spec_continue_prompt(
-                request,
-                project_path,
-                plan,
-                errors,
-                strategist_skill_pack_path,
-            ),
-            confirmation_prompt_builder=lambda _errors: build_spec_confirmation_prompt(plan, request),
-            model=request.get("model"),
+        spec_model = str(request.get("spec_model") or request.get("model"))
+        spec_session_id = execute_direct_spec_stage(
+            request=request,
+            project_path=project_path,
+            imported_markdown_path=imported_markdown_path,
+            strategist_skill_pack_path=strategist_skill_pack_path,
+            slide_plan_path=slide_plan_path,
+            slide_digest_path=slide_digest_path,
+            chart_reference_path=chart_reference_path,
+            icon_reference_path=icon_reference_path,
+            plan=plan,
+            valid_chart_keys=valid_chart_keys,
+            model=spec_model,
             runner_dir=runner_dir,
             log_path=log_path,
         )
+        if spec_session_id is None:
+            append_log(log_path, "Direct spec generation unavailable or invalid; falling back to Qwen CLI")
+            spec_session_id = execute_qwen_stage(
+                stage_name="spec_generation",
+                artifact_prefix="spec",
+                initial_prompt=spec_prompt,
+                completion_sentinel_prefix=SPEC_COMPLETION_SENTINEL_PREFIX,
+                state_checker=lambda: check_spec_state(project_path, plan, valid_chart_keys),
+                continue_prompt_builder=lambda errors: build_spec_continue_prompt(
+                    request,
+                    project_path,
+                    plan,
+                    errors,
+                    strategist_skill_pack_path,
+                ),
+                confirmation_prompt_builder=lambda _errors: build_spec_confirmation_prompt(plan, request),
+                model=spec_model,
+                runner_dir=runner_dir,
+                log_path=log_path,
+            )
         save_spec_stage(spec_cache_dir, project_path)
 
     spec_repair_report_path = runner_dir / SPEC_REPAIR_REPORT_FILENAME
@@ -3675,6 +3894,7 @@ def execute_generation(
             "Do not use pictographic Unicode characters in titles, labels, bullets, badges, captions, annotations, or decorative marks.",
             "If a bullet needs emphasis, use layout, color, weight, or a legal icon placeholder instead of emoji.",
         ],
+        compact=False,
     )
     skill_pack_index["executor"] = {"path": str(executor_skill_pack_path), "hash": executor_skill_pack_hash}
     write_json(runner_dir / "skill_pack_index.json", skill_pack_index)

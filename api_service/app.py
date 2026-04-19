@@ -110,6 +110,7 @@ def _process_request(request: NormalizedRequest) -> dict[str, object]:
             batch_mode=(request.batch_mode or settings.batch_mode),
             batch_size=(request.batch_size or settings.batch_size),
             parallel_batch_workers=(request.parallel_batch_workers or settings.parallel_batch_workers),
+            spec_model=request.spec_model,
             notes_model=request.notes_model,
         )
 
@@ -161,6 +162,7 @@ def _normalize_report_to_ppt_request(request: ReportRequest) -> NormalizedReques
         batch_mode=request.batchMode,
         batch_size=request.batchSize,
         parallel_batch_workers=request.parallelBatchWorkers,
+        spec_model=(request.specModel.strip() if isinstance(request.specModel, str) and request.specModel.strip() else None),
         notes_model=(request.notesModel.strip() if isinstance(request.notesModel, str) and request.notesModel.strip() else None),
     )
 
@@ -176,6 +178,7 @@ def _normalize_generate_ppt_request(request: GeneratePptRequest) -> NormalizedRe
         batch_mode=request.batchMode,
         batch_size=request.batchSize,
         parallel_batch_workers=request.parallelBatchWorkers,
+        spec_model=(request.specModel.strip() if isinstance(request.specModel, str) and request.specModel.strip() else None),
         notes_model=(request.notesModel.strip() if isinstance(request.notesModel, str) and request.notesModel.strip() else None),
     )
 

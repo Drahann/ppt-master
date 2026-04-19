@@ -58,6 +58,7 @@ def execute_runner(
     batch_mode: str | None = None,
     batch_size: int | None = None,
     parallel_batch_workers: int | None = None,
+    spec_model: str | None = None,
     notes_model: str | None = None,
 ) -> RunnerResult:
     job_id = build_job_id(report_id)
@@ -72,6 +73,9 @@ def execute_runner(
     }
     if settings.qwen_model:
         request_payload["model"] = settings.qwen_model
+    effective_spec_model = spec_model or settings.qwen_spec_model or settings.qwen_model
+    if effective_spec_model:
+        request_payload["spec_model"] = effective_spec_model
     if settings.qwen_review_model:
         request_payload["review_model"] = settings.qwen_review_model
     effective_notes_model = notes_model or settings.qwen_notes_model

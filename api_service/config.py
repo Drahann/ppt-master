@@ -30,6 +30,7 @@ class Settings:
     jobs_dir: Path
     keep_job_files: bool
     qwen_model: str | None
+    qwen_spec_model: str | None
     qwen_review_model: str | None
     qwen_notes_model: str | None
     batch_mode: str
@@ -63,6 +64,7 @@ def load_settings() -> Settings:
         jobs_dir=jobs_dir,
         keep_job_files=os.getenv("PPT_API_KEEP_JOB_FILES", "1").strip().lower() not in {"0", "false", "no"},
         qwen_model=(os.getenv("PPT_API_QWEN_MODEL") or "").strip() or None,
+        qwen_spec_model=(os.getenv("PPT_API_QWEN_SPEC_MODEL") or "").strip() or None,
         qwen_review_model=(os.getenv("PPT_API_QWEN_REVIEW_MODEL") or "").strip() or None,
         qwen_notes_model=(os.getenv("PPT_API_QWEN_NOTES_MODEL") or "").strip() or None,
         batch_mode=batch_mode,

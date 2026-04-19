@@ -5,8 +5,9 @@
   "canvas_format": "ppt169",
   "project_base_dir": "projects",
   "model": "qwen3.6-plus",
+  "spec_model": "qwen3.6-plus",
   "review_model": "qwen3-max",
-  "notes_model": "qwen-turbo",
+  "notes_model": "qwen3.5-flash",
   "batch_mode": "parallel",
   "batch_size": 5,
   "rules": {
