@@ -25,6 +25,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 try:
@@ -56,6 +57,7 @@ QWEN_CHAT_ROOT = Path.home() / ".qwen" / "projects"
 QWEN_DEBUG_ROOT = Path.home() / ".qwen" / "debug"
 RUNNER_DIRNAME = "runner"
 LOG_FILENAME = "runner.log"
+USAGE_SUMMARY_FILENAME = "usage_summary.json"
 SVG_QUALITY_REPORT_FILENAME = "svg_quality_report.txt"
 SVG_ANCHOR_CONTEXT_FILENAME = "svg_anchor_context.json"
 QWEN_PROJECT_GUIDE_PATH = REPO_ROOT / "QWEN.md"
@@ -94,6 +96,7 @@ QWEN_ALLOWED_TOOLS = (
     "write_file",
     "run_shell_command",
 )
+USAGE_SUMMARY_LOCK = Lock()
 
 DEFAULT_RULES: dict[str, Any] = {
     "template_mode": "free",
@@ -187,6 +190,7 @@ class QwenCallResult:
     returncode: int
     stdout: str
     stderr: str
+    usage: dict[str, Any] | None = None
 
 
 @dataclass
@@ -216,6 +220,23 @@ class MarkdownH2:
     title: str
     intro_lines: list[str]
     children: list[MarkdownH3]
+
+
+@dataclass
+class TurnUsageSummary:
+    api_calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_tokens: int = 0
+    thoughts_tokens: int = 0
+    total_tokens: int = 0
+    tool_tokens: int = 0
+    models: list[str] | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["models"] = sorted(set(self.models or []))
+        return payload
 
 
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -662,6 +683,234 @@ def append_log(log_path: Path, message: str) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8") as handle:
         handle.write(f"[{now_iso()}] {message}\n")
+
+
+def safe_int(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return parsed if parsed >= 0 else 0
+
+
+def count_file_lines(path: Path | None) -> int:
+    if path is None or not path.exists():
+        return 0
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        return sum(1 for _ in handle)
+
+
+def read_chat_records_after_line(chat_path: Path | None, start_line: int) -> list[dict[str, Any]]:
+    if chat_path is None or not chat_path.exists():
+        return []
+
+    records: list[dict[str, Any]] = []
+    with chat_path.open("r", encoding="utf-8", errors="replace") as handle:
+        for index, line in enumerate(handle, start=1):
+            if index <= start_line:
+                continue
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(record, dict):
+                records.append(record)
+    return records
+
+
+def merge_turn_usage(summaries: list[TurnUsageSummary]) -> TurnUsageSummary | None:
+    if not summaries:
+        return None
+
+    merged = TurnUsageSummary(models=[])
+    for summary in summaries:
+        merged.api_calls += summary.api_calls
+        merged.prompt_tokens += summary.prompt_tokens
+        merged.completion_tokens += summary.completion_tokens
+        merged.cached_tokens += summary.cached_tokens
+        merged.thoughts_tokens += summary.thoughts_tokens
+        merged.total_tokens += summary.total_tokens
+        merged.tool_tokens += summary.tool_tokens
+        merged.models.extend(summary.models or [])
+    merged.models = sorted(set(merged.models))
+    return merged
+
+
+def summarize_usage_from_records(session_id: str, records: list[dict[str, Any]]) -> TurnUsageSummary | None:
+    summaries: list[TurnUsageSummary] = []
+    for record in records:
+        if record.get("sessionId") != session_id:
+            continue
+        if record.get("type") != "system":
+            continue
+        if record.get("subtype") != "ui_telemetry":
+            continue
+
+        payload = ((record.get("systemPayload") or {}).get("uiEvent") or {})
+        if payload.get("event.name") != "qwen-code.api_response":
+            continue
+
+        summary = TurnUsageSummary(
+            api_calls=1,
+            prompt_tokens=safe_int(payload.get("input_token_count")),
+            completion_tokens=safe_int(payload.get("output_token_count")),
+            cached_tokens=safe_int(payload.get("cached_content_token_count")),
+            thoughts_tokens=safe_int(payload.get("thoughts_token_count")),
+            total_tokens=safe_int(payload.get("total_token_count")),
+            tool_tokens=safe_int(payload.get("tool_token_count")),
+            models=[str(payload.get("model"))] if payload.get("model") else [],
+        )
+        summaries.append(summary)
+    return merge_turn_usage(summaries)
+
+
+def format_usage_summary(summary: TurnUsageSummary | None) -> str:
+    if summary is None:
+        return "usage unavailable"
+
+    models = ",".join(summary.models or []) or "unknown"
+    return (
+        f"api_calls={summary.api_calls} "
+        f"prompt={summary.prompt_tokens} "
+        f"completion={summary.completion_tokens} "
+        f"cached={summary.cached_tokens} "
+        f"thoughts={summary.thoughts_tokens} "
+        f"tool={summary.tool_tokens} "
+        f"total={summary.total_tokens} "
+        f"models={models}"
+    )
+
+
+def update_usage_summary(
+    runner_dir: Path,
+    *,
+    stage_name: str,
+    artifact_prefix: str,
+    turn_index: int,
+    session_id: str,
+    usage: TurnUsageSummary | None,
+) -> None:
+    usage_path = runner_dir / USAGE_SUMMARY_FILENAME
+    turn_payload = {
+        "stage_name": stage_name,
+        "artifact_prefix": artifact_prefix,
+        "turn_index": turn_index,
+        "session_id": session_id,
+        "usage": usage.to_json() if usage else None,
+    }
+
+    with USAGE_SUMMARY_LOCK:
+        payload: dict[str, Any]
+        if usage_path.exists():
+            try:
+                payload = json.loads(usage_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                payload = {}
+        else:
+            payload = {}
+
+        turns = payload.get("turns")
+        if not isinstance(turns, list):
+            turns = []
+        turns = [
+            item
+            for item in turns
+            if not (
+                isinstance(item, dict)
+                and item.get("stage_name") == stage_name
+                and item.get("artifact_prefix") == artifact_prefix
+                and item.get("turn_index") == turn_index
+                and item.get("session_id") == session_id
+            )
+        ]
+        turns.append(turn_payload)
+        turns.sort(
+            key=lambda item: (
+                str(item.get("stage_name", "")),
+                str(item.get("artifact_prefix", "")),
+                safe_int(item.get("turn_index")),
+            )
+        )
+
+        stage_totals: dict[str, TurnUsageSummary] = {}
+        overall = TurnUsageSummary(models=[])
+        for item in turns:
+            usage_payload = item.get("usage")
+            if not isinstance(usage_payload, dict):
+                continue
+            summary = TurnUsageSummary(
+                api_calls=safe_int(usage_payload.get("api_calls")),
+                prompt_tokens=safe_int(usage_payload.get("prompt_tokens")),
+                completion_tokens=safe_int(usage_payload.get("completion_tokens")),
+                cached_tokens=safe_int(usage_payload.get("cached_tokens")),
+                thoughts_tokens=safe_int(usage_payload.get("thoughts_tokens")),
+                total_tokens=safe_int(usage_payload.get("total_tokens")),
+                tool_tokens=safe_int(usage_payload.get("tool_tokens")),
+                models=list(usage_payload.get("models") or []),
+            )
+            stage_key = str(item.get("stage_name") or "unknown")
+            current = stage_totals.get(stage_key)
+            if current is None:
+                current = TurnUsageSummary(models=[])
+                stage_totals[stage_key] = current
+            current.api_calls += summary.api_calls
+            current.prompt_tokens += summary.prompt_tokens
+            current.completion_tokens += summary.completion_tokens
+            current.cached_tokens += summary.cached_tokens
+            current.thoughts_tokens += summary.thoughts_tokens
+            current.total_tokens += summary.total_tokens
+            current.tool_tokens += summary.tool_tokens
+            current.models.extend(summary.models or [])
+
+            overall.api_calls += summary.api_calls
+            overall.prompt_tokens += summary.prompt_tokens
+            overall.completion_tokens += summary.completion_tokens
+            overall.cached_tokens += summary.cached_tokens
+            overall.thoughts_tokens += summary.thoughts_tokens
+            overall.total_tokens += summary.total_tokens
+            overall.tool_tokens += summary.tool_tokens
+            overall.models.extend(summary.models or [])
+
+        payload["turns"] = turns
+        payload["stage_totals"] = {
+            key: value.to_json()
+            for key, value in sorted(stage_totals.items(), key=lambda item: item[0])
+        }
+        payload["overall"] = overall.to_json()
+        write_json(usage_path, payload)
+
+
+def log_usage_overall(runner_dir: Path, log_path: Path) -> None:
+    usage_path = runner_dir / USAGE_SUMMARY_FILENAME
+    if not usage_path.exists():
+        append_log(log_path, "Overall usage summary unavailable")
+        return
+
+    try:
+        payload = json.loads(usage_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        append_log(log_path, f"Overall usage summary unreadable: {usage_path}")
+        return
+
+    overall_payload = payload.get("overall")
+    if not isinstance(overall_payload, dict):
+        append_log(log_path, f"Overall usage summary missing totals: {usage_path}")
+        return
+
+    summary = TurnUsageSummary(
+        api_calls=safe_int(overall_payload.get("api_calls")),
+        prompt_tokens=safe_int(overall_payload.get("prompt_tokens")),
+        completion_tokens=safe_int(overall_payload.get("completion_tokens")),
+        cached_tokens=safe_int(overall_payload.get("cached_tokens")),
+        thoughts_tokens=safe_int(overall_payload.get("thoughts_tokens")),
+        total_tokens=safe_int(overall_payload.get("total_tokens")),
+        tool_tokens=safe_int(overall_payload.get("tool_tokens")),
+        models=list(overall_payload.get("models") or []),
+    )
+    append_log(log_path, f"Overall usage summary {format_usage_summary(summary)}")
 
 
 def resolve_qwen_launcher() -> list[str]:
@@ -2212,6 +2461,7 @@ def execute_qwen_stage(
     turn_index = 1
     resume = False
     next_prompt = initial_prompt
+    stage_turn_usages: list[TurnUsageSummary] = []
 
     while True:
         result = run_qwen_prompt(
@@ -2224,6 +2474,32 @@ def execute_qwen_stage(
             runner_dir=runner_dir,
             log_path=log_path,
             artifact_prefix=artifact_prefix,
+        )
+        turn_usage = None
+        if isinstance(result.usage, dict):
+            turn_usage = TurnUsageSummary(
+                api_calls=safe_int(result.usage.get("api_calls")),
+                prompt_tokens=safe_int(result.usage.get("prompt_tokens")),
+                completion_tokens=safe_int(result.usage.get("completion_tokens")),
+                cached_tokens=safe_int(result.usage.get("cached_tokens")),
+                thoughts_tokens=safe_int(result.usage.get("thoughts_tokens")),
+                total_tokens=safe_int(result.usage.get("total_tokens")),
+                tool_tokens=safe_int(result.usage.get("tool_tokens")),
+                models=list(result.usage.get("models") or []),
+            )
+        if turn_usage is not None:
+            stage_turn_usages.append(turn_usage)
+        append_log(
+            log_path,
+            f"{stage_name}: turn {turn_index} usage {format_usage_summary(turn_usage)}",
+        )
+        update_usage_summary(
+            runner_dir,
+            stage_name=stage_name,
+            artifact_prefix=artifact_prefix,
+            turn_index=turn_index,
+            session_id=session_id,
+            usage=turn_usage,
         )
 
         chat_path = wait_for_chat_recording_path(session_id)
@@ -2267,6 +2543,10 @@ def execute_qwen_stage(
             )
 
         if classification == "complete" and state_complete:
+            append_log(
+                log_path,
+                f"{stage_name}: stage total usage {format_usage_summary(merge_turn_usage(stage_turn_usages))}",
+            )
             append_log(log_path, f"{stage_name} completed successfully")
             return session_id
 
@@ -2316,6 +2596,8 @@ def run_qwen_prompt(
 ) -> QwenCallResult:
     command = resolve_qwen_launcher()
     command.extend(resolve_qwen_cli_auth_args())
+    existing_chat_path = find_chat_recording_path(session_id)
+    existing_chat_line_count = count_file_lines(existing_chat_path)
     if resume:
         command.extend(["--resume", session_id])
     else:
@@ -2348,14 +2630,26 @@ def run_qwen_prompt(
         completed.stderr,
         encoding="utf-8",
     )
+    chat_path = wait_for_chat_recording_path(session_id)
+    usage_summary = summarize_usage_from_records(
+        session_id,
+        read_chat_records_after_line(chat_path, existing_chat_line_count),
+    )
+    usage_payload = usage_summary.to_json() if usage_summary else None
+    if usage_payload is not None:
+        write_json(
+            runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.usage.json",
+            usage_payload,
+        )
     append_log(
         log_path,
-        f"Finished qwen turn {turn_index} with rc={completed.returncode}; stdout={len(completed.stdout)} chars stderr={len(completed.stderr)} chars",
+        f"Finished qwen turn {turn_index} with rc={completed.returncode}; stdout={len(completed.stdout)} chars stderr={len(completed.stderr)} chars; {format_usage_summary(usage_summary)}",
     )
     return QwenCallResult(
         returncode=completed.returncode,
         stdout=completed.stdout,
         stderr=completed.stderr,
+        usage=usage_payload,
     )
 
 
@@ -3196,6 +3490,7 @@ def execute_generation(
             "notes_session_id": notes_session_id,
         },
     )
+    log_usage_overall(runner_dir, log_path)
     return notes_session_id
 
 
