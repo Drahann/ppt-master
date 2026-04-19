@@ -170,13 +170,13 @@
 ### Source
 
 - **Built-in icon library**: `templates/icons/` (6700+ icons across three libraries)
-- **Usage method**: Placeholder format `{{icon:category/icon-name}}`
+- **Usage method**: In `design_spec.md`, list raw icon paths in backticks, e.g. `chunk/video-camera`. SVG files later use `<use data-icon="chunk/video-camera" .../>`; do not use `{{icon:...}}` in this table.
 
 ### Recommended Icon List (fill as needed)
 
 | Purpose | Icon Path | Page |
 | ------- | --------- | ---- |
-| [example] | `{{icon:interface/check-circle}}` | Slide XX |
+| [example] | `chunk/check-circle` | Slide XX |
 
 ---
 

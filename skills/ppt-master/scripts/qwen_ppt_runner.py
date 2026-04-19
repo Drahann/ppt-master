@@ -1482,6 +1482,34 @@ def find_invalid_icon_refs(text: str, available_icons: set[str]) -> list[str]:
     return invalid
 
 
+def normalize_design_spec_icon_inventory(text: str) -> tuple[str, list[dict[str, str]]]:
+    section = extract_markdown_section(
+        text,
+        "## VI. Icon Usage",
+        "## VII. Visualization Reference List",
+    )
+    if not section:
+        return text, []
+
+    icon_placeholder_pattern = re.compile(
+        r"`\{\{icon:((?:chunk|tabler-filled|tabler-outline)/[a-z0-9-]+)\}\}`"
+    )
+    fixes: list[dict[str, str]] = []
+
+    def replace_placeholder(match: re.Match[str]) -> str:
+        original = match.group(0)
+        icon_ref = match.group(1)
+        replacement = f"`{icon_ref}`"
+        fixes.append({"invalid": original, "replacement": replacement})
+        return replacement
+
+    updated_section = icon_placeholder_pattern.sub(replace_placeholder, section)
+    if updated_section == section:
+        return text, []
+
+    return text.replace(section, updated_section, 1), fixes
+
+
 def score_icon_candidate(icon_name: str, invalid_name: str) -> tuple[int, int, str]:
     invalid_tokens = set(invalid_name.split("-"))
     candidate_tokens = set(icon_name.split("-"))
@@ -1662,6 +1690,7 @@ def repair_design_spec(
         "status": "missing_design_spec",
         "design_spec_path": str(design_spec_path),
         "icon_fixes": [],
+        "icon_format_fixes": [],
         "chart_fixes": [],
     }
     if not design_spec_path.exists():
@@ -1684,6 +1713,8 @@ def repair_design_spec(
         )
         updated = updated.replace(invalid_ref, replacement)
         icon_fixes.append({"invalid": invalid_ref, "replacement": replacement})
+
+    updated, icon_format_fixes = normalize_design_spec_icon_inventory(updated)
 
     section_header = "## VII. Visualization Reference List"
     next_header = "## VIII. Image Resource List"
@@ -1714,6 +1745,8 @@ def repair_design_spec(
         if log_path is not None:
             if icon_fixes:
                 append_log(log_path, f"Spec repair: fixed icon refs {icon_fixes}")
+            if icon_format_fixes:
+                append_log(log_path, f"Spec repair: normalized icon inventory format {icon_format_fixes}")
             if chart_fixes:
                 append_log(log_path, f"Spec repair: fixed chart refs {chart_fixes}")
     elif log_path is not None:
@@ -1723,6 +1756,7 @@ def repair_design_spec(
         "status": "repaired" if updated != content else "clean",
         "design_spec_path": str(design_spec_path),
         "icon_fixes": icon_fixes,
+        "icon_format_fixes": icon_format_fixes,
         "chart_fixes": chart_fixes,
     }
     if report_path is not None:
@@ -2151,6 +2185,7 @@ Hard constraints:
 - Do not use emoji as visual bullets, markers, or pseudo-icons. Use only the locked icon library and normal SVG shapes.
 - Use only icon names that actually exist in `{DEFAULT_ICON_LIBRARY}`.
 - Content pages must include 1-3 semantic `data-icon="{DEFAULT_ICON_LIBRARY}/..."` placeholders by default. Only skip icons on a content page if that page is dominated by one primary chart or image.
+- In `design_spec.md` section VI Recommended Icon List, the `Icon Path` cell must be a raw backticked path like `{DEFAULT_ICON_LIBRARY}/video-camera`; do not use `{{{{icon:{DEFAULT_ICON_LIBRARY}/video-camera}}}}` there.
 - Do not invent new chart or icon names outside the reference files unless the real template catalog clearly requires a justified override.
 - Keep the downstream SVG execution anchor-friendly: do not invent page-specific header/footer coordinate systems that would break a fixed top bar, title zone, icon zone, or footer zone across the deck.
 - Follow the exact Design Spec template structure from `design_spec_reference.md` with sections I through XI.
@@ -2900,6 +2935,7 @@ Hard output contract:
 - Use free design, light theme only, no TOC page, no section header page.
 - Include cover and ending pages.
 - Lock icons to `{DEFAULT_ICON_LIBRARY}/...`; use only real icon names from the icon candidates.
+- In section VI Recommended Icon List, write icon table cells as raw backticked paths like `{DEFAULT_ICON_LIBRARY}/video-camera`; do not use `{{{{icon:{DEFAULT_ICON_LIBRARY}/video-camera}}}}`.
 - Reference only real chart templates from the chart reference.
 - Do not use emoji in design_spec.md.
 - Stay faithful to source markdown and keep content density moderately high.

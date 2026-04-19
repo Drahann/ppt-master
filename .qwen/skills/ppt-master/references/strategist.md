@@ -129,7 +129,7 @@ Built-in library contains 6700+ icons across three libraries:
 > 2. Search for icon availability: `ls skills/ppt-master/templates/icons/<chosen-library>/ | grep <keyword>`
 > 3. Use the verified filename (without `.svg`) as the icon name
 > 4. Always include the library prefix (e.g., `chunk/home` or `tabler-filled/home`)
-> 5. List the final icon inventory and chosen library in the Design Spec; Executor may only use icons from this list
+> 5. List the final icon inventory and chosen library in the Design Spec; `Icon Path` cells must be raw backticked paths such as `chunk/home`, not `{{icon:chunk/home}}`. Executor may only use icons from this list.
 >
 > **Do NOT preload any index file** — use `ls | grep` to search on demand with zero token cost.
 
