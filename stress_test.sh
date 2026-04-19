@@ -101,7 +101,7 @@ payload['title'] = '压测任务 $i'
 payload['batchMode'] = 'parallel'
 payload['batchSize'] = 5
 payload['parallelBatchWorkers'] = 7
-payload['notesModel'] = 'qwen-turbo'
+payload['notesModel'] = 'qwen3.5-flash'
 with open('$PAYLOAD_FILE', 'w', encoding='utf-8') as out:
     json.dump(payload, out, ensure_ascii=False)
 "

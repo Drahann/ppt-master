@@ -17,6 +17,8 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -50,7 +52,9 @@ DEFAULT_QWEN_MODEL = "qwen3.6-plus"
 DEFAULT_REVIEW_MODEL = "qwen3.6-plus"
 DEFAULT_MAX_FOLLOW_UPS = 8
 QWEN_CALL_TIMEOUT_SECONDS = 60 * 60
-CACHE_SCHEMA_VERSION = "2026-04-19-cost-save-v1"
+DIRECT_NOTES_TIMEOUT_SECONDS = 10 * 60
+DIRECT_NOTES_MAX_TOKENS = 12000
+CACHE_SCHEMA_VERSION = "2026-04-19-direct-notes-v2"
 STAGE_CACHE_DIRNAME = ".runner-stage-cache"
 SKILL_PACK_DIRNAME = "skill_packs"
 QWEN_CHAT_ROOT = Path.home() / ".qwen" / "projects"
@@ -951,6 +955,14 @@ def resolve_qwen_cli_auth_args() -> list[str]:
         raise RunnerError("PPT_API_QWEN_AUTH_TYPE=openai requires PPT_API_QWEN_API_KEY to be set")
 
     return args
+
+
+def resolve_openai_compatible_endpoint() -> tuple[str, str] | None:
+    api_key = (os.getenv("PPT_API_QWEN_API_KEY") or "").strip()
+    base_url = (os.getenv("PPT_API_QWEN_BASE_URL") or "").strip()
+    if not api_key or not base_url:
+        return None
+    return api_key, base_url.rstrip("/") + "/chat/completions"
 
 
 def redact_sensitive_command_parts(parts: list[str]) -> list[str]:
@@ -2634,6 +2646,272 @@ When notes are complete, print exactly one line:
 """
 
 
+def direct_notes_max_tokens() -> int:
+    raw = (os.getenv("PPT_API_QWEN_NOTES_MAX_TOKENS") or "").strip()
+    if not raw:
+        return DIRECT_NOTES_MAX_TOKENS
+    try:
+        return max(1, min(int(raw), 16384))
+    except ValueError:
+        return DIRECT_NOTES_MAX_TOKENS
+
+
+def strip_notes_model_output(text: str) -> str:
+    stripped = (text or "").strip()
+    fence_match = re.match(r"^```(?:markdown|md)?\s*\n(?P<body>.*)\n```$", stripped, re.DOTALL | re.IGNORECASE)
+    if fence_match:
+        stripped = fence_match.group("body").strip()
+    lines = [
+        line.rstrip()
+        for line in stripped.splitlines()
+        if not line.strip().startswith(NOTES_COMPLETION_SENTINEL_PREFIX)
+    ]
+    return "\n".join(lines).strip() + "\n"
+
+
+def notes_usage_from_response(payload: dict[str, Any], model: str) -> TurnUsageSummary:
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    prompt_tokens = safe_int(usage.get("prompt_tokens") or usage.get("input_tokens"))
+    completion_tokens = safe_int(usage.get("completion_tokens") or usage.get("output_tokens"))
+    total_tokens = safe_int(usage.get("total_tokens")) or prompt_tokens + completion_tokens
+
+    cached_tokens = safe_int(usage.get("cached_tokens"))
+    for details_key in ("prompt_tokens_details", "input_tokens_details"):
+        details = usage.get(details_key)
+        if isinstance(details, dict):
+            cached_tokens = max(cached_tokens, safe_int(details.get("cached_tokens")))
+
+    thoughts_tokens = safe_int(usage.get("thoughts_tokens"))
+    for details_key in ("completion_tokens_details", "output_tokens_details"):
+        details = usage.get(details_key)
+        if isinstance(details, dict):
+            thoughts_tokens = max(
+                thoughts_tokens,
+                safe_int(details.get("reasoning_tokens") or details.get("thoughts_tokens")),
+            )
+
+    return TurnUsageSummary(
+        api_calls=1,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cached_tokens=cached_tokens,
+        thoughts_tokens=thoughts_tokens,
+        total_tokens=total_tokens,
+        tool_tokens=0,
+        models=[model],
+    )
+
+
+def call_openai_compatible_chat(
+    *,
+    model: str,
+    messages: list[dict[str, str]],
+    max_tokens: int,
+    runner_dir: Path,
+    artifact_prefix: str,
+    turn_index: int,
+) -> tuple[str, TurnUsageSummary, dict[str, Any]]:
+    endpoint = resolve_openai_compatible_endpoint()
+    if endpoint is None:
+        raise RunnerError("Direct notes API requires PPT_API_QWEN_API_KEY and PPT_API_QWEN_BASE_URL")
+    api_key, url = endpoint
+
+    request_payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": max_tokens,
+    }
+    request_path = runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.request.json"
+    safe_payload = dict(request_payload)
+    request_path.write_text(json.dumps(safe_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    encoded = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=encoded,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=DIRECT_NOTES_TIMEOUT_SECONDS) as response:
+            response_text = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        error_text = exc.read().decode("utf-8", errors="replace")
+        raise RunnerError(f"Direct notes API HTTP {exc.code}: {error_text}") from exc
+    except urllib.error.URLError as exc:
+        raise RunnerError(f"Direct notes API request failed: {exc}") from exc
+
+    response_path = runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.response.json"
+    response_path.write_text(response_text, encoding="utf-8")
+    try:
+        payload = json.loads(response_text)
+    except json.JSONDecodeError as exc:
+        raise RunnerError(f"Direct notes API returned invalid JSON: {exc}") from exc
+
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise RunnerError("Direct notes API returned no choices")
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, str) or not content.strip():
+        raise RunnerError("Direct notes API returned empty content")
+
+    usage = notes_usage_from_response(payload, model)
+    (runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.assistant.txt").write_text(content, encoding="utf-8")
+    return content, usage, payload
+
+
+def build_direct_notes_messages(
+    *,
+    project_path: Path,
+    imported_markdown_path: Path,
+    slide_plan_path: Path,
+    svg_anchor_context_path: Path,
+    notes_skill_pack_path: Path,
+    plan: list[SlidePlanEntry],
+    generation_errors: list[str] | None = None,
+    current_notes: str | None = None,
+) -> list[dict[str, str]]:
+    errors_block = ""
+    if generation_errors:
+        errors_block = "Current notes failed these checks:\n" + "\n".join(f"- {item}" for item in generation_errors)
+    current_notes_block = ""
+    if current_notes:
+        current_notes_block = f"\n\nExisting notes draft to repair:\n```markdown\n{current_notes}\n```"
+
+    exact_headings = "\n".join(f"- {entry.note_heading}" for entry in plan)
+    user_content = f"""Generate speaker notes directly as markdown.
+
+Hard output contract:
+- Return only the full contents of `notes/total.md`.
+- Do not wrap the output in a code fence.
+- Do not output explanations, summaries, file lists, or sentinel lines.
+- Create exactly {len(plan)} H1 sections.
+- Each H1 must be exactly `# <svg_stem>` and must appear in the exact order listed below.
+- Do not create extra headings outside this list.
+- Use the source markdown and design spec as narrative context, but keep the notes concise and presentation-ready.
+- Each slide should have 2-5 short paragraphs or bullets suitable for speaker delivery.
+
+Exact H1 heading order:
+{exact_headings}
+
+{errors_block}
+
+Notes skill pack:
+```markdown
+{notes_skill_pack_path.read_text(encoding="utf-8", errors="replace")}
+```
+
+Slide plan:
+```json
+{slide_plan_path.read_text(encoding="utf-8", errors="replace")}
+```
+
+SVG anchor context:
+```json
+{svg_anchor_context_path.read_text(encoding="utf-8", errors="replace")}
+```
+
+Design spec:
+```markdown
+{(project_path / "design_spec.md").read_text(encoding="utf-8", errors="replace")}
+```
+
+Source markdown:
+```markdown
+{imported_markdown_path.read_text(encoding="utf-8", errors="replace")}
+```
+{current_notes_block}
+"""
+    return [
+        {
+            "role": "system",
+            "content": "You generate concise PPT speaker notes. You only return the markdown file content requested by the user.",
+        },
+        {"role": "user", "content": user_content},
+    ]
+
+
+def execute_direct_notes_stage(
+    *,
+    project_path: Path,
+    imported_markdown_path: Path,
+    slide_plan_path: Path,
+    svg_anchor_context_path: Path,
+    notes_skill_pack_path: Path,
+    plan: list[SlidePlanEntry],
+    model: str,
+    runner_dir: Path,
+    log_path: Path,
+) -> str | None:
+    stage_name = "notes_generation"
+    artifact_prefix = "notes_direct"
+    notes_path = project_path / "notes" / "total.md"
+    notes_path.parent.mkdir(parents=True, exist_ok=True)
+    session_id = f"direct-{uuid.uuid4()}"
+    stage_turn_usages: list[TurnUsageSummary] = []
+    generation_errors: list[str] | None = None
+
+    for turn_index in range(1, 3):
+        messages = build_direct_notes_messages(
+            project_path=project_path,
+            imported_markdown_path=imported_markdown_path,
+            slide_plan_path=slide_plan_path,
+            svg_anchor_context_path=svg_anchor_context_path,
+            notes_skill_pack_path=notes_skill_pack_path,
+            plan=plan,
+            generation_errors=generation_errors,
+            current_notes=notes_path.read_text(encoding="utf-8", errors="replace") if notes_path.exists() else None,
+        )
+        append_log(
+            log_path,
+            f"Starting direct notes turn {turn_index}: model={model} max_tokens={direct_notes_max_tokens()}",
+        )
+        try:
+            content, usage, _payload = call_openai_compatible_chat(
+                model=model,
+                messages=messages,
+                max_tokens=direct_notes_max_tokens(),
+                runner_dir=runner_dir,
+                artifact_prefix=artifact_prefix,
+                turn_index=turn_index,
+            )
+        except RunnerError as exc:
+            append_log(log_path, f"Direct notes turn {turn_index} failed: {exc}")
+            return None
+
+        stage_turn_usages.append(usage)
+        append_log(log_path, f"direct notes turn {turn_index} usage {format_usage_summary(usage)}")
+        update_usage_summary(
+            runner_dir,
+            stage_name=stage_name,
+            artifact_prefix=artifact_prefix,
+            turn_index=turn_index,
+            session_id=session_id,
+            usage=usage,
+        )
+
+        notes_path.write_text(strip_notes_model_output(content), encoding="utf-8")
+        state_complete, generation_errors = check_notes_state(project_path, plan)
+        append_log(
+            log_path,
+            f"direct notes turn {turn_index}: state_complete={state_complete}; generation_errors={generation_errors}",
+        )
+        if state_complete:
+            append_log(
+                log_path,
+                f"{stage_name}: direct stage total usage {format_usage_summary(merge_turn_usage(stage_turn_usages))}",
+            )
+            append_log(log_path, f"{stage_name} completed successfully via direct API")
+            return session_id
+
+    return None
+
+
 def execute_qwen_stage(
     *,
     stage_name: str,
@@ -3303,6 +3581,8 @@ def execute_generation(
             "rules": request["rules"],
             "model": request.get("model"),
             "notes_model": request.get("notes_model"),
+            "notes_engine": "direct_api_v1",
+            "notes_max_tokens": direct_notes_max_tokens(),
             "batch_mode": request.get("batch_mode"),
             "batch_size": request.get("batch_size"),
             "parallel_batch_workers": request.get("parallel_batch_workers"),
@@ -3544,18 +3824,32 @@ def execute_generation(
     if try_restore_notes_stage(notes_cache_dir, project_path, plan, log_path):
         notes_session_id = "cache_hit"
     else:
-        notes_session_id = execute_qwen_stage(
-            stage_name="notes_generation",
-            artifact_prefix="notes",
-            initial_prompt=notes_prompt,
-            completion_sentinel_prefix=NOTES_COMPLETION_SENTINEL_PREFIX,
-            state_checker=lambda: check_notes_state(project_path, plan),
-            continue_prompt_builder=lambda errors: build_notes_continue_prompt(project_path, plan, errors),
-            confirmation_prompt_builder=lambda errors: build_notes_continue_prompt(project_path, plan, errors),
-            model=request.get("notes_model") or request.get("model"),
+        notes_model = str(request.get("notes_model") or request.get("model"))
+        notes_session_id = execute_direct_notes_stage(
+            project_path=project_path,
+            imported_markdown_path=imported_markdown_path,
+            slide_plan_path=slide_plan_path,
+            svg_anchor_context_path=svg_anchor_context_path,
+            notes_skill_pack_path=notes_skill_pack_path,
+            plan=plan,
+            model=notes_model,
             runner_dir=runner_dir,
             log_path=log_path,
         )
+        if notes_session_id is None:
+            append_log(log_path, "Direct notes generation unavailable or invalid; falling back to Qwen CLI")
+            notes_session_id = execute_qwen_stage(
+                stage_name="notes_generation",
+                artifact_prefix="notes",
+                initial_prompt=notes_prompt,
+                completion_sentinel_prefix=NOTES_COMPLETION_SENTINEL_PREFIX,
+                state_checker=lambda: check_notes_state(project_path, plan),
+                continue_prompt_builder=lambda errors: build_notes_continue_prompt(project_path, plan, errors),
+                confirmation_prompt_builder=lambda errors: build_notes_continue_prompt(project_path, plan, errors),
+                model=notes_model,
+                runner_dir=runner_dir,
+                log_path=log_path,
+            )
         save_notes_stage(notes_cache_dir, project_path)
 
     append_log(log_path, "Running deterministic SVG quality check (no AI review)")
