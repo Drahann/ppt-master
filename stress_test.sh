@@ -20,6 +20,7 @@ PARALLEL_BATCH_WORKERS=${PARALLEL_BATCH_WORKERS:-3}
 BATCH_PARTITION=${BATCH_PARTITION:-ramp_2_3_4_5_6_7_8}
 SPEC_MODEL=${SPEC_MODEL:-qwen3.6-plus}
 NOTES_MODEL=${NOTES_MODEL:-qwen3.5-flash}
+STAGGER_SECONDS=${STAGGER_SECONDS:-0}
 
 echo "╔══════════════════════════════════════════════════╗"
 echo "║       PPT Master 并发压力测试                     ║"
@@ -148,6 +149,9 @@ with open('$PAYLOAD_FILE', 'w', encoding='utf-8') as out:
     
     PIDS+=($!)
     echo "  → Task $i 已启动 (PID: ${PIDS[-1]}, report_id: $REPORT_ID)"
+    if [ "$STAGGER_SECONDS" != "0" ] && [ "$i" -lt "$CONCURRENCY" ]; then
+        sleep "$STAGGER_SECONDS"
+    fi
 done
 
 echo ""

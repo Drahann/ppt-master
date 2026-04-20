@@ -82,7 +82,7 @@ def load_settings() -> Settings:
         batch_partition=batch_partition,
         llm_slot_dir=Path(os.getenv("PPT_API_LLM_SLOT_DIR", str(REPO_ROOT / "tmp" / "llm-slots"))).expanduser(),
         llm_spec_slots=max(1, _env_int("PPT_API_LLM_SPEC_SLOTS", 4)),
-        llm_svg_slots=max(1, _env_int("PPT_API_LLM_SVG_SLOTS", 45)),
+        llm_svg_slots=max(1, _env_int("PPT_API_LLM_SVG_SLOTS", 10)),
         llm_notes_slots=max(1, _env_int("PPT_API_LLM_NOTES_SLOTS", 8)),
         postprocess_slots=max(1, _env_int("PPT_API_POSTPROCESS_SLOTS", 4)),
         cos_secret_id=os.getenv("COS_SECRET_ID", "").strip(),

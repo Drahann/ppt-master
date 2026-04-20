@@ -99,13 +99,14 @@ DEFAULT_BATCH_PARTITION = "ramp_2_3_4_5_6_7_8"
 RAMP_BATCH_SIZES = (2, 3, 4, 5, 6, 7, 8)
 DEFAULT_LLM_SLOT_LIMITS = {
     "spec": 4,
-    "svg": 45,
+    "svg": 10,
     "notes": 8,
     "postprocess": 4,
     "generic": 4,
 }
 LLM_SLOT_STALE_SECONDS = 6 * 60 * 60
 LLM_SLOT_WAIT_TIMEOUT_SECONDS = 2 * 60 * 60
+SVG_FAIR_SHARE_DELAY_SECONDS = 8
 QWEN_ALLOWED_TOOLS = (
     "edit",
     "write_file",
@@ -430,6 +431,96 @@ def write_skill_pack(
     return pack_path, hash_text(pack_text)
 
 
+def project_needs_image_layout_rules(project_path: Path) -> bool:
+    image_suffixes = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".svg"}
+    images_dir = project_path / "images"
+    if images_dir.exists():
+        for path in images_dir.rglob("*"):
+            if path.is_file() and path.suffix.lower() in image_suffixes:
+                return True
+
+    design_spec_path = project_path / "design_spec.md"
+    if not design_spec_path.exists():
+        return False
+    content = design_spec_path.read_text(encoding="utf-8", errors="replace")
+    image_tokens = (
+        "../images/",
+        "/images/",
+        "<image",
+        "image resource",
+        "图片资源",
+        "图片引用",
+        "image layout",
+    )
+    return any(token in content.lower() for token in image_tokens)
+
+
+def write_executor_skill_pack(
+    runner_dir: Path,
+    project_path: Path,
+    executor_style_path: Path,
+    critical_rules: list[str],
+) -> tuple[Path, str]:
+    """Write the SVG executor pack.
+
+    The cookbook is the quality anchor and remains full-text. Generic workflow
+    docs are intentionally omitted from the SVG stage to reduce repeated CLI
+    context without weakening visual rules.
+    """
+    skill_pack_dir = runner_dir / SKILL_PACK_DIRNAME
+    skill_pack_dir.mkdir(parents=True, exist_ok=True)
+    pack_path = skill_pack_dir / "executor_skill_pack.md"
+
+    compact_sources: list[Path] = [
+        QWEN_EXECUTOR_REFERENCE_PATH,
+        executor_style_path,
+        QWEN_SHARED_STANDARDS_PATH,
+    ]
+    if project_needs_image_layout_rules(project_path):
+        compact_sources.append(QWEN_IMAGE_LAYOUT_REFERENCE_PATH)
+
+    sections: list[str] = [
+        "# executor_skill_pack.md",
+        "",
+        "This is a lean SVG-only executor pack. It keeps the SVG Design Cookbook in full and compresses or omits non-critical workflow context.",
+        "",
+        "## Context Policy",
+        "- The full `svg_design_cookbook.md` below is the primary visual-quality reference.",
+        "- Generic workflow files such as `AGENTS.md`, `QWEN.md`, `SKILL.md`, and `repo_skill.md` are intentionally not included in this SVG stage pack.",
+        "- Do not read unrelated repository, archive, template, or historical project files unless a prompt explicitly names them.",
+        "- Use `design_spec.md`, the current batch plan/digest, icon candidates, and `svg_anchor_context.json` as the deck-specific sources of truth.",
+        "",
+        "## Critical Rules",
+        *[f"- {rule}" for rule in critical_rules],
+        "",
+    ]
+
+    for path in compact_sources:
+        sections.extend(
+            [
+                f"## Compact Source: {path.name}",
+                f"Path: {path}",
+                "",
+                build_compact_skill_excerpt(path),
+                "",
+            ]
+        )
+
+    sections.extend(
+        [
+            f"## Full Source: {SVG_DESIGN_COOKBOOK_PATH.name}",
+            f"Path: {SVG_DESIGN_COOKBOOK_PATH}",
+            "",
+            SVG_DESIGN_COOKBOOK_PATH.read_text(encoding="utf-8", errors="replace"),
+            "",
+        ]
+    )
+
+    pack_text = "\n".join(sections).strip() + "\n"
+    pack_path.write_text(pack_text, encoding="utf-8")
+    return pack_path, hash_text(pack_text)
+
+
 def write_deterministic_review_report(
     project_path: Path,
     review_input_path: Path,
@@ -610,6 +701,106 @@ def llm_slot_limit(stage: str) -> int:
         "generic": "PPT_API_LLM_GENERIC_SLOTS",
     }
     return env_int(env_names[normalized], DEFAULT_LLM_SLOT_LIMITS[normalized], minimum=1)
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def stable_delay_seconds(label: str, max_seconds: int) -> int:
+    if max_seconds <= 0:
+        return 0
+    digest = hashlib.sha256(label.encode("utf-8", errors="replace")).hexdigest()
+    return int(digest[:8], 16) % (max_seconds + 1)
+
+
+def svg_job_dir() -> Path:
+    return llm_slot_dir() / "svg_jobs"
+
+
+def cleanup_stale_job_leases(job_dir: Path, stale_seconds: int) -> None:
+    now = time.time()
+    for job_file in job_dir.glob("*.job"):
+        try:
+            payload = json.loads(job_file.read_text(encoding="utf-8"))
+        except Exception:
+            try:
+                if now - job_file.stat().st_mtime > 10:
+                    job_file.unlink()
+            except OSError:
+                pass
+            continue
+
+        created_at = float(payload.get("created_at") or 0)
+        pid = safe_int(payload.get("pid"))
+        if (created_at and now - created_at > stale_seconds) or (pid and not pid_is_alive(pid)):
+            try:
+                job_file.unlink()
+            except OSError:
+                pass
+
+
+def active_svg_job_count() -> int:
+    jobs_dir = svg_job_dir()
+    jobs_dir.mkdir(parents=True, exist_ok=True)
+    stale_seconds = env_int("PPT_API_LLM_SLOT_STALE_SECONDS", LLM_SLOT_STALE_SECONDS, minimum=60)
+    cleanup_stale_job_leases(jobs_dir, stale_seconds)
+    return len(list(jobs_dir.glob("*.job")))
+
+
+@contextmanager
+def register_active_svg_job(job_id: str, runner_dir: Path, log_path: Path | None = None):
+    jobs_dir = svg_job_dir()
+    jobs_dir.mkdir(parents=True, exist_ok=True)
+    stale_seconds = env_int("PPT_API_LLM_SLOT_STALE_SECONDS", LLM_SLOT_STALE_SECONDS, minimum=60)
+    cleanup_stale_job_leases(jobs_dir, stale_seconds)
+    lease_path = jobs_dir / f"{sanitize_token(job_id)}_{os.getpid()}.job"
+    payload = {
+        "pid": os.getpid(),
+        "job_id": job_id,
+        "runner_dir": str(runner_dir),
+        "created_at": time.time(),
+    }
+    lease_path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+    if log_path is not None:
+        append_log(log_path, f"Registered active SVG job lease: {lease_path}")
+    try:
+        yield
+    finally:
+        try:
+            lease_path.unlink()
+            if log_path is not None:
+                append_log(log_path, f"Released active SVG job lease: {lease_path}")
+        except OSError:
+            pass
+
+
+def effective_svg_worker_count(
+    *,
+    requested_workers: int,
+    total_batches: int,
+    log_path: Path | None = None,
+) -> int:
+    requested_workers = max(1, requested_workers)
+    total_batches = max(1, total_batches)
+    if not env_bool("PPT_API_SVG_FAIR_SHARE", True):
+        return min(total_batches, requested_workers)
+
+    svg_slots = llm_slot_limit("svg")
+    active_jobs = max(1, active_svg_job_count())
+    fair_workers = max(1, svg_slots // active_jobs)
+    effective = min(total_batches, requested_workers, fair_workers)
+    if log_path is not None:
+        append_log(
+            log_path,
+            "SVG fair-share window: "
+            f"svg_slots={svg_slots} active_svg_jobs={active_jobs} "
+            f"requested={requested_workers} batches={total_batches} effective={effective}",
+        )
+    return effective
 
 
 def infer_slot_stage(artifact_prefix: str) -> str:
@@ -2475,6 +2666,7 @@ Executor constraints:
 - Use the reviewed `design_spec.md` as the single source of truth
 - Keep free design and light theme
 - Treat `{SVG_DESIGN_COOKBOOK_PATH.name}` as a mandatory SVG visual design guide after design-parameter confirmation
+- Use the full cookbook copy embedded in `{executor_skill_pack_path.name}`; do not separately read generic workflow docs such as `AGENTS.md`, `QWEN.md`, `SKILL.md`, or `repo_skill.md` during SVG generation
 - Treat `{svg_anchor_context_path.name}` as the immutable execution anchor for geometry, defs, icon placement, footer position, and filename consistency
 - Treat `{executor_style_path.name}` as the style-specific visual execution guide for this deck
 - Use only real `templates/charts/<name>.svg` references from the design spec
@@ -2558,6 +2750,7 @@ Executor constraints:
 - Use the reviewed `design_spec.md` as the single source of truth
 - Keep free design and light theme
 - Treat `{SVG_DESIGN_COOKBOOK_PATH.name}` as the mandatory visual execution guide
+- Use the full cookbook copy embedded in `{executor_skill_pack_path.name}`; do not separately read generic workflow docs such as `AGENTS.md`, `QWEN.md`, `SKILL.md`, or `repo_skill.md` during SVG generation
 - Treat `{svg_anchor_context_path.name}` as the immutable execution anchor
 - Use only real `templates/charts/<name>.svg` references from the design spec
 - Lock icon usage to `{DEFAULT_ICON_LIBRARY}`
@@ -3689,15 +3882,61 @@ def execute_parallel_svg_generation(
     runner_dir: Path,
     log_path: Path,
 ) -> list[str]:
+    with register_active_svg_job(str(request.get("job_id") or project_path.name), runner_dir, log_path):
+        fair_delay = env_int("PPT_API_SVG_FAIR_SHARE_DELAY_SECONDS", SVG_FAIR_SHARE_DELAY_SECONDS, minimum=0)
+        stage_stagger_window = env_int("PPT_API_SVG_STAGE_STAGGER_SECONDS", 0, minimum=0)
+        stage_stagger = stable_delay_seconds(str(request.get("job_id") or project_path.name), stage_stagger_window)
+        total_delay = fair_delay + stage_stagger
+        if total_delay > 0:
+            append_log(
+                log_path,
+                f"Staggering SVG stage start for {total_delay}s "
+                f"(fair_share_delay={fair_delay}s stage_stagger={stage_stagger}s)",
+            )
+            time.sleep(total_delay)
+
+        return _execute_parallel_svg_generation_registered(
+            request=request,
+            project_path=project_path,
+            slide_plan_path=slide_plan_path,
+            slide_digest_path=slide_digest_path,
+            icon_reference_path=icon_reference_path,
+            svg_anchor_context_path=svg_anchor_context_path,
+            executor_style_path=executor_style_path,
+            executor_skill_pack_path=executor_skill_pack_path,
+            plan=plan,
+            runner_dir=runner_dir,
+            log_path=log_path,
+        )
+
+
+def _execute_parallel_svg_generation_registered(
+    request: dict[str, Any],
+    project_path: Path,
+    slide_plan_path: Path,
+    slide_digest_path: Path,
+    icon_reference_path: Path,
+    svg_anchor_context_path: Path,
+    executor_style_path: Path,
+    executor_skill_pack_path: Path,
+    plan: list[SlidePlanEntry],
+    runner_dir: Path,
+    log_path: Path,
+) -> list[str]:
     batches = split_plan_into_batches(
         plan,
         int(request.get("batch_size", BATCH_SIZE)),
         str(request.get("batch_partition", "fixed")),
     )
-    max_workers = min(len(batches), int(request.get("parallel_batch_workers", DEFAULT_PARALLEL_BATCH_WORKERS)))
+    requested_workers = int(request.get("parallel_batch_workers", DEFAULT_PARALLEL_BATCH_WORKERS))
+    max_workers = effective_svg_worker_count(
+        requested_workers=requested_workers,
+        total_batches=len(batches),
+        log_path=log_path,
+    )
     append_log(
         log_path,
-        f"Launching parallel SVG batches: total_batches={len(batches)} workers={max_workers}",
+        f"Launching parallel SVG batches: total_batches={len(batches)} requested_workers={requested_workers} workers={max_workers}",
     )
 
     batch_artifacts: list[tuple[int, list[SlidePlanEntry], Path, Path, str]] = []
@@ -3777,10 +4016,14 @@ def execute_parallel_svg_generation(
         remaining_batch_artifacts = batch_artifacts[1:]
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_map = {
-            executor.submit(run_single_parallel_batch, batch_index, batch_plan, batch_prompt): batch_index
-            for batch_index, batch_plan, _prompt_path, _batch_slide_plan_path, batch_prompt in remaining_batch_artifacts
-        }
+        future_map = {}
+        batch_stagger = env_int("PPT_API_SVG_BATCH_STAGGER_SECONDS", 0, minimum=0)
+        for item_index, (batch_index, batch_plan, _prompt_path, _batch_slide_plan_path, batch_prompt) in enumerate(
+            remaining_batch_artifacts
+        ):
+            future_map[executor.submit(run_single_parallel_batch, batch_index, batch_plan, batch_prompt)] = batch_index
+            if batch_stagger > 0 and item_index < len(remaining_batch_artifacts) - 1:
+                time.sleep(batch_stagger)
         for future in as_completed(future_map):
             batch_index = future_map[future]
             session_by_index[batch_index] = future.result()
@@ -3995,27 +4238,17 @@ def execute_generation(
 
     cleanup_pre_execution_outputs(project_path, log_path)
     executor_style_path = select_executor_style_reference(project_path)
-    executor_skill_pack_path, executor_skill_pack_hash = write_skill_pack(
+    executor_critical_rules = [
+        "Emoji are forbidden everywhere in SVG output.",
+        f"Never substitute emoji for icons; use only `data-icon=\"{DEFAULT_ICON_LIBRARY}/...\"` with a real icon name from the inventory.",
+        "Do not use pictographic Unicode characters in titles, labels, bullets, badges, captions, annotations, or decorative marks.",
+        "If a bullet needs emphasis, use layout, color, weight, or a legal icon placeholder instead of emoji.",
+    ]
+    executor_skill_pack_path, executor_skill_pack_hash = write_executor_skill_pack(
         runner_dir,
-        "executor_skill_pack.md",
-        [
-            REPO_ROOT / "AGENTS.md",
-            QWEN_PROJECT_GUIDE_PATH,
-            QWEN_SKILL_WRAPPER_PATH,
-            QWEN_REPO_SKILL_PATH,
-            QWEN_EXECUTOR_REFERENCE_PATH,
-            executor_style_path,
-            QWEN_SHARED_STANDARDS_PATH,
-            QWEN_IMAGE_LAYOUT_REFERENCE_PATH,
-            SVG_DESIGN_COOKBOOK_PATH,
-        ],
-        critical_rules=[
-            "Emoji are forbidden everywhere in SVG output.",
-            f"Never substitute emoji for icons; use only `data-icon=\"{DEFAULT_ICON_LIBRARY}/...\"` with a real icon name from the inventory.",
-            "Do not use pictographic Unicode characters in titles, labels, bullets, badges, captions, annotations, or decorative marks.",
-            "If a bullet needs emphasis, use layout, color, weight, or a legal icon placeholder instead of emoji.",
-        ],
-        compact=False,
+        project_path,
+        executor_style_path,
+        executor_critical_rules,
     )
     skill_pack_index["executor"] = {"path": str(executor_skill_pack_path), "hash": executor_skill_pack_hash}
     write_json(runner_dir / "skill_pack_index.json", skill_pack_index)

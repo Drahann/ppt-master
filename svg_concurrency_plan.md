@@ -11,7 +11,8 @@
 - TPM 预算：优先控制在 1500 万以内。
 - 并发任务：先跑 15 个任务。
 - 单任务 SVG 并行窗口：默认 3。
-- 全局 SVG slot：默认 45。
+- 全局 SVG slot：默认 10，用于更保守地限制同一时刻活跃 SVG batch。
+- SVG fair-share：默认开启；单任务最多可吃到请求窗口，多个任务会按活跃 SVG job 数动态分配窗口。
 - SVG 分组：默认 `2+3+4+5+6+7+8` ramp 分组。
 - SVG 并行方式：默认 anchor-first，先生成第一个 anchor batch，再并行后续 batch。
 
@@ -56,6 +57,78 @@ Runner 层：
 - 每个 batch 完成后会检查缺失/多余 SVG、XML 合法性、emoji、icon 引用、图标覆盖率。
 - 全量生成后还有 `svg_quality_checker.py`、`svg_auto_repair.py`、`finalize_svg.py`、`svg_to_pptx.py`。
 - 这些质量链路不能为了并发而跳过。
+
+## SVG CLI 上下文压缩策略
+
+阶段目标：SVG 生成阶段继续保留 qwen CLI，不切换 direct API；但压缩 CLI 被要求读取的静态上下文。
+
+保留原则：
+
+- `svg_design_cookbook.md` 是视觉质量核心，SVG 阶段继续保留全文。
+- `design_spec.md`、当前 batch 的 `slide_plan`、`slide_content_digest`、`available_icon_candidates`、`svg_anchor_context.json` 继续作为每个 batch 的必要输入。
+- `svg_quality_checker.py`、`svg_auto_repair.py`、`finalize_svg.py`、`svg_to_pptx.py` 全部保留。
+
+压缩/移除原则：
+
+- SVG executor 阶段不再显式读取 `AGENTS.md`、`QWEN.md`、`SKILL.md`、`repo_skill.md` 这类通用 workflow 文档。
+- `executor-base.md`、当前 style reference、`shared-standards.md` 改为 compact excerpt。
+- `image-layout-spec.md` 仅在项目实际存在图片资源或 design spec 明确引用图片时加入；无图片场景不读。
+- executor skill pack 只作为 SVG 专用上下文包，不承载 source conversion、模板创建、完整 agent 工作流等无关流程。
+
+预期效果：
+
+- 保留 cookbook 对页面质量、卡片规则、布局多样性和 PowerPoint 兼容的约束。
+- 减少每个 SVG batch 重复读取的非视觉上下文。
+- 降低七路并行下的累计 prompt tokens，尤其是每个 batch 多次 tool/API call 时被反复携带的静态上下文。
+
+## SVG 全局池与错峰策略
+
+当前推荐把 `PPT_API_LLM_SVG_SLOTS` 视为全局 SVG batch 池大小，而不是每个 job 的并行数。
+
+保守默认：
+
+```env
+PPT_API_LLM_SVG_SLOTS=10
+PPT_API_SVG_FAIR_SHARE=1
+PPT_API_SVG_FAIR_SHARE_DELAY_SECONDS=8
+PPT_API_SVG_STAGE_STAGGER_SECONDS=0
+PPT_API_SVG_BATCH_STAGGER_SECONDS=0
+```
+
+fair-share 规则：
+
+- 单任务：`active_svg_jobs=1`，如果请求 `parallelBatchWorkers=7`，有效窗口可到 7。
+- 5 个任务：`10 / 5 = 2`，每个 job 有效 SVG 窗口约 2。
+- 50 个任务：有效窗口降到 1；全局活跃 SVG batch 仍由 `PPT_API_LLM_SVG_SLOTS=10` 卡住，不会变成 `50*2=100`。
+
+错峰分两层：
+
+- 请求下发错峰：`stress_test.sh` 的 `STAGGER_SECONDS`，用于让 HTTP 请求不要同一秒进入服务。
+- SVG 阶段错峰：runner 的 `PPT_API_SVG_STAGE_STAGGER_SECONDS`，进入 SVG 阶段后按 job id 做稳定散列延迟，避免多个 job 在 spec 后同时启动 SVG。
+- batch 提交错峰：`PPT_API_SVG_BATCH_STAGGER_SECONDS`，用于一个 job 内多个 SVG batch 提交给线程池时不要同一秒抢 slot。
+
+500 万 TPM、5 任务测试建议：
+
+```env
+PPT_API_MAX_CONCURRENT_JOBS=5
+PPT_API_LLM_SVG_SLOTS=10
+PPT_API_PARALLEL_BATCH_WORKERS=7
+PPT_API_SVG_FAIR_SHARE=1
+PPT_API_SVG_FAIR_SHARE_DELAY_SECONDS=8
+PPT_API_SVG_STAGE_STAGGER_SECONDS=60
+PPT_API_SVG_BATCH_STAGGER_SECONDS=5
+```
+
+压测命令：
+
+```bash
+STAGGER_SECONDS=30 \
+PARALLEL_BATCH_WORKERS=7 \
+BATCH_PARTITION=ramp_2_3_4_5_6_7_8 \
+bash stress_test.sh 5 http://localhost:3001
+```
+
+这里 `parallelBatchWorkers=7` 表示单任务上限；真正活跃窗口由 `PPT_API_LLM_SVG_SLOTS=10` 和 fair-share 共同决定。
 
 ## 与 rag-agent 文档生成链路的关系
 
@@ -259,25 +332,243 @@ target_groups = [2, 3, 4, 5, 6, 7, 8]
 
 这样可以避免“所有 batch 互相不知道彼此视觉结果”的问题。
 
-## 全局并发预算
+## 最终并发设计：Redis 预算调度器
 
-如果要把 25 并发跑稳，最好不要只靠每个任务自己的 `parallelBatchWorkers`，还需要全局预算。
+前一版固定 slot/文件 lease 只能止血，不够严谨。最终方案应抛弃“手工猜一个 SVG slot 数”的思路，改成 Redis 中央调度器：用 TPM 预算动态计算全局可运行 SVG batch 数，用公平队列分配给不同 job，用 SLA 反馈调整优先级。
 
-建议先做轻量版：
+### 设计目标
 
-- `PPT_API_LLM_SVG_SLOTS=50` 用于 25 并发首轮。
-- `PPT_API_LLM_SPEC_SLOTS=6`
-- `PPT_API_LLM_NOTES_SLOTS=10`
-- `PPT_API_POSTPROCESS_SLOTS=4`
+- 预算可变：500 万 TPM、1500 万 TPM 或更高预算都走同一套公式。
+- 公平：单任务可以吃满 7 路；5 任务时自动约 2 路；50 任务时不会变成 `50*2=100`，全局活跃 batch 仍受预算控制。
+- 错峰：请求进入、SVG 阶段启动、batch 启动都可以错开，削平第一分钟峰值。
+- SLA 可解释：如果生成时间变长，调度器知道是预算限制、队列堆积、还是单 batch 慢，并给出扩并发/排队/拒绝的依据。
+- 质量不降级：不通过删除 cookbook、跳过校验、跳过 finalize/export 换速度。
 
-实现方式：
+### Redis 数据结构
 
-- 单容器可用 SQLite lease 或文件锁。
-- 每个 qwen CLI/direct API 调用前申请 slot。
-- 调用完成、失败或超时后释放 slot。
-- lease 记录 `job_id`、`stage`、`pid`、`timestamp`，支持超时回收。
+```text
+ppt:jobs:pending                 # job 队列，按提交时间/优先级
+ppt:jobs:running                 # 当前运行 job
+ppt:jobs:{job_id}:meta           # deadline、页数、剩余 batch、当前 stage、模型
 
-这样即使某个请求传了 `parallelBatchWorkers=7`，系统也不会无限放大。
+ppt:svg:jobs                     # 活跃 SVG job 集合
+ppt:svg:queue:{job_id}           # 每个 job 自己的 SVG batch 队列
+ppt:svg:ready                    # 已到可运行时间的 job_id 集合
+ppt:svg:delayed                  # ZSET，score=earliest_run_at，用于错峰
+ppt:svg:running                  # 当前运行 batch lease
+
+llm:budget:{model}:tokens        # 滑动窗口 token 记录，或秒级 bucket
+llm:ewma:{stage}:{model}         # 估计每个 stage/模型的 token 速率
+llm:reservation:{batch_id}       # batch 开跑前的 token 预留
+```
+
+调度器只有一个逻辑职责：从 Redis 队列中挑选“现在可以启动”的 batch。worker 只是执行者，不能自己随意开 batch。
+
+### TPM 到并发上限的计算
+
+不再手写 `SVG_SLOTS=10/45`，而是动态算：
+
+```text
+usable_tpm = tpm_budget * target_utilization
+worker_tpm = EWMA(svg_batch_tpm_per_active_worker)
+global_svg_concurrency = floor(usable_tpm / worker_tpm)
+```
+
+建议初始参数：
+
+```text
+target_utilization = 0.70 ~ 0.80
+min_svg_concurrency = 1
+single_job_cap = 7
+hard_max_svg_concurrency = 由机器 CPU/内存/qwen 子进程上限决定
+```
+
+`worker_tpm` 不是常量。它来自最近 N 个 SVG batch 的实际观测：
+
+```text
+batch_tpm = actual_prompt_tokens / batch_elapsed_minutes
+worker_tpm = EWMA(batch_tpm)
+```
+
+如果只能在 qwen CLI turn 结束后拿到 usage，也可以先做“batch 级预估”：
+
+```text
+estimated_batch_tokens = EWMA(prompt_tokens_per_svg_batch)
+estimated_batch_minutes = EWMA(elapsed_minutes_per_svg_batch)
+worker_tpm = estimated_batch_tokens / estimated_batch_minutes
+```
+
+每次 batch 开跑前向 Redis token bucket 预留：
+
+```text
+reserve_tokens = estimated_batch_tokens * safety_factor
+safety_factor = 1.2 ~ 1.5
+```
+
+batch 完成后用实际 usage 修正 EWMA，并退还或补记差额。
+
+### 预算示例
+
+用公式说明，而不是固定写死：
+
+```text
+global_svg_concurrency = floor(tpm_budget * target_utilization / worker_tpm)
+```
+
+假设最近观测到：
+
+```text
+worker_tpm = 350,000
+target_utilization = 0.75
+```
+
+则：
+
+```text
+500万 TPM:  floor(5,000,000 * 0.75 / 350,000)  = 10
+1500万 TPM: floor(15,000,000 * 0.75 / 350,000) = 32
+```
+
+如果压缩上下文后 `worker_tpm` 下降到 250,000：
+
+```text
+500万 TPM:  floor(5,000,000 * 0.75 / 250,000)  = 15
+1500万 TPM: floor(15,000,000 * 0.75 / 250,000) = 45
+```
+
+所以“500 万时全局 10 路”只是某个观测条件下的结果；1500 万时不是拍脑袋改成 30/45，而是由实时 EWMA 算出来。
+
+### 每个 job 的窗口怎么算
+
+每个 job 的有效 SVG 窗口：
+
+```text
+fair_share = max(1, floor(global_svg_concurrency / active_svg_jobs))
+urgent_bonus = SLA 调度器给临近 deadline 的 job 额外配额
+job_window = min(single_job_cap, requested_parallel_workers, remaining_batches, fair_share + urgent_bonus)
+```
+
+示例，`global_svg_concurrency=10`、`single_job_cap=7`：
+
+```text
+1 个活跃 job:  min(7, 10/1) = 7
+5 个活跃 job:  min(7, 10/5) = 2
+50 个活跃 job: min(7, 10/50) => 1，但全局同时运行仍最多 10 个 batch
+```
+
+关键点：50 个任务时不是每个任务固定 1 个同步开跑，而是调度器 round-robin 地从各 job 队列取 batch，全局总量始终不超过 `global_svg_concurrency`。
+
+### 错峰策略
+
+错峰不应该只在 `stress_test.sh` 做。最终应在 Redis 调度器中做三层错峰：
+
+1. 请求接入错峰：
+
+   压测或网关层可设置 `STAGGER_SECONDS`，避免同一秒打满 API。
+
+2. SVG 阶段错峰：
+
+   job 从 spec 进入 SVG 时，不立刻把所有 batch 推到 ready 队列，而是写入 delayed queue：
+
+   ```text
+   earliest_run_at = now + stable_hash(job_id) % stage_stagger_window
+   ```
+
+3. batch 级错峰：
+
+   同一 job 的 batch 进入 ready 队列时，按页组顺序增加微小间隔：
+
+   ```text
+   batch_1: now
+   batch_2: now + 5s
+   batch_3: now + 10s
+   ...
+   ```
+
+这样第一分钟峰值会被自然削平，而不是所有 spec 完成后同时启动 SVG。
+
+### SLA 与生成时间权衡
+
+不能只用“降低并发”来控 TPM，因为会把单任务时间拖长。调度器需要同时看：
+
+```text
+remaining_time = deadline_at - now
+remaining_batches = job 剩余 SVG batch 数
+avg_batch_duration = EWMA(svg_batch_elapsed_seconds)
+required_window = ceil(remaining_batches * avg_batch_duration / remaining_time)
+```
+
+然后：
+
+- 如果 `required_window <= fair_share`：按公平配额跑。
+- 如果 `required_window > fair_share` 且 TPM 预算有余量：给这个 job `urgent_bonus`。
+- 如果所有 job 都需要额外配额但 TPM 不够：维持预算，返回 ETA/排队状态，不假装能满足 SLA。
+- 如果 job 已经无法在 40 分钟 SLA 内完成：应尽早暴露 `at_risk` 状态，而不是最后超时。
+
+质量边界：
+
+- 不删 cookbook。
+- 不跳过 SVG quality check。
+- 不跳过 auto repair/finalize/export。
+- 不用低质量模型替换 SVG 主生成，除非另做质量回归。
+
+可调的只有：
+
+- active SVG batch 数。
+- batch 分组大小。
+- job 优先级。
+- 是否提前启动 PPT 与 PDF/Word 并行。
+- 是否接收新 job 或返回排队 ETA。
+
+### Job 队列/池子的价值
+
+Redis job queue 有帮助，而且是最终应该做的形态。
+
+当前同步 API 的问题：
+
+- 请求一进来就占住 HTTP 连接。
+- job 并发由 FastAPI semaphore 粗控。
+- runner 自己开 batch，调度权分散。
+- 无法精确做 admission control。
+
+Redis queue 后：
+
+- API 只负责创建 job，快速返回 `job_id`。
+- worker 从队列取 job。
+- SVG batch 由中央 scheduler 取，不由 runner 自己抢。
+- 可以对外提供状态：
+  - `queued`
+  - `spec`
+  - `svg`
+  - `notes`
+  - `postprocess`
+  - `upload`
+  - `succeeded`
+  - `failed`
+  - `at_risk`
+- 可以根据当前队列和 TPM 预算决定是否接收新任务，或返回预计等待时间。
+
+### 最终架构
+
+```text
+API
+  -> Redis job queue
+  -> Spec worker pool
+  -> SVG scheduler
+      -> Redis token bucket
+      -> Redis fair queue by job_id
+      -> SVG worker pool (qwen CLI retained)
+  -> Notes worker pool
+  -> Postprocess worker pool
+  -> Upload/callback
+```
+
+SVG 仍然可以保留 qwen CLI，区别是：
+
+- qwen CLI 不再自行决定何时并发启动 batch。
+- qwen CLI 只执行被 scheduler 分配到的 batch。
+- cookbook 保留全文，其它上下文压缩。
+- usage 回写 Redis，用于下一轮动态计算并发。
 
 ## 压测矩阵
 
