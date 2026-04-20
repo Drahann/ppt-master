@@ -23,7 +23,7 @@ import uuid
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import get_close_matches
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -94,7 +94,18 @@ ICON_COVERAGE_MIN_SLIDES = 12
 COOKBOOK_REREAD_INTERVAL = 8
 BATCH_SIZE = 5
 BATCH_MODE_THRESHOLD = 15
-DEFAULT_PARALLEL_BATCH_WORKERS = 7
+DEFAULT_PARALLEL_BATCH_WORKERS = 3
+DEFAULT_BATCH_PARTITION = "ramp_2_3_4_5_6_7_8"
+RAMP_BATCH_SIZES = (2, 3, 4, 5, 6, 7, 8)
+DEFAULT_LLM_SLOT_LIMITS = {
+    "spec": 4,
+    "svg": 45,
+    "notes": 8,
+    "postprocess": 4,
+    "generic": 4,
+}
+LLM_SLOT_STALE_SECONDS = 6 * 60 * 60
+LLM_SLOT_WAIT_TIMEOUT_SECONDS = 2 * 60 * 60
 QWEN_ALLOWED_TOOLS = (
     "edit",
     "write_file",
@@ -571,6 +582,145 @@ def safe_int(value: Any) -> int:
     return parsed if parsed >= 0 else 0
 
 
+def env_int(name: str, default: int, minimum: int = 1) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(minimum, value)
+
+
+def llm_slot_dir() -> Path:
+    raw = (os.getenv("PPT_API_LLM_SLOT_DIR") or "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return REPO_ROOT / "tmp" / "llm-slots"
+
+
+def llm_slot_limit(stage: str) -> int:
+    normalized = stage if stage in DEFAULT_LLM_SLOT_LIMITS else "generic"
+    env_names = {
+        "spec": "PPT_API_LLM_SPEC_SLOTS",
+        "svg": "PPT_API_LLM_SVG_SLOTS",
+        "notes": "PPT_API_LLM_NOTES_SLOTS",
+        "postprocess": "PPT_API_POSTPROCESS_SLOTS",
+        "generic": "PPT_API_LLM_GENERIC_SLOTS",
+    }
+    return env_int(env_names[normalized], DEFAULT_LLM_SLOT_LIMITS[normalized], minimum=1)
+
+
+def infer_slot_stage(artifact_prefix: str) -> str:
+    prefix = artifact_prefix.lower()
+    if prefix.startswith("svg_batch") or prefix == "qwen":
+        return "svg"
+    if prefix.startswith("spec"):
+        return "spec"
+    if prefix.startswith("notes"):
+        return "notes"
+    return "generic"
+
+
+def pid_is_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def cleanup_stale_slots(stage_dir: Path, stale_seconds: int) -> None:
+    now = time.time()
+    for slot_file in stage_dir.glob("*.slot"):
+        try:
+            payload = json.loads(slot_file.read_text(encoding="utf-8"))
+        except Exception:
+            try:
+                if now - slot_file.stat().st_mtime > 10:
+                    slot_file.unlink()
+            except OSError:
+                pass
+            continue
+
+        created_at = float(payload.get("created_at") or 0)
+        pid = safe_int(payload.get("pid"))
+        if (created_at and now - created_at > stale_seconds) or (pid and not pid_is_alive(pid)):
+            try:
+                slot_file.unlink()
+            except OSError:
+                pass
+
+
+@contextmanager
+def acquire_resource_slot(
+    stage: str,
+    *,
+    label: str,
+    runner_dir: Path,
+    log_path: Path | None = None,
+):
+    stage = stage if stage in DEFAULT_LLM_SLOT_LIMITS else "generic"
+    limit = llm_slot_limit(stage)
+    slot_root = llm_slot_dir()
+    stage_dir = slot_root / stage
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    stale_seconds = env_int("PPT_API_LLM_SLOT_STALE_SECONDS", LLM_SLOT_STALE_SECONDS, minimum=60)
+    wait_timeout = env_int("PPT_API_LLM_SLOT_WAIT_TIMEOUT_SECONDS", LLM_SLOT_WAIT_TIMEOUT_SECONDS, minimum=60)
+    started = time.time()
+    last_wait_log = 0.0
+    slot_file: Path | None = None
+
+    while slot_file is None:
+        cleanup_stale_slots(stage_dir, stale_seconds)
+        for index in range(1, limit + 1):
+            candidate = stage_dir / f"{index:03d}.slot"
+            payload = {
+                "pid": os.getpid(),
+                "stage": stage,
+                "label": label,
+                "runner_dir": str(runner_dir),
+                "created_at": time.time(),
+            }
+            try:
+                fd = os.open(str(candidate), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                continue
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False)
+                handle.write("\n")
+            slot_file = candidate
+            if log_path is not None:
+                append_log(log_path, f"Acquired {stage} slot {index}/{limit} for {label}")
+            break
+
+        if slot_file is not None:
+            break
+        if time.time() - started > wait_timeout:
+            raise RunnerError(f"Timed out waiting for {stage} slot after {wait_timeout}s: {label}")
+        if log_path is not None and time.time() - last_wait_log >= 30:
+            active = len(list(stage_dir.glob("*.slot")))
+            append_log(log_path, f"Waiting for {stage} slot: active={active}/{limit}; label={label}")
+            last_wait_log = time.time()
+        time.sleep(2)
+
+    try:
+        yield
+    finally:
+        if slot_file is not None:
+            try:
+                slot_file.unlink()
+                if log_path is not None:
+                    append_log(log_path, f"Released {stage} slot for {label}")
+            except OSError:
+                pass
+
+
 def count_file_lines(path: Path | None) -> int:
     if path is None or not path.exists():
         return 0
@@ -887,6 +1037,13 @@ def load_request(request_path: Path) -> dict[str, Any]:
     if not isinstance(parallel_batch_workers, int) or parallel_batch_workers < 1:
         raise RunnerError("parallel_batch_workers must be a positive integer")
     request["parallel_batch_workers"] = parallel_batch_workers
+    batch_partition = (request.get("batch_partition") or DEFAULT_BATCH_PARTITION)
+    if not isinstance(batch_partition, str):
+        raise RunnerError("batch_partition must be a string")
+    batch_partition = batch_partition.strip().lower() or DEFAULT_BATCH_PARTITION
+    if batch_partition not in {"fixed", DEFAULT_BATCH_PARTITION, "2+3+4+5+6+7+8", "ramp"}:
+        raise RunnerError("batch_partition must be one of: fixed, ramp, 2+3+4+5+6+7+8, ramp_2_3_4_5_6_7_8")
+    request["batch_partition"] = batch_partition
     model = request.get("model")
     request["model"] = model.strip() if isinstance(model, str) and model.strip() else DEFAULT_QWEN_MODEL
     spec_model = request.get("spec_model")
@@ -1303,6 +1460,40 @@ def parse_notes_headings(notes_path: Path) -> list[str]:
         if line.startswith("# "):
             headings.append(line[2:].strip())
     return headings
+
+
+def repair_notes_headings(
+    project_path: Path,
+    plan: list[SlidePlanEntry],
+    *,
+    log_path: Path | None = None,
+) -> bool:
+    notes_path = project_path / "notes" / "total.md"
+    if not notes_path.exists():
+        return False
+
+    expected_note_headings = [entry.note_heading for entry in plan]
+    content = notes_path.read_text(encoding="utf-8", errors="replace")
+    lines = content.splitlines()
+    heading_indices = [idx for idx, line in enumerate(lines) if line.startswith("# ")]
+    if len(heading_indices) != len(expected_note_headings):
+        return False
+
+    changed: list[dict[str, str]] = []
+    for idx, expected_heading in zip(heading_indices, expected_note_headings):
+        current_heading = lines[idx][2:].strip()
+        if current_heading != expected_heading:
+            lines[idx] = f"# {expected_heading}"
+            changed.append({"from": current_heading, "to": expected_heading})
+
+    if not changed:
+        return False
+
+    trailing_newline = "\n" if content.endswith("\n") else ""
+    notes_path.write_text("\n".join(lines) + trailing_newline, encoding="utf-8")
+    if log_path is not None:
+        append_log(log_path, f"Notes repair: normalized headings {changed}")
+    return True
 
 
 def extract_markdown_section(content: str, header_prefix: str, next_header_prefix: str | None) -> str:
@@ -1796,13 +1987,18 @@ def check_batch_state(
     return not errors, errors
 
 
-def check_notes_state(project_path: Path, plan: list[SlidePlanEntry]) -> tuple[bool, list[str]]:
+def check_notes_state(
+    project_path: Path,
+    plan: list[SlidePlanEntry],
+    log_path: Path | None = None,
+) -> tuple[bool, list[str]]:
     errors: list[str] = []
     notes_path = project_path / "notes" / "total.md"
     if not notes_path.exists():
         errors.append("Missing notes/total.md")
         return False, errors
 
+    repair_notes_headings(project_path, plan, log_path=log_path)
     expected_note_headings = [entry.note_heading for entry in plan]
     actual_note_headings = parse_notes_headings(notes_path)
     if actual_note_headings != expected_note_headings:
@@ -1974,7 +2170,30 @@ def build_slide_plan_text(plan: list[SlidePlanEntry]) -> str:
     return "\n".join(lines)
 
 
-def split_plan_into_batches(plan: list[SlidePlanEntry], batch_size: int) -> list[list[SlidePlanEntry]]:
+def split_plan_into_batches(
+    plan: list[SlidePlanEntry],
+    batch_size: int,
+    batch_partition: str | None = None,
+) -> list[list[SlidePlanEntry]]:
+    if not plan:
+        return []
+
+    partition = (batch_partition or "fixed").strip().lower()
+    if partition in {DEFAULT_BATCH_PARTITION, "2+3+4+5+6+7+8", "ramp"}:
+        batches: list[list[SlidePlanEntry]] = []
+        cursor = 0
+        for size in RAMP_BATCH_SIZES:
+            if cursor >= len(plan):
+                break
+            batches.append(plan[cursor : min(cursor + size, len(plan))])
+            cursor += size
+        if cursor < len(plan):
+            batches.append(plan[cursor:])
+        if len(batches) >= 2 and len(batches[-1]) == 1:
+            batches[-2].extend(batches[-1])
+            batches.pop()
+        return batches
+
     return [plan[index : index + batch_size] for index in range(0, len(plan), batch_size)]
 
 
@@ -2307,7 +2526,7 @@ def build_batch_svg_prompt(
 ) -> str:
     exact_filenames = ", ".join(entry.filename for entry in batch_plan)
     prev_anchor_block = ""
-    if prev_last_svg_path is not None and prev_last_svg_path.exists():
+    if prev_last_svg_path is not None:
         prev_anchor_block = f"""
 Previous-batch visual anchor:
 - Read this completed SVG before generating the current batch: {prev_last_svg_path}
@@ -2641,6 +2860,7 @@ def call_openai_compatible_chat(
     runner_dir: Path,
     artifact_prefix: str,
     turn_index: int,
+    log_path: Path | None = None,
     timeout_seconds: int = DIRECT_NOTES_TIMEOUT_SECONDS,
 ) -> tuple[str, TurnUsageSummary, dict[str, Any]]:
     endpoint = resolve_openai_compatible_endpoint()
@@ -2668,14 +2888,21 @@ def call_openai_compatible_chat(
         },
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            response_text = response.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as exc:
-        error_text = exc.read().decode("utf-8", errors="replace")
-        raise RunnerError(f"Direct API HTTP {exc.code}: {error_text}") from exc
-    except urllib.error.URLError as exc:
-        raise RunnerError(f"Direct API request failed: {exc}") from exc
+    stage = infer_slot_stage(artifact_prefix)
+    with acquire_resource_slot(
+        stage,
+        label=f"{artifact_prefix}_turn_{turn_index:02d}",
+        runner_dir=runner_dir,
+        log_path=log_path,
+    ):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+                response_text = response.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            error_text = exc.read().decode("utf-8", errors="replace")
+            raise RunnerError(f"Direct API HTTP {exc.code}: {error_text}") from exc
+        except urllib.error.URLError as exc:
+            raise RunnerError(f"Direct API request failed: {exc}") from exc
 
     response_path = runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.response.json"
     response_path.write_text(response_text, encoding="utf-8")
@@ -2900,6 +3127,7 @@ def execute_direct_spec_stage(
                 runner_dir=runner_dir,
                 artifact_prefix=artifact_prefix,
                 turn_index=turn_index,
+                log_path=log_path,
                 timeout_seconds=DIRECT_SPEC_TIMEOUT_SECONDS,
             )
         except RunnerError as exc:
@@ -2978,6 +3206,7 @@ def execute_direct_notes_stage(
                 runner_dir=runner_dir,
                 artifact_prefix=artifact_prefix,
                 turn_index=turn_index,
+                log_path=log_path,
                 timeout_seconds=DIRECT_NOTES_TIMEOUT_SECONDS,
             )
         except RunnerError as exc:
@@ -2996,7 +3225,7 @@ def execute_direct_notes_stage(
         )
 
         notes_path.write_text(strip_notes_model_output(content), encoding="utf-8")
-        state_complete, generation_errors = check_notes_state(project_path, plan)
+        state_complete, generation_errors = check_notes_state(project_path, plan, log_path=log_path)
         append_log(
             log_path,
             f"direct notes turn {turn_index}: state_complete={state_complete}; generation_errors={generation_errors}",
@@ -3179,17 +3408,24 @@ def run_qwen_prompt(
 
     safe_command = redact_sensitive_command_parts(command)
     append_log(log_path, f"Starting qwen turn {turn_index}: {' '.join(safe_command)} (prompt via stdin, {len(prompt)} chars)")
-    completed = subprocess.run(
-        command,
-        cwd=repo_root,
-        input=prompt,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=QWEN_CALL_TIMEOUT_SECONDS,
-        check=False,
-    )
+    stage = infer_slot_stage(artifact_prefix)
+    with acquire_resource_slot(
+        stage,
+        label=f"{artifact_prefix}_turn_{turn_index:02d}",
+        runner_dir=runner_dir,
+        log_path=log_path,
+    ):
+        completed = subprocess.run(
+            command,
+            cwd=repo_root,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=QWEN_CALL_TIMEOUT_SECONDS,
+            check=False,
+        )
 
     (runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.stdout.txt").write_text(
         completed.stdout,
@@ -3377,7 +3613,11 @@ def execute_batched_svg_generation(
     runner_dir: Path,
     log_path: Path,
 ) -> list[str]:
-    batches = split_plan_into_batches(plan, int(request.get("batch_size", BATCH_SIZE)))
+    batches = split_plan_into_batches(
+        plan,
+        int(request.get("batch_size", BATCH_SIZE)),
+        str(request.get("batch_partition", "fixed")),
+    )
     session_ids: list[str] = []
 
     for batch_index, batch_plan in enumerate(batches):
@@ -3449,7 +3689,11 @@ def execute_parallel_svg_generation(
     runner_dir: Path,
     log_path: Path,
 ) -> list[str]:
-    batches = split_plan_into_batches(plan, int(request.get("batch_size", BATCH_SIZE)))
+    batches = split_plan_into_batches(
+        plan,
+        int(request.get("batch_size", BATCH_SIZE)),
+        str(request.get("batch_partition", "fixed")),
+    )
     max_workers = min(len(batches), int(request.get("parallel_batch_workers", DEFAULT_PARALLEL_BATCH_WORKERS)))
     append_log(
         log_path,
@@ -3457,6 +3701,10 @@ def execute_parallel_svg_generation(
     )
 
     batch_artifacts: list[tuple[int, list[SlidePlanEntry], Path, Path, str]] = []
+    anchor_first = (os.getenv("PPT_API_SVG_ANCHOR_FIRST", "1").strip().lower() not in {"0", "false", "no"})
+    anchor_svg_path: Path | None = None
+    if anchor_first and len(batches) > 1:
+        anchor_svg_path = project_path / "svg_output" / batches[0][-1].filename
     for batch_index, batch_plan in enumerate(batches):
         batch_slide_plan_path = runner_dir / f"slide_plan.batch_{batch_index + 1:02d}.json"
         write_json(batch_slide_plan_path, [asdict(entry) for entry in batch_plan])
@@ -3480,7 +3728,7 @@ def execute_parallel_svg_generation(
             batch_plan=batch_plan,
             batch_index=batch_index,
             total_batches=len(batches),
-            prev_last_svg_path=None,
+            prev_last_svg_path=anchor_svg_path if anchor_svg_path is not None and batch_index > 0 else None,
         )
         prompt_path = runner_dir / f"svg_batch_{batch_index + 1:02d}_prompt.txt"
         prompt_path.write_text(batch_prompt, encoding="utf-8")
@@ -3520,10 +3768,18 @@ def execute_parallel_svg_generation(
             log_path=log_path,
         )
 
+    remaining_batch_artifacts = list(batch_artifacts)
+    if anchor_first and len(batch_artifacts) > 1:
+        first_index, first_plan, _first_prompt_path, _first_batch_slide_plan_path, first_prompt = batch_artifacts[0]
+        append_log(log_path, f"Running anchor SVG batch {first_index + 1} before parallel window")
+        session_by_index[first_index] = run_single_parallel_batch(first_index, first_plan, first_prompt)
+        append_log(log_path, f"Anchor SVG batch {first_index + 1} completed")
+        remaining_batch_artifacts = batch_artifacts[1:]
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_map = {
             executor.submit(run_single_parallel_batch, batch_index, batch_plan, batch_prompt): batch_index
-            for batch_index, batch_plan, _prompt_path, _batch_slide_plan_path, batch_prompt in batch_artifacts
+            for batch_index, batch_plan, _prompt_path, _batch_slide_plan_path, batch_prompt in remaining_batch_artifacts
         }
         for future in as_completed(future_map):
             batch_index = future_map[future]
@@ -3808,7 +4064,8 @@ def execute_generation(
             log_path,
             "Using parallel batched SVG generation: "
             f"pages={len(plan)} batch_size={batch_size} "
-            f"workers={int(request.get('parallel_batch_workers', DEFAULT_PARALLEL_BATCH_WORKERS))}",
+            f"workers={int(request.get('parallel_batch_workers', DEFAULT_PARALLEL_BATCH_WORKERS))} "
+            f"batch_partition={request.get('batch_partition', 'fixed')}",
         )
         svg_batch_session_ids = execute_parallel_svg_generation(
             request=request,
@@ -3895,7 +4152,7 @@ def execute_generation(
             artifact_prefix="notes",
             initial_prompt=notes_prompt,
             completion_sentinel_prefix=NOTES_COMPLETION_SENTINEL_PREFIX,
-            state_checker=lambda: check_notes_state(project_path, plan),
+            state_checker=lambda: check_notes_state(project_path, plan, log_path=log_path),
             continue_prompt_builder=lambda errors: build_notes_continue_prompt(project_path, plan, errors),
             confirmation_prompt_builder=lambda errors: build_notes_continue_prompt(project_path, plan, errors),
             model=notes_model,
@@ -3950,21 +4207,27 @@ def execute_generation(
 
 
 def run_post_processing(project_path: Path, log_path: Path) -> tuple[Path, Path]:
-    run_python_tool(
-        ["skills/ppt-master/scripts/total_md_split.py", str(project_path)],
-        cwd=REPO_ROOT,
+    with acquire_resource_slot(
+        "postprocess",
+        label=f"postprocess_{project_path.name}",
+        runner_dir=project_path / RUNNER_DIRNAME,
         log_path=log_path,
-    )
-    run_python_tool(
-        ["skills/ppt-master/scripts/finalize_svg.py", str(project_path)],
-        cwd=REPO_ROOT,
-        log_path=log_path,
-    )
-    run_python_tool(
-        ["skills/ppt-master/scripts/svg_to_pptx.py", str(project_path), "-s", "final"],
-        cwd=REPO_ROOT,
-        log_path=log_path,
-    )
+    ):
+        run_python_tool(
+            ["skills/ppt-master/scripts/total_md_split.py", str(project_path)],
+            cwd=REPO_ROOT,
+            log_path=log_path,
+        )
+        run_python_tool(
+            ["skills/ppt-master/scripts/finalize_svg.py", str(project_path)],
+            cwd=REPO_ROOT,
+            log_path=log_path,
+        )
+        run_python_tool(
+            ["skills/ppt-master/scripts/svg_to_pptx.py", str(project_path), "-s", "final"],
+            cwd=REPO_ROOT,
+            log_path=log_path,
+        )
     native_pptx, svg_pptx = find_export_outputs(project_path)
     if native_pptx is None or svg_pptx is None:
         raise RunnerError("Post-processing completed but export outputs were not found in exports/")

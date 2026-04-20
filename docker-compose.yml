@@ -11,7 +11,13 @@ services:
       PPT_API_PORT: 3000
       PPT_API_PROJECT_BASE_DIR: /app/projects
       PPT_API_JOBS_DIR: /app/tmp/api-jobs
-      PPT_API_MAX_CONCURRENT_JOBS: 25
+      PPT_API_MAX_CONCURRENT_JOBS: 15
+      PPT_API_PARALLEL_BATCH_WORKERS: 3
+      PPT_API_BATCH_PARTITION: ramp_2_3_4_5_6_7_8
+      PPT_API_LLM_SPEC_SLOTS: 4
+      PPT_API_LLM_SVG_SLOTS: 45
+      PPT_API_LLM_NOTES_SLOTS: 8
+      PPT_API_POSTPROCESS_SLOTS: 4
     volumes:
       - ./projects:/app/projects
       - ./tmp:/app/tmp

@@ -371,6 +371,17 @@ def _repair_svg_syntax(content: str) -> tuple[str, list[str]]:
 
     content = re.sub(r'>([^<]+)<', escape_text_node, content)
 
+    # The text-node regex above cannot see values like `延迟<50ms` because the
+    # raw `<` terminates its match. Escape any remaining less-than signs that
+    # are not valid XML/SVG tag starts before XML validation decides to fail.
+    content, unsafe_lt_count = re.subn(
+        r'<(?!/?[A-Za-z_][\w:.-]*(?=[\s>/])|!--|!\[CDATA\[|![A-Z]+|\?)',
+        '&lt;',
+        content,
+    )
+    if unsafe_lt_count > 0:
+        fixes.append(f"Syntax fix: escaped {unsafe_lt_count} unsafe less-than sign(s)")
+
     # XML also rejects bare ampersands in attribute values such as labels,
     # URLs, or generated copy. Escape any remaining non-entity ampersands.
     content, bare_amp_count = re.subn(

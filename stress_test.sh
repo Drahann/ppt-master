@@ -14,6 +14,12 @@ BASE_URL=${2:-"http://localhost:3001"}
 API="${BASE_URL}/api/generate-ppt"
 METRICS="${BASE_URL}/metrics"
 DASHBOARD="${BASE_URL}/dashboard"
+BATCH_MODE=${BATCH_MODE:-parallel}
+BATCH_SIZE=${BATCH_SIZE:-5}
+PARALLEL_BATCH_WORKERS=${PARALLEL_BATCH_WORKERS:-3}
+BATCH_PARTITION=${BATCH_PARTITION:-ramp_2_3_4_5_6_7_8}
+SPEC_MODEL=${SPEC_MODEL:-qwen3.6-plus}
+NOTES_MODEL=${NOTES_MODEL:-qwen3.5-flash}
 
 echo "╔══════════════════════════════════════════════════╗"
 echo "║       PPT Master 并发压力测试                     ║"
@@ -21,6 +27,7 @@ echo "╠═══════════════════════�
 echo "║  并发数:  $CONCURRENCY"
 echo "║  API:     $API"
 echo "║  监控台:  $DASHBOARD"
+echo "║  SVG窗口: $PARALLEL_BATCH_WORKERS | 分组: $BATCH_PARTITION"
 echo "╚══════════════════════════════════════════════════╝"
 echo ""
 
@@ -98,11 +105,12 @@ with open('$LOG_DIR/_payload_template.json', 'r', encoding='utf-8') as f:
     payload = json.load(f)
 payload['report_id'] = '$REPORT_ID'
 payload['title'] = '压测任务 $i'
-payload['batchMode'] = 'parallel'
-payload['batchSize'] = 5
-payload['parallelBatchWorkers'] = 7
-payload['specModel'] = 'qwen3.6-plus'
-payload['notesModel'] = 'qwen3.5-flash'
+payload['batchMode'] = '$BATCH_MODE'
+payload['batchSize'] = int('$BATCH_SIZE')
+payload['parallelBatchWorkers'] = int('$PARALLEL_BATCH_WORKERS')
+payload['batchPartition'] = '$BATCH_PARTITION'
+payload['specModel'] = '$SPEC_MODEL'
+payload['notesModel'] = '$NOTES_MODEL'
 with open('$PAYLOAD_FILE', 'w', encoding='utf-8') as out:
     json.dump(payload, out, ensure_ascii=False)
 "

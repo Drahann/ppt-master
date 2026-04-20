@@ -36,6 +36,12 @@ class Settings:
     batch_mode: str
     batch_size: int
     parallel_batch_workers: int
+    batch_partition: str
+    llm_slot_dir: Path
+    llm_spec_slots: int
+    llm_svg_slots: int
+    llm_notes_slots: int
+    postprocess_slots: int
     cos_secret_id: str
     cos_secret_key: str
     cos_region: str
@@ -53,11 +59,14 @@ def load_settings() -> Settings:
     batch_mode = (os.getenv("PPT_API_BATCH_MODE", "parallel") or "parallel").strip().lower()
     if batch_mode not in {"auto", "always", "never", "parallel"}:
         batch_mode = "auto"
+    batch_partition = (os.getenv("PPT_API_BATCH_PARTITION", "ramp_2_3_4_5_6_7_8") or "ramp_2_3_4_5_6_7_8").strip().lower()
+    if batch_partition not in {"fixed", "ramp", "2+3+4+5+6+7+8", "ramp_2_3_4_5_6_7_8"}:
+        batch_partition = "ramp_2_3_4_5_6_7_8"
     return Settings(
         repo_root=REPO_ROOT,
         host=os.getenv("PPT_API_HOST", "0.0.0.0"),
         port=_env_int("PPT_API_PORT", 3000),
-        max_concurrent_jobs=max(1, _env_int("PPT_API_MAX_CONCURRENT_JOBS", 1)),
+        max_concurrent_jobs=max(1, _env_int("PPT_API_MAX_CONCURRENT_JOBS", 15)),
         runner_timeout_seconds=max(60, _env_int("PPT_API_RUNNER_TIMEOUT_SECONDS", 7200)),
         canvas_format=os.getenv("PPT_API_CANVAS_FORMAT", "ppt169"),
         project_base_dir=project_base_dir,
@@ -69,7 +78,13 @@ def load_settings() -> Settings:
         qwen_notes_model=(os.getenv("PPT_API_QWEN_NOTES_MODEL") or "").strip() or None,
         batch_mode=batch_mode,
         batch_size=max(1, _env_int("PPT_API_BATCH_SIZE", 5)),
-        parallel_batch_workers=max(1, _env_int("PPT_API_PARALLEL_BATCH_WORKERS", 7)),
+        parallel_batch_workers=max(1, _env_int("PPT_API_PARALLEL_BATCH_WORKERS", 3)),
+        batch_partition=batch_partition,
+        llm_slot_dir=Path(os.getenv("PPT_API_LLM_SLOT_DIR", str(REPO_ROOT / "tmp" / "llm-slots"))).expanduser(),
+        llm_spec_slots=max(1, _env_int("PPT_API_LLM_SPEC_SLOTS", 4)),
+        llm_svg_slots=max(1, _env_int("PPT_API_LLM_SVG_SLOTS", 45)),
+        llm_notes_slots=max(1, _env_int("PPT_API_LLM_NOTES_SLOTS", 8)),
+        postprocess_slots=max(1, _env_int("PPT_API_POSTPROCESS_SLOTS", 4)),
         cos_secret_id=os.getenv("COS_SECRET_ID", "").strip(),
         cos_secret_key=os.getenv("COS_SECRET_KEY", "").strip(),
         cos_region=os.getenv("COS_REGION", "ap-shanghai").strip() or "ap-shanghai",

@@ -21,11 +21,32 @@ from .storage import build_result_zip, notify_report_server, sanitize_title, upl
 settings = load_settings()
 settings.project_base_dir.mkdir(parents=True, exist_ok=True)
 settings.jobs_dir.mkdir(parents=True, exist_ok=True)
+settings.llm_slot_dir.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="ppt-master-api", version="1.0.0")
 job_semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
 
 
 _DASHBOARD_HTML = (Path(__file__).parent / "dashboard.html").read_text(encoding="utf-8")
+
+
+def _llm_slot_snapshot() -> dict[str, dict[str, int | str]]:
+    limits = {
+        "spec": settings.llm_spec_slots,
+        "svg": settings.llm_svg_slots,
+        "notes": settings.llm_notes_slots,
+        "postprocess": settings.postprocess_slots,
+    }
+    snapshot: dict[str, dict[str, int | str]] = {}
+    for stage, limit in limits.items():
+        stage_dir = settings.llm_slot_dir / stage
+        active = len(list(stage_dir.glob("*.slot"))) if stage_dir.exists() else 0
+        snapshot[stage] = {
+            "active": active,
+            "limit": limit,
+            "available": max(0, limit - active),
+            "dir": str(stage_dir),
+        }
+    return snapshot
 
 
 @app.get("/healthz")
@@ -36,13 +57,22 @@ def healthz() -> dict[str, object]:
         "projectBaseDir": str(settings.project_base_dir),
         "jobsDir": str(settings.jobs_dir),
         "maxConcurrentJobs": settings.max_concurrent_jobs,
+        "batchPartition": settings.batch_partition,
+        "llmSlots": {
+            "spec": settings.llm_spec_slots,
+            "svg": settings.llm_svg_slots,
+            "notes": settings.llm_notes_slots,
+            "postprocess": settings.postprocess_slots,
+        },
     }
 
 
 @app.get("/metrics")
 def get_metrics() -> dict:
     """Real-time performance metrics JSON."""
-    return metrics.snapshot(settings.max_concurrent_jobs)
+    payload = metrics.snapshot(settings.max_concurrent_jobs)
+    payload["llmSlots"] = _llm_slot_snapshot()
+    return payload
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -110,6 +140,7 @@ def _process_request(request: NormalizedRequest) -> dict[str, object]:
             batch_mode=(request.batch_mode or settings.batch_mode),
             batch_size=(request.batch_size or settings.batch_size),
             parallel_batch_workers=(request.parallel_batch_workers or settings.parallel_batch_workers),
+            batch_partition=(request.batch_partition or settings.batch_partition),
             spec_model=request.spec_model,
             notes_model=request.notes_model,
         )
@@ -162,6 +193,7 @@ def _normalize_report_to_ppt_request(request: ReportRequest) -> NormalizedReques
         batch_mode=request.batchMode,
         batch_size=request.batchSize,
         parallel_batch_workers=request.parallelBatchWorkers,
+        batch_partition=request.batchPartition,
         spec_model=(request.specModel.strip() if isinstance(request.specModel, str) and request.specModel.strip() else None),
         notes_model=(request.notesModel.strip() if isinstance(request.notesModel, str) and request.notesModel.strip() else None),
     )
@@ -178,6 +210,7 @@ def _normalize_generate_ppt_request(request: GeneratePptRequest) -> NormalizedRe
         batch_mode=request.batchMode,
         batch_size=request.batchSize,
         parallel_batch_workers=request.parallelBatchWorkers,
+        batch_partition=request.batchPartition,
         spec_model=(request.specModel.strip() if isinstance(request.specModel, str) and request.specModel.strip() else None),
         notes_model=(request.notesModel.strip() if isinstance(request.notesModel, str) and request.notesModel.strip() else None),
     )

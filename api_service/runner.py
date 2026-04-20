@@ -58,6 +58,7 @@ def execute_runner(
     batch_mode: str | None = None,
     batch_size: int | None = None,
     parallel_batch_workers: int | None = None,
+    batch_partition: str | None = None,
     spec_model: str | None = None,
     notes_model: str | None = None,
 ) -> RunnerResult:
@@ -87,6 +88,8 @@ def execute_runner(
         request_payload["batch_size"] = batch_size
     if parallel_batch_workers is not None:
         request_payload["parallel_batch_workers"] = parallel_batch_workers
+    if batch_partition:
+        request_payload["batch_partition"] = batch_partition
 
     request_path = working_dir / "runner_request.json"
     request_path.write_text(json.dumps(request_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
