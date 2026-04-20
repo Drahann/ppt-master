@@ -56,8 +56,6 @@ DIRECT_NOTES_TIMEOUT_SECONDS = 10 * 60
 DIRECT_NOTES_MAX_TOKENS = 12000
 DIRECT_SPEC_TIMEOUT_SECONDS = 15 * 60
 DIRECT_SPEC_MAX_TOKENS = 32000
-CACHE_SCHEMA_VERSION = "2026-04-19-direct-spec-v3"
-STAGE_CACHE_DIRNAME = ".runner-stage-cache"
 SKILL_PACK_DIRNAME = "skill_packs"
 QWEN_CHAT_ROOT = Path.home() / ".qwen" / "projects"
 QWEN_DEBUG_ROOT = Path.home() / ".qwen" / "debug"
@@ -280,41 +278,11 @@ def hash_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def hash_json(payload: Any) -> str:
-    return hash_text(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-
-
-def hash_file(path: Path) -> str:
-    if not path.exists():
-        return "missing"
-    return hash_text(read_text(path))
-
-
 def resolve_project_base_dir(request: dict[str, Any]) -> Path:
     base_dir = Path(request["project_base_dir"])
     if not base_dir.is_absolute():
         base_dir = REPO_ROOT / base_dir
     return base_dir
-
-
-def resolve_stage_cache_root(request: dict[str, Any]) -> Path:
-    root = resolve_project_base_dir(request) / STAGE_CACHE_DIRNAME
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def build_stage_cache_key(stage_name: str, payload: dict[str, Any]) -> str:
-    return hash_json(
-        {
-            "schema": CACHE_SCHEMA_VERSION,
-            "stage": stage_name,
-            "payload": payload,
-        }
-    )
-
-
-def build_stage_cache_dir(cache_root: Path, stage_name: str, cache_key: str) -> Path:
-    return cache_root / stage_name / cache_key
 
 
 def ensure_clean_directory(path: Path) -> None:
@@ -471,108 +439,6 @@ def write_deterministic_review_report(
         "design_spec_path": str(project_path / "design_spec.md"),
     }
     write_json(review_report_path, review_payload)
-
-
-def try_restore_spec_stage(
-    cache_dir: Path,
-    project_path: Path,
-    plan: list[SlidePlanEntry],
-    valid_chart_keys: set[str],
-    log_path: Path,
-) -> bool:
-    cached_spec_path = cache_dir / "design_spec.md"
-    if not cached_spec_path.exists():
-        return False
-    copy_file(cached_spec_path, project_path / "design_spec.md")
-    state_complete, errors = check_spec_state(project_path, plan, valid_chart_keys)
-    if state_complete:
-        append_log(log_path, f"Spec stage cache hit: {cache_dir}")
-        return True
-    append_log(log_path, f"Spec stage cache miss after validation: {errors}")
-    return False
-
-
-def save_spec_stage(cache_dir: Path, project_path: Path) -> None:
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    copy_file(project_path / "design_spec.md", cache_dir / "design_spec.md")
-
-
-def try_restore_review_stage(
-    cache_dir: Path,
-    project_path: Path,
-    review_report_path: Path,
-    plan: list[SlidePlanEntry],
-    valid_chart_keys: set[str],
-    log_path: Path,
-) -> bool:
-    cached_spec_path = cache_dir / "design_spec.md"
-    cached_report_path = cache_dir / REVIEW_REPORT_FILENAME
-    if not cached_spec_path.exists() or not cached_report_path.exists():
-        return False
-    copy_file(cached_spec_path, project_path / "design_spec.md")
-    copy_file(cached_report_path, review_report_path)
-    state_complete, errors = check_review_state(project_path, plan, valid_chart_keys, review_report_path)
-    if state_complete:
-        append_log(log_path, f"Review stage cache hit: {cache_dir}")
-        return True
-    append_log(log_path, f"Review stage cache miss after validation: {errors}")
-    return False
-
-
-def save_review_stage(cache_dir: Path, project_path: Path, review_report_path: Path) -> None:
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    copy_file(project_path / "design_spec.md", cache_dir / "design_spec.md")
-    copy_file(review_report_path, cache_dir / REVIEW_REPORT_FILENAME)
-
-
-def try_restore_svg_stage(
-    cache_dir: Path,
-    project_path: Path,
-    plan: list[SlidePlanEntry],
-    valid_chart_keys: set[str],
-    runner_dir: Path,
-    log_path: Path,
-) -> bool:
-    cached_svg_dir = cache_dir / "svg_output"
-    if not cached_svg_dir.exists():
-        return False
-    copy_svg_directory(cached_svg_dir, project_path / "svg_output")
-    state_complete, errors = check_svg_only_state(project_path, plan, valid_chart_keys, runner_dir)
-    if state_complete:
-        append_log(log_path, f"SVG stage cache hit: {cache_dir}")
-        return True
-    append_log(log_path, f"SVG stage cache miss after validation: {errors}")
-    ensure_clean_directory(project_path / "svg_output")
-    return False
-
-
-def save_svg_stage(cache_dir: Path, project_path: Path) -> None:
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    copy_svg_directory(project_path / "svg_output", cache_dir / "svg_output")
-
-
-def try_restore_notes_stage(
-    cache_dir: Path,
-    project_path: Path,
-    plan: list[SlidePlanEntry],
-    log_path: Path,
-) -> bool:
-    cached_notes_path = cache_dir / "total.md"
-    if not cached_notes_path.exists():
-        return False
-    copy_file(cached_notes_path, project_path / "notes" / "total.md")
-    state_complete, errors = check_notes_state(project_path, plan)
-    if state_complete:
-        append_log(log_path, f"Notes stage cache hit: {cache_dir}")
-        return True
-    append_log(log_path, f"Notes stage cache miss after validation: {errors}")
-    (project_path / "notes" / "total.md").unlink(missing_ok=True)
-    return False
-
-
-def save_notes_stage(cache_dir: Path, project_path: Path) -> None:
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    copy_file(project_path / "notes" / "total.md", cache_dir / "total.md")
 
 
 def is_resource_only_heading(title: str) -> bool:
@@ -3756,7 +3622,6 @@ def execute_generation(
     runner_dir: Path,
     log_path: Path,
 ) -> str:
-    cache_root = resolve_stage_cache_root(request)
     slide_plan_payload = [asdict(entry) for entry in plan]
     slide_plan_path = runner_dir / "slide_plan.json"
     write_json(slide_plan_path, slide_plan_payload)
@@ -3806,38 +3671,6 @@ def execute_generation(
         "notes": {"path": str(notes_skill_pack_path), "hash": notes_skill_pack_hash},
     }
     write_json(runner_dir / "skill_pack_index.json", skill_pack_index)
-
-    source_md_hash = hash_file(imported_markdown_path)
-    plan_hash = hash_json(slide_plan_payload)
-    request_hash = hash_json(
-        {
-            "canvas_format": request["canvas_format"],
-            "rules": request["rules"],
-            "model": request.get("model"),
-            "spec_model": request.get("spec_model"),
-            "spec_engine": "direct_api_v1",
-            "spec_max_tokens": direct_spec_max_tokens(),
-            "notes_model": request.get("notes_model"),
-            "notes_engine": "direct_api_v1",
-            "notes_max_tokens": direct_notes_max_tokens(),
-            "batch_mode": request.get("batch_mode"),
-            "batch_size": request.get("batch_size"),
-            "parallel_batch_workers": request.get("parallel_batch_workers"),
-        }
-    )
-
-    spec_cache_key = build_stage_cache_key(
-        "spec",
-        {
-            "source_md_hash": source_md_hash,
-            "plan_hash": plan_hash,
-            "request_hash": request_hash,
-            "chart_reference_hash": hash_file(chart_reference_path),
-            "icon_reference_hash": hash_file(icon_reference_path),
-            "skill_pack_hash": strategist_skill_pack_hash,
-        },
-    )
-    spec_cache_dir = build_stage_cache_dir(cache_root, "spec", spec_cache_key)
     spec_prompt = build_spec_bootstrap_prompt(
         request,
         project_path,
@@ -3851,46 +3684,42 @@ def execute_generation(
     )
     (runner_dir / "spec_prompt.txt").write_text(spec_prompt, encoding="utf-8")
 
-    if try_restore_spec_stage(spec_cache_dir, project_path, plan, valid_chart_keys, log_path):
-        spec_session_id = "cache_hit"
-    else:
-        spec_model = str(request.get("spec_model") or request.get("model"))
-        spec_session_id = execute_direct_spec_stage(
-            request=request,
-            project_path=project_path,
-            imported_markdown_path=imported_markdown_path,
-            strategist_skill_pack_path=strategist_skill_pack_path,
-            slide_plan_path=slide_plan_path,
-            slide_digest_path=slide_digest_path,
-            chart_reference_path=chart_reference_path,
-            icon_reference_path=icon_reference_path,
-            plan=plan,
-            valid_chart_keys=valid_chart_keys,
+    spec_model = str(request.get("spec_model") or request.get("model"))
+    spec_session_id = execute_direct_spec_stage(
+        request=request,
+        project_path=project_path,
+        imported_markdown_path=imported_markdown_path,
+        strategist_skill_pack_path=strategist_skill_pack_path,
+        slide_plan_path=slide_plan_path,
+        slide_digest_path=slide_digest_path,
+        chart_reference_path=chart_reference_path,
+        icon_reference_path=icon_reference_path,
+        plan=plan,
+        valid_chart_keys=valid_chart_keys,
+        model=spec_model,
+        runner_dir=runner_dir,
+        log_path=log_path,
+    )
+    if spec_session_id is None:
+        append_log(log_path, "Direct spec generation unavailable or invalid; falling back to Qwen CLI")
+        spec_session_id = execute_qwen_stage(
+            stage_name="spec_generation",
+            artifact_prefix="spec",
+            initial_prompt=spec_prompt,
+            completion_sentinel_prefix=SPEC_COMPLETION_SENTINEL_PREFIX,
+            state_checker=lambda: check_spec_state(project_path, plan, valid_chart_keys),
+            continue_prompt_builder=lambda errors: build_spec_continue_prompt(
+                request,
+                project_path,
+                plan,
+                errors,
+                strategist_skill_pack_path,
+            ),
+            confirmation_prompt_builder=lambda _errors: build_spec_confirmation_prompt(plan, request),
             model=spec_model,
             runner_dir=runner_dir,
             log_path=log_path,
         )
-        if spec_session_id is None:
-            append_log(log_path, "Direct spec generation unavailable or invalid; falling back to Qwen CLI")
-            spec_session_id = execute_qwen_stage(
-                stage_name="spec_generation",
-                artifact_prefix="spec",
-                initial_prompt=spec_prompt,
-                completion_sentinel_prefix=SPEC_COMPLETION_SENTINEL_PREFIX,
-                state_checker=lambda: check_spec_state(project_path, plan, valid_chart_keys),
-                continue_prompt_builder=lambda errors: build_spec_continue_prompt(
-                    request,
-                    project_path,
-                    plan,
-                    errors,
-                    strategist_skill_pack_path,
-                ),
-                confirmation_prompt_builder=lambda _errors: build_spec_confirmation_prompt(plan, request),
-                model=spec_model,
-                runner_dir=runner_dir,
-                log_path=log_path,
-            )
-        save_spec_stage(spec_cache_dir, project_path)
 
     spec_repair_report_path = runner_dir / SPEC_REPAIR_REPORT_FILENAME
     repair_design_spec(
@@ -3965,20 +3794,6 @@ def execute_generation(
     )
     (runner_dir / "bootstrap_prompt.txt").write_text(svg_prompt, encoding="utf-8")
 
-    svg_cache_key = build_stage_cache_key(
-        "svg",
-        {
-            "spec_hash": hash_file(project_path / "design_spec.md"),
-            "source_md_hash": source_md_hash,
-            "plan_hash": plan_hash,
-            "request_hash": request_hash,
-            "icon_reference_hash": hash_file(icon_reference_path),
-            "anchor_context_hash": hash_file(svg_anchor_context_path),
-            "executor_skill_pack_hash": executor_skill_pack_hash,
-        },
-    )
-    svg_cache_dir = build_stage_cache_dir(cache_root, "svg", svg_cache_key)
-
     batch_mode = str(request.get("batch_mode", "always"))
     batch_size = int(request.get("batch_size", BATCH_SIZE))
     use_parallel_svg = batch_mode == "parallel" or (
@@ -3988,73 +3803,69 @@ def execute_generation(
 
     svg_session_id: str
     svg_batch_session_ids: list[str] = []
-    if try_restore_svg_stage(svg_cache_dir, project_path, plan, valid_chart_keys, runner_dir, log_path):
-        svg_session_id = "cache_hit"
+    if use_parallel_svg:
+        append_log(
+            log_path,
+            "Using parallel batched SVG generation: "
+            f"pages={len(plan)} batch_size={batch_size} "
+            f"workers={int(request.get('parallel_batch_workers', DEFAULT_PARALLEL_BATCH_WORKERS))}",
+        )
+        svg_batch_session_ids = execute_parallel_svg_generation(
+            request=request,
+            project_path=project_path,
+            slide_plan_path=slide_plan_path,
+            slide_digest_path=slide_digest_path,
+            icon_reference_path=icon_reference_path,
+            svg_anchor_context_path=svg_anchor_context_path,
+            executor_style_path=executor_style_path,
+            executor_skill_pack_path=executor_skill_pack_path,
+            plan=plan,
+            runner_dir=runner_dir,
+            log_path=log_path,
+        )
+        svg_session_id = svg_batch_session_ids[-1]
+    elif use_batched_svg:
+        append_log(
+            log_path,
+            f"Using batched serial SVG generation: pages={len(plan)} batch_size={batch_size} batch_mode={batch_mode}",
+        )
+        svg_batch_session_ids = execute_batched_svg_generation(
+            request=request,
+            project_path=project_path,
+            slide_plan_path=slide_plan_path,
+            slide_digest_path=slide_digest_path,
+            icon_reference_path=icon_reference_path,
+            svg_anchor_context_path=svg_anchor_context_path,
+            executor_style_path=executor_style_path,
+            executor_skill_pack_path=executor_skill_pack_path,
+            plan=plan,
+            runner_dir=runner_dir,
+            log_path=log_path,
+        )
+        svg_session_id = svg_batch_session_ids[-1]
     else:
-        if use_parallel_svg:
-            append_log(
-                log_path,
-                "Using parallel batched SVG generation: "
-                f"pages={len(plan)} batch_size={batch_size} "
-                f"workers={int(request.get('parallel_batch_workers', DEFAULT_PARALLEL_BATCH_WORKERS))}",
-            )
-            svg_batch_session_ids = execute_parallel_svg_generation(
-                request=request,
-                project_path=project_path,
-                slide_plan_path=slide_plan_path,
-                slide_digest_path=slide_digest_path,
-                icon_reference_path=icon_reference_path,
-                svg_anchor_context_path=svg_anchor_context_path,
-                executor_style_path=executor_style_path,
-                executor_skill_pack_path=executor_skill_pack_path,
-                plan=plan,
-                runner_dir=runner_dir,
-                log_path=log_path,
-            )
-            svg_session_id = svg_batch_session_ids[-1]
-        elif use_batched_svg:
-            append_log(
-                log_path,
-                f"Using batched serial SVG generation: pages={len(plan)} batch_size={batch_size} batch_mode={batch_mode}",
-            )
-            svg_batch_session_ids = execute_batched_svg_generation(
-                request=request,
-                project_path=project_path,
-                slide_plan_path=slide_plan_path,
-                slide_digest_path=slide_digest_path,
-                icon_reference_path=icon_reference_path,
-                svg_anchor_context_path=svg_anchor_context_path,
-                executor_style_path=executor_style_path,
-                executor_skill_pack_path=executor_skill_pack_path,
-                plan=plan,
-                runner_dir=runner_dir,
-                log_path=log_path,
-            )
-            svg_session_id = svg_batch_session_ids[-1]
-        else:
-            append_log(
-                log_path,
-                f"Using single-session SVG generation: pages={len(plan)} batch_mode={batch_mode}",
-            )
-            svg_session_id = execute_qwen_stage(
-                stage_name="svg_generation",
-                artifact_prefix="qwen",
-                initial_prompt=svg_prompt,
-                completion_sentinel_prefix=COMPLETION_SENTINEL_PREFIX,
-                state_checker=lambda: check_svg_only_state(project_path, plan, valid_chart_keys, runner_dir),
-                continue_prompt_builder=lambda errors: build_svg_continue_prompt(
-                    request,
-                    project_path,
-                    plan,
-                    errors,
-                    svg_anchor_context_path,
-                ),
-                confirmation_prompt_builder=lambda _errors: build_svg_confirmation_prompt(plan, request),
-                model=request.get("model"),
-                runner_dir=runner_dir,
-                log_path=log_path,
-            )
-        save_svg_stage(svg_cache_dir, project_path)
+        append_log(
+            log_path,
+            f"Using single-session SVG generation: pages={len(plan)} batch_mode={batch_mode}",
+        )
+        svg_session_id = execute_qwen_stage(
+            stage_name="svg_generation",
+            artifact_prefix="qwen",
+            initial_prompt=svg_prompt,
+            completion_sentinel_prefix=COMPLETION_SENTINEL_PREFIX,
+            state_checker=lambda: check_svg_only_state(project_path, plan, valid_chart_keys, runner_dir),
+            continue_prompt_builder=lambda errors: build_svg_continue_prompt(
+                request,
+                project_path,
+                plan,
+                errors,
+                svg_anchor_context_path,
+            ),
+            confirmation_prompt_builder=lambda _errors: build_svg_confirmation_prompt(plan, request),
+            model=request.get("model"),
+            runner_dir=runner_dir,
+            log_path=log_path,
+        )
 
     notes_prompt = build_notes_bootstrap_prompt(
         project_path=project_path,
@@ -4065,48 +3876,32 @@ def execute_generation(
     )
     (runner_dir / "notes_prompt.txt").write_text(notes_prompt, encoding="utf-8")
 
-    notes_cache_key = build_stage_cache_key(
-        "notes",
-        {
-            "spec_hash": hash_file(project_path / "design_spec.md"),
-            "source_md_hash": source_md_hash,
-            "plan_hash": plan_hash,
-            "svg_cache_key": svg_cache_key,
-            "notes_skill_pack_hash": notes_skill_pack_hash,
-            "request_hash": request_hash,
-        },
+    notes_model = str(request.get("notes_model") or request.get("model"))
+    notes_session_id = execute_direct_notes_stage(
+        project_path=project_path,
+        imported_markdown_path=imported_markdown_path,
+        slide_plan_path=slide_plan_path,
+        svg_anchor_context_path=svg_anchor_context_path,
+        notes_skill_pack_path=notes_skill_pack_path,
+        plan=plan,
+        model=notes_model,
+        runner_dir=runner_dir,
+        log_path=log_path,
     )
-    notes_cache_dir = build_stage_cache_dir(cache_root, "notes", notes_cache_key)
-    if try_restore_notes_stage(notes_cache_dir, project_path, plan, log_path):
-        notes_session_id = "cache_hit"
-    else:
-        notes_model = str(request.get("notes_model") or request.get("model"))
-        notes_session_id = execute_direct_notes_stage(
-            project_path=project_path,
-            imported_markdown_path=imported_markdown_path,
-            slide_plan_path=slide_plan_path,
-            svg_anchor_context_path=svg_anchor_context_path,
-            notes_skill_pack_path=notes_skill_pack_path,
-            plan=plan,
+    if notes_session_id is None:
+        append_log(log_path, "Direct notes generation unavailable or invalid; falling back to Qwen CLI")
+        notes_session_id = execute_qwen_stage(
+            stage_name="notes_generation",
+            artifact_prefix="notes",
+            initial_prompt=notes_prompt,
+            completion_sentinel_prefix=NOTES_COMPLETION_SENTINEL_PREFIX,
+            state_checker=lambda: check_notes_state(project_path, plan),
+            continue_prompt_builder=lambda errors: build_notes_continue_prompt(project_path, plan, errors),
+            confirmation_prompt_builder=lambda errors: build_notes_continue_prompt(project_path, plan, errors),
             model=notes_model,
             runner_dir=runner_dir,
             log_path=log_path,
         )
-        if notes_session_id is None:
-            append_log(log_path, "Direct notes generation unavailable or invalid; falling back to Qwen CLI")
-            notes_session_id = execute_qwen_stage(
-                stage_name="notes_generation",
-                artifact_prefix="notes",
-                initial_prompt=notes_prompt,
-                completion_sentinel_prefix=NOTES_COMPLETION_SENTINEL_PREFIX,
-                state_checker=lambda: check_notes_state(project_path, plan),
-                continue_prompt_builder=lambda errors: build_notes_continue_prompt(project_path, plan, errors),
-                confirmation_prompt_builder=lambda errors: build_notes_continue_prompt(project_path, plan, errors),
-                model=notes_model,
-                runner_dir=runner_dir,
-                log_path=log_path,
-            )
-        save_notes_stage(notes_cache_dir, project_path)
 
     append_log(log_path, "Running deterministic SVG quality check (no AI review)")
     svg_quality_report_path = runner_dir / SVG_QUALITY_REPORT_FILENAME
