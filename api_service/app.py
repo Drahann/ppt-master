@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import threading
 import time
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from .config import load_settings
+from .job_store import RedisJobStore, RedisJobStoreError
 from .markdown_assets import process_markdown_images
 from .metrics import metrics
 from .models import CallbackResult as CallbackResultModel
@@ -24,6 +26,15 @@ settings.jobs_dir.mkdir(parents=True, exist_ok=True)
 settings.llm_slot_dir.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="ppt-master-api", version="1.0.0")
 job_semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
+execution_semaphore = threading.BoundedSemaphore(settings.max_concurrent_jobs)
+worker_stop_event = threading.Event()
+worker_threads: list[threading.Thread] = []
+job_store_error: str | None = None
+try:
+    job_store = RedisJobStore.from_settings(settings)
+except RedisJobStoreError as exc:
+    job_store = None
+    job_store_error = str(exc)
 
 
 _DASHBOARD_HTML = (Path(__file__).parent / "dashboard.html").read_text(encoding="utf-8")
@@ -38,14 +49,27 @@ def _llm_slot_snapshot() -> dict[str, dict[str, int | str]]:
     }
     snapshot: dict[str, dict[str, int | str]] = {}
     for stage, limit in limits.items():
-        stage_dir = settings.llm_slot_dir / stage
-        active = len(list(stage_dir.glob("*.slot"))) if stage_dir.exists() else 0
-        snapshot[stage] = {
-            "active": active,
-            "limit": limit,
-            "available": max(0, limit - active),
-            "dir": str(stage_dir),
-        }
+        redis_active = _redis_slot_active(stage, limit)
+        if redis_active is not None:
+            active, waiting = redis_active
+            snapshot[stage] = {
+                "active": active,
+                "waiting": waiting,
+                "limit": limit,
+                "available": max(0, limit - active),
+                "backend": "redis",
+            }
+        else:
+            stage_dir = settings.llm_slot_dir / stage
+            active = len(list(stage_dir.glob("*.slot"))) if stage_dir.exists() else 0
+            snapshot[stage] = {
+                "active": active,
+                "waiting": 0,
+                "limit": limit,
+                "available": max(0, limit - active),
+                "backend": "file",
+                "dir": str(stage_dir),
+            }
     return snapshot
 
 
@@ -64,6 +88,13 @@ def healthz() -> dict[str, object]:
             "notes": settings.llm_notes_slots,
             "postprocess": settings.postprocess_slots,
         },
+        "redis": {
+            "configured": bool(settings.redis_url),
+            "available": _redis_available(),
+            "error": job_store_error,
+            "keyPrefix": settings.redis_key_prefix,
+        },
+        "asyncWorkers": len(worker_threads),
     }
 
 
@@ -72,6 +103,7 @@ def get_metrics() -> dict:
     """Real-time performance metrics JSON."""
     payload = metrics.snapshot(settings.max_concurrent_jobs)
     payload["llmSlots"] = _llm_slot_snapshot()
+    payload["redisJobs"] = _redis_job_snapshot()
     return payload
 
 
@@ -90,11 +122,43 @@ async def request_validation_exception_handler(_request, exc: RequestValidationE
     return JSONResponse(status_code=400, content={"error": message})
 
 
+@app.on_event("startup")
+def start_async_workers() -> None:
+    if job_store is None:
+        return
+    if worker_threads:
+        return
+    try:
+        job_store.ping()
+    except Exception as exc:
+        global job_store_error
+        job_store_error = str(exc)
+
+    for index in range(settings.async_worker_count):
+        thread = threading.Thread(
+            target=_async_worker_loop,
+            name=f"ppt-async-worker-{index + 1}",
+            daemon=True,
+        )
+        thread.start()
+        worker_threads.append(thread)
+
+
+@app.on_event("shutdown")
+def stop_async_workers() -> None:
+    worker_stop_event.set()
+    for thread in worker_threads:
+        thread.join(timeout=2)
+
+
 @app.post("/api/report-to-ppt", response_model=ReportResponse)
 async def report_to_ppt(request: ReportRequest):
+    normalized = _normalize_report_to_ppt_request(request)
+    if normalized.response_mode == "async":
+        return _enqueue_async_request(normalized, report_style=True)
     async with job_semaphore:
         try:
-            payload = await asyncio.to_thread(_process_request, _normalize_report_to_ppt_request(request))
+            payload = await asyncio.to_thread(_process_request, normalized)
             return ReportResponse(**payload)
         except Exception as exc:
             return JSONResponse(status_code=500, content={"error": str(exc), "reportId": request.reportId})
@@ -102,9 +166,12 @@ async def report_to_ppt(request: ReportRequest):
 
 @app.post("/api/generate-ppt", response_model=GeneratePptResponse)
 async def generate_ppt(request: GeneratePptRequest):
+    normalized = _normalize_generate_ppt_request(request)
+    if normalized.response_mode == "async":
+        return _enqueue_async_request(normalized, report_style=False)
     async with job_semaphore:
         try:
-            payload = await asyncio.to_thread(_process_request, _normalize_generate_ppt_request(request))
+            payload = await asyncio.to_thread(_process_request, normalized)
             return GeneratePptResponse(
                 success=payload["success"],
                 report_id=payload["reportId"],
@@ -117,64 +184,196 @@ async def generate_ppt(request: GeneratePptRequest):
             return JSONResponse(status_code=500, content={"success": False, "error": str(exc), "report_id": request.report_id})
 
 
-def _process_request(request: NormalizedRequest) -> dict[str, object]:
+@app.get("/api/jobs/{job_id}", response_model=None)
+def get_job(job_id: str) -> JSONResponse | dict[str, object]:
+    if job_store is None:
+        return JSONResponse(status_code=503, content={"error": "Redis job store is not configured", "detail": job_store_error})
+    record = job_store.get_job(job_id)
+    if record is None:
+        return JSONResponse(status_code=404, content={"error": "job not found", "job_id": job_id})
+    return record
+
+
+@app.get("/api/jobs/{job_id}/artifacts", response_model=None)
+def get_job_artifacts(job_id: str) -> JSONResponse | dict[str, object]:
+    if job_store is None:
+        return JSONResponse(status_code=503, content={"error": "Redis job store is not configured", "detail": job_store_error})
+    record = job_store.get_job(job_id)
+    if record is None:
+        return JSONResponse(status_code=404, content={"error": "job not found", "job_id": job_id})
+    return {"job_id": job_id, "status": record.get("status"), "result": record.get("result")}
+
+
+@app.post("/api/jobs/{job_id}/cancel", response_model=None)
+def cancel_job(job_id: str) -> JSONResponse | dict[str, object]:
+    if job_store is None:
+        return JSONResponse(status_code=503, content={"error": "Redis job store is not configured", "detail": job_store_error})
+    record = job_store.cancel(job_id)
+    if record is None:
+        return JSONResponse(status_code=404, content={"error": "job not found", "job_id": job_id})
+    return record
+
+
+def _process_request(request: NormalizedRequest, job_id: str | None = None) -> dict[str, object]:
     title = request.title or derive_title(request.content, request.report_id)
-    job_dir = _build_job_dir(request.report_id)
+    job_dir = settings.jobs_dir / job_id if job_id else _build_job_dir(request.report_id)
     job_dir.mkdir(parents=True, exist_ok=True)
-    job_id = job_dir.name
+    metric_job_id = job_id or job_dir.name
 
-    metrics.start_job(job_id, request.report_id, title or "untitled")
+    metrics.start_job(metric_job_id, request.report_id, title or "untitled")
     try:
-        processed_markdown, image_warnings = process_markdown_images(request.content, job_dir)
-        source_md_path = job_dir / "source.md"
-        source_md_path.write_text(processed_markdown, encoding="utf-8")
-        if image_warnings:
-            (job_dir / "image_warnings.txt").write_text("\n".join(image_warnings) + "\n", encoding="utf-8")
+        with execution_semaphore:
+            _update_job_stage(job_id, "preparing")
+            processed_markdown, image_warnings = process_markdown_images(request.content, job_dir)
+            source_md_path = job_dir / "source.md"
+            source_md_path.write_text(processed_markdown, encoding="utf-8")
+            if image_warnings:
+                (job_dir / "image_warnings.txt").write_text("\n".join(image_warnings) + "\n", encoding="utf-8")
 
-        runner_result = execute_runner(
-            source_md_path=source_md_path,
-            report_id=request.report_id,
-            title=title,
-            settings=settings,
-            working_dir=job_dir,
-            batch_mode=(request.batch_mode or settings.batch_mode),
-            batch_size=(request.batch_size or settings.batch_size),
-            parallel_batch_workers=(request.parallel_batch_workers or settings.parallel_batch_workers),
-            batch_partition=(request.batch_partition or settings.batch_partition),
-            spec_model=request.spec_model,
-            notes_model=request.notes_model,
-        )
+            _update_job_stage(job_id, "runner")
+            runner_result = execute_runner(
+                source_md_path=source_md_path,
+                report_id=request.report_id,
+                title=title,
+                settings=settings,
+                working_dir=job_dir,
+                batch_mode=(request.batch_mode or settings.batch_mode),
+                batch_size=(request.batch_size or settings.batch_size),
+                parallel_batch_workers=(request.parallel_batch_workers or settings.parallel_batch_workers),
+                batch_partition=(request.batch_partition or settings.batch_partition),
+                spec_model=request.spec_model,
+                notes_model=request.notes_model,
+            )
 
-        notes_path = runner_result.project_path / "notes" / "total.md"
-        zip_buffer = build_result_zip(runner_result.native_pptx_path, notes_path, runner_result.title)
+            notes_path = runner_result.project_path / "notes" / "total.md"
+            zip_buffer = build_result_zip(runner_result.native_pptx_path, notes_path, runner_result.title)
 
-        safe_title = sanitize_title(runner_result.title)
-        cos_path = f"ppt/{request.report_id}/{safe_title}.zip"
-        ppt_url = upload_to_cos(zip_buffer, cos_path, settings)
+            safe_title = sanitize_title(runner_result.title)
+            cos_path = f"ppt/{request.report_id}/{safe_title}.zip"
+            _update_job_stage(job_id, "uploading")
+            ppt_url = upload_to_cos(zip_buffer, cos_path, settings)
 
-        callback_result = notify_report_server(
-            report_id=request.report_id,
-            file_url=request.file_url,
-            word_url=request.word_url,
-            ppt_url=ppt_url,
-            callback_url=(request.callback_url or settings.report_callback_url),
-        )
+            if request.callback_mode == "auto":
+                _update_job_stage(job_id, "callback")
+                callback_result = notify_report_server(
+                    report_id=request.report_id,
+                    file_url=request.file_url,
+                    word_url=request.word_url,
+                    ppt_url=ppt_url,
+                    callback_url=(request.callback_url or settings.report_callback_url),
+                )
+            else:
+                callback_result = CallbackResultModel(success=True, error=None)
 
-        if not settings.keep_job_files:
-            shutil.rmtree(job_dir, ignore_errors=True)
+            if not settings.keep_job_files:
+                shutil.rmtree(job_dir, ignore_errors=True)
 
-        metrics.finish_job(job_id, runner_result.slide_count)
-        return {
-            "success": True,
-            "reportId": request.report_id,
-            "pptUrl": ppt_url,
-            "slideCount": runner_result.slide_count,
-            "title": runner_result.title,
-            "callback": CallbackResultModel(success=callback_result.success, error=callback_result.error).model_dump(),
-        }
+            metrics.finish_job(metric_job_id, runner_result.slide_count)
+            return {
+                "success": True,
+                "reportId": request.report_id,
+                "pptUrl": ppt_url,
+                "slideCount": runner_result.slide_count,
+                "title": runner_result.title,
+                "callback": CallbackResultModel(success=callback_result.success, error=callback_result.error).model_dump(),
+            }
     except Exception as exc:
-        metrics.fail_job(job_id, str(exc))
+        metrics.fail_job(metric_job_id, str(exc))
         raise
+
+
+def _enqueue_async_request(request: NormalizedRequest, *, report_style: bool) -> JSONResponse | ReportResponse | GeneratePptResponse:
+    if job_store is None:
+        return JSONResponse(status_code=503, content={"success": False, "error": "Redis job store is not configured", "detail": job_store_error})
+    try:
+        title = request.title or derive_title(request.content, request.report_id)
+        job_id = job_store.create_job(request, title=title)
+    except Exception as exc:
+        return JSONResponse(status_code=503, content={"success": False, "error": str(exc)})
+
+    payload = {
+        "success": True,
+        "pptUrl": None,
+        "slideCount": 0,
+        "title": title,
+        "callback": None,
+        "status": "queued",
+        "job_id": job_id,
+        "pollingUrl": f"/api/jobs/{job_id}",
+    }
+    if report_style:
+        return ReportResponse(reportId=request.report_id, **payload)
+    return GeneratePptResponse(report_id=request.report_id, **payload)
+
+
+def _async_worker_loop() -> None:
+    assert job_store is not None
+    while not worker_stop_event.is_set():
+        try:
+            job_id = job_store.dequeue(timeout_seconds=2)
+        except Exception as exc:
+            global job_store_error
+            job_store_error = str(exc)
+            time.sleep(2)
+            continue
+        if not job_id:
+            continue
+        _run_async_job(job_id)
+
+
+def _run_async_job(job_id: str) -> None:
+    assert job_store is not None
+    record = job_store.mark_running(job_id, stage="running")
+    if record is None or record.get("status") == "cancelled":
+        return
+    try:
+        request = NormalizedRequest(**record["request"])
+        payload = _process_request(request, job_id=job_id)
+        job_store.complete(job_id, payload)
+    except Exception as exc:
+        job_store.fail(job_id, str(exc))
+
+
+def _update_job_stage(job_id: str | None, stage: str) -> None:
+    if not job_id or job_store is None:
+        return
+    try:
+        job_store.update_stage(job_id, stage)
+    except Exception:
+        pass
+
+
+def _redis_available() -> bool:
+    if job_store is None:
+        return False
+    try:
+        return job_store.ping()
+    except Exception:
+        return False
+
+
+def _redis_job_snapshot() -> dict[str, object]:
+    if job_store is None:
+        return {"enabled": False, "error": job_store_error}
+    try:
+        return job_store.snapshot()
+    except Exception as exc:
+        return {"enabled": True, "error": str(exc)}
+
+
+def _redis_slot_active(stage: str, limit: int) -> tuple[int, int] | None:
+    if job_store is None:
+        return None
+    try:
+        prefix = settings.redis_key_prefix
+        active = 0
+        for index in range(1, limit + 1):
+            if job_store.client.exists(f"{prefix}:llm:slot:{stage}:{index:03d}"):
+                active += 1
+        waiting_raw = job_store.client.get(f"{prefix}:llm:waiting:{stage}") or "0"
+        return active, max(0, int(waiting_raw))
+    except Exception:
+        return None
 
 
 def _build_job_dir(report_id: str) -> Path:
@@ -196,6 +395,8 @@ def _normalize_report_to_ppt_request(request: ReportRequest) -> NormalizedReques
         batch_partition=request.batchPartition,
         spec_model=(request.specModel.strip() if isinstance(request.specModel, str) and request.specModel.strip() else None),
         notes_model=(request.notesModel.strip() if isinstance(request.notesModel, str) and request.notesModel.strip() else None),
+        response_mode=(request.responseMode or settings.default_response_mode),
+        callback_mode=(request.callbackMode or settings.default_callback_mode),
     )
 
 
@@ -213,6 +414,8 @@ def _normalize_generate_ppt_request(request: GeneratePptRequest) -> NormalizedRe
         batch_partition=request.batchPartition,
         spec_model=(request.specModel.strip() if isinstance(request.specModel, str) and request.specModel.strip() else None),
         notes_model=(request.notesModel.strip() if isinstance(request.notesModel, str) and request.notesModel.strip() else None),
+        response_mode=(request.responseMode or settings.default_response_mode),
+        callback_mode=(request.callbackMode or settings.default_callback_mode),
     )
 
 

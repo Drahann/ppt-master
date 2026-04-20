@@ -21,6 +21,8 @@ BATCH_PARTITION=${BATCH_PARTITION:-ramp_2_3_4_5_6_7_8}
 SPEC_MODEL=${SPEC_MODEL:-qwen3.6-plus}
 NOTES_MODEL=${NOTES_MODEL:-qwen3.5-flash}
 STAGGER_SECONDS=${STAGGER_SECONDS:-0}
+RESPONSE_MODE=${RESPONSE_MODE:-sync}
+CALLBACK_MODE=${CALLBACK_MODE:-auto}
 
 echo "╔══════════════════════════════════════════════════╗"
 echo "║       PPT Master 并发压力测试                     ║"
@@ -29,6 +31,7 @@ echo "║  并发数:  $CONCURRENCY"
 echo "║  API:     $API"
 echo "║  监控台:  $DASHBOARD"
 echo "║  SVG窗口: $PARALLEL_BATCH_WORKERS | 分组: $BATCH_PARTITION"
+echo "║  响应:    $RESPONSE_MODE | 回调: $CALLBACK_MODE"
 echo "╚══════════════════════════════════════════════════╝"
 echo ""
 
@@ -112,6 +115,8 @@ payload['parallelBatchWorkers'] = int('$PARALLEL_BATCH_WORKERS')
 payload['batchPartition'] = '$BATCH_PARTITION'
 payload['specModel'] = '$SPEC_MODEL'
 payload['notesModel'] = '$NOTES_MODEL'
+payload['responseMode'] = '$RESPONSE_MODE'
+payload['callbackMode'] = '$CALLBACK_MODE'
 with open('$PAYLOAD_FILE', 'w', encoding='utf-8') as out:
     json.dump(payload, out, ensure_ascii=False)
 "

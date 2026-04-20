@@ -47,6 +47,11 @@ class Settings:
     cos_region: str
     cos_bucket: str
     report_callback_url: str | None
+    redis_url: str | None
+    redis_key_prefix: str
+    async_worker_count: int
+    default_response_mode: str
+    default_callback_mode: str
 
     @property
     def cos_enabled(self) -> bool:
@@ -56,17 +61,24 @@ class Settings:
 def load_settings() -> Settings:
     project_base_dir = Path(os.getenv("PPT_API_PROJECT_BASE_DIR", str(REPO_ROOT / "projects"))).expanduser()
     jobs_dir = Path(os.getenv("PPT_API_JOBS_DIR", str(REPO_ROOT / "tmp" / "api-jobs"))).expanduser()
+    max_concurrent_jobs = max(1, _env_int("PPT_API_MAX_CONCURRENT_JOBS", 15))
     batch_mode = (os.getenv("PPT_API_BATCH_MODE", "parallel") or "parallel").strip().lower()
     if batch_mode not in {"auto", "always", "never", "parallel"}:
         batch_mode = "auto"
     batch_partition = (os.getenv("PPT_API_BATCH_PARTITION", "ramp_2_3_4_5_6_7_8") or "ramp_2_3_4_5_6_7_8").strip().lower()
     if batch_partition not in {"fixed", "ramp", "2+3+4+5+6+7+8", "ramp_2_3_4_5_6_7_8"}:
         batch_partition = "ramp_2_3_4_5_6_7_8"
+    default_response_mode = (os.getenv("PPT_API_DEFAULT_RESPONSE_MODE", "sync") or "sync").strip().lower()
+    if default_response_mode not in {"sync", "async"}:
+        default_response_mode = "sync"
+    default_callback_mode = (os.getenv("PPT_API_DEFAULT_CALLBACK_MODE", "auto") or "auto").strip().lower()
+    if default_callback_mode not in {"auto", "defer", "none"}:
+        default_callback_mode = "auto"
     return Settings(
         repo_root=REPO_ROOT,
         host=os.getenv("PPT_API_HOST", "0.0.0.0"),
         port=_env_int("PPT_API_PORT", 3000),
-        max_concurrent_jobs=max(1, _env_int("PPT_API_MAX_CONCURRENT_JOBS", 15)),
+        max_concurrent_jobs=max_concurrent_jobs,
         runner_timeout_seconds=max(60, _env_int("PPT_API_RUNNER_TIMEOUT_SECONDS", 7200)),
         canvas_format=os.getenv("PPT_API_CANVAS_FORMAT", "ppt169"),
         project_base_dir=project_base_dir,
@@ -90,4 +102,9 @@ def load_settings() -> Settings:
         cos_region=os.getenv("COS_REGION", "ap-shanghai").strip() or "ap-shanghai",
         cos_bucket=os.getenv("COS_BUCKET", "").strip(),
         report_callback_url=((os.getenv("REPORT_CALLBACK_URL") or os.getenv("REPORT_URL") or "").strip() or None),
+        redis_url=((os.getenv("PPT_REDIS_URL") or os.getenv("REDIS_URL") or "").strip() or None),
+        redis_key_prefix=(os.getenv("PPT_REDIS_KEY_PREFIX", "ppt") or "ppt").strip().strip(":") or "ppt",
+        async_worker_count=max(1, _env_int("PPT_API_ASYNC_WORKERS", max_concurrent_jobs)),
+        default_response_mode=default_response_mode,
+        default_callback_mode=default_callback_mode,
     )

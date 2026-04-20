@@ -107,6 +107,8 @@ DEFAULT_LLM_SLOT_LIMITS = {
 LLM_SLOT_STALE_SECONDS = 6 * 60 * 60
 LLM_SLOT_WAIT_TIMEOUT_SECONDS = 2 * 60 * 60
 SVG_FAIR_SHARE_DELAY_SECONDS = 8
+REDIS_CLIENT = None
+REDIS_CLIENT_LOCK = Lock()
 QWEN_ALLOWED_TOOLS = (
     "edit",
     "write_file",
@@ -700,7 +702,10 @@ def llm_slot_limit(stage: str) -> int:
         "postprocess": "PPT_API_POSTPROCESS_SLOTS",
         "generic": "PPT_API_LLM_GENERIC_SLOTS",
     }
-    return env_int(env_names[normalized], DEFAULT_LLM_SLOT_LIMITS[normalized], minimum=1)
+    static_limit = env_int(env_names[normalized], DEFAULT_LLM_SLOT_LIMITS[normalized], minimum=1)
+    if normalized == "svg":
+        return redis_dynamic_svg_limit(static_limit)
+    return static_limit
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -708,6 +713,75 @@ def env_bool(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_float(name: str, default: float, *, minimum: float | None = None, maximum: float | None = None) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        value = default
+    else:
+        try:
+            value = float(raw)
+        except ValueError:
+            value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+def redis_url() -> str | None:
+    return ((os.getenv("PPT_REDIS_URL") or os.getenv("REDIS_URL") or "").strip() or None)
+
+
+def redis_key_prefix() -> str:
+    return (os.getenv("PPT_REDIS_KEY_PREFIX", "ppt") or "ppt").strip().strip(":") or "ppt"
+
+
+def redis_key(suffix: str) -> str:
+    return f"{redis_key_prefix()}:{suffix}"
+
+
+def get_runner_redis_client(log_path: Path | None = None):
+    global REDIS_CLIENT
+    url = redis_url()
+    if not url:
+        return None
+    with REDIS_CLIENT_LOCK:
+        if REDIS_CLIENT is not None:
+            return REDIS_CLIENT
+        try:
+            import redis
+
+            client = redis.Redis.from_url(url, decode_responses=True)
+            client.ping()
+            REDIS_CLIENT = client
+            return REDIS_CLIENT
+        except Exception as exc:
+            if log_path is not None:
+                append_log(log_path, f"Redis unavailable for runner scheduling; falling back to file slots: {exc}")
+            return None
+
+
+def redis_dynamic_svg_limit(default_limit: int) -> int:
+    budget_tpm = env_int("PPT_API_LLM_BUDGET_TPM", 0, minimum=0)
+    if budget_tpm <= 0:
+        return default_limit
+    client = get_runner_redis_client()
+    if client is None:
+        return default_limit
+    try:
+        observed_tpm = float(client.get(redis_key("llm:ewma:svg:tpm")) or 0)
+    except Exception:
+        return default_limit
+    if observed_tpm <= 0:
+        return default_limit
+    utilization = env_float("PPT_API_LLM_TARGET_UTILIZATION", 0.75, minimum=0.1, maximum=1.0)
+    hard_max = env_int("PPT_API_LLM_HARD_MAX_SVG_CONCURRENCY", default_limit, minimum=1)
+    min_limit = env_int("PPT_API_LLM_MIN_SVG_CONCURRENCY", 1, minimum=1)
+    calculated = math.floor((budget_tpm * utilization) / observed_tpm)
+    return max(min_limit, min(hard_max, calculated))
 
 
 def stable_delay_seconds(label: str, max_seconds: int) -> int:
@@ -849,6 +923,107 @@ def cleanup_stale_slots(stage_dir: Path, stale_seconds: int) -> None:
 
 
 @contextmanager
+def acquire_redis_resource_slot(
+    client,
+    stage: str,
+    *,
+    limit: int,
+    label: str,
+    runner_dir: Path,
+    log_path: Path | None = None,
+):
+    stale_seconds = env_int("PPT_API_LLM_SLOT_STALE_SECONDS", LLM_SLOT_STALE_SECONDS, minimum=60)
+    wait_timeout = env_int("PPT_API_LLM_SLOT_WAIT_TIMEOUT_SECONDS", LLM_SLOT_WAIT_TIMEOUT_SECONDS, minimum=60)
+    started = time.time()
+    last_wait_log = 0.0
+    token = f"{os.getpid()}:{uuid.uuid4().hex}"
+    acquired_key: str | None = None
+    acquired_index: int | None = None
+    waiting_key = redis_key(f"llm:waiting:{stage}")
+    waiting_registered = False
+
+    release_script = """
+    if redis.call('get', KEYS[1]) == ARGV[1] then
+      return redis.call('del', KEYS[1])
+    end
+    return 0
+    """
+
+    try:
+        client.incr(waiting_key)
+        waiting_registered = True
+    except Exception:
+        waiting_registered = False
+
+    try:
+        while acquired_key is None:
+            payload = json.dumps(
+                {
+                    "pid": os.getpid(),
+                    "stage": stage,
+                    "label": label,
+                    "runner_dir": str(runner_dir),
+                    "created_at": time.time(),
+                    "token": token,
+                },
+                ensure_ascii=False,
+            )
+            for index in range(1, limit + 1):
+                candidate = redis_key(f"llm:slot:{stage}:{index:03d}")
+                try:
+                    if client.set(candidate, token, nx=True, ex=stale_seconds):
+                        client.set(redis_key(f"llm:slotmeta:{stage}:{index:03d}"), payload, ex=stale_seconds)
+                        acquired_key = candidate
+                        acquired_index = index
+                        break
+                except Exception as exc:
+                    raise RunnerError(f"Redis slot acquisition failed: {exc}") from exc
+
+            if acquired_key is not None:
+                break
+            if time.time() - started > wait_timeout:
+                raise RunnerError(f"Timed out waiting for Redis {stage} slot after {wait_timeout}s: {label}")
+            if log_path is not None and time.time() - last_wait_log >= 30:
+                active = count_redis_stage_slots(client, stage, limit)
+                append_log(log_path, f"Waiting for Redis {stage} slot: active={active}/{limit}; label={label}")
+                last_wait_log = time.time()
+            time.sleep(2)
+
+        if waiting_registered:
+            client.decr(waiting_key)
+            waiting_registered = False
+        if log_path is not None:
+            append_log(log_path, f"Acquired Redis {stage} slot {acquired_index}/{limit} for {label}")
+        yield
+    finally:
+        if waiting_registered:
+            try:
+                client.decr(waiting_key)
+            except Exception:
+                pass
+        if acquired_key is not None:
+            try:
+                client.eval(release_script, 1, acquired_key, token)
+                if acquired_index is not None:
+                    client.delete(redis_key(f"llm:slotmeta:{stage}:{acquired_index:03d}"))
+                if log_path is not None:
+                    append_log(log_path, f"Released Redis {stage} slot for {label}")
+            except Exception:
+                pass
+
+
+def count_redis_stage_slots(client, stage: str, limit: int) -> int:
+    active = 0
+    for index in range(1, limit + 1):
+        try:
+            if client.exists(redis_key(f"llm:slot:{stage}:{index:03d}")):
+                active += 1
+        except Exception:
+            return active
+    return active
+
+
+@contextmanager
 def acquire_resource_slot(
     stage: str,
     *,
@@ -858,6 +1033,19 @@ def acquire_resource_slot(
 ):
     stage = stage if stage in DEFAULT_LLM_SLOT_LIMITS else "generic"
     limit = llm_slot_limit(stage)
+    redis_client = get_runner_redis_client(log_path)
+    if redis_client is not None:
+        with acquire_redis_resource_slot(
+            redis_client,
+            stage,
+            limit=limit,
+            label=label,
+            runner_dir=runner_dir,
+            log_path=log_path,
+        ):
+            yield
+        return
+
     slot_root = llm_slot_dir()
     stage_dir = slot_root / stage
     stage_dir.mkdir(parents=True, exist_ok=True)
@@ -1001,6 +1189,47 @@ def format_usage_summary(summary: TurnUsageSummary | None) -> str:
         f"total={summary.total_tokens} "
         f"models={models}"
     )
+
+
+def record_llm_observation(
+    *,
+    stage: str,
+    model: str | None,
+    usage: TurnUsageSummary | None,
+    elapsed_seconds: float,
+    log_path: Path | None = None,
+) -> None:
+    if usage is None or usage.total_tokens <= 0 or elapsed_seconds <= 0:
+        return
+    client = get_runner_redis_client(log_path)
+    if client is None:
+        return
+    elapsed_minutes = max(elapsed_seconds / 60.0, 1 / 60.0)
+    observed_tpm = usage.total_tokens / elapsed_minutes
+    alpha = env_float("PPT_API_LLM_EWMA_ALPHA", 0.2, minimum=0.01, maximum=1.0)
+    stage_key = redis_key(f"llm:ewma:{stage}:tpm")
+    model_key = redis_key(f"llm:ewma:{stage}:{sanitize_token(model or 'unknown')}")
+    try:
+        old_value = float(client.get(stage_key) or 0)
+        ewma = observed_tpm if old_value <= 0 else (alpha * observed_tpm + (1 - alpha) * old_value)
+        client.set(stage_key, f"{ewma:.6f}")
+        client.hset(
+            model_key,
+            mapping={
+                "model": model or "",
+                "stage": stage,
+                "observed_tpm": f"{observed_tpm:.6f}",
+                "ewma_tpm": f"{ewma:.6f}",
+                "total_tokens": usage.total_tokens,
+                "elapsed_seconds": f"{elapsed_seconds:.3f}",
+                "updated_at": f"{time.time():.3f}",
+            },
+        )
+        if log_path is not None:
+            append_log(log_path, f"Recorded Redis LLM EWMA stage={stage} observed_tpm={observed_tpm:.2f} ewma_tpm={ewma:.2f}")
+    except Exception as exc:
+        if log_path is not None:
+            append_log(log_path, f"Failed to record Redis LLM EWMA: {exc}")
 
 
 def update_usage_summary(
@@ -3088,6 +3317,7 @@ def call_openai_compatible_chat(
         runner_dir=runner_dir,
         log_path=log_path,
     ):
+        request_started = time.time()
         try:
             with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
                 response_text = response.read().decode("utf-8", errors="replace")
@@ -3096,6 +3326,7 @@ def call_openai_compatible_chat(
             raise RunnerError(f"Direct API HTTP {exc.code}: {error_text}") from exc
         except urllib.error.URLError as exc:
             raise RunnerError(f"Direct API request failed: {exc}") from exc
+        elapsed_seconds = time.time() - request_started
 
     response_path = runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.response.json"
     response_path.write_text(response_text, encoding="utf-8")
@@ -3113,6 +3344,7 @@ def call_openai_compatible_chat(
         raise RunnerError("Direct API returned empty content")
 
     usage = notes_usage_from_response(payload, model)
+    record_llm_observation(stage=stage, model=model, usage=usage, elapsed_seconds=elapsed_seconds, log_path=log_path)
     (runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.assistant.txt").write_text(content, encoding="utf-8")
     return content, usage, payload
 
@@ -3608,6 +3840,7 @@ def run_qwen_prompt(
         runner_dir=runner_dir,
         log_path=log_path,
     ):
+        run_started = time.time()
         completed = subprocess.run(
             command,
             cwd=repo_root,
@@ -3619,6 +3852,7 @@ def run_qwen_prompt(
             timeout=QWEN_CALL_TIMEOUT_SECONDS,
             check=False,
         )
+        elapsed_seconds = time.time() - run_started
 
     (runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.stdout.txt").write_text(
         completed.stdout,
@@ -3633,6 +3867,7 @@ def run_qwen_prompt(
         session_id,
         read_chat_records_after_line(chat_path, existing_chat_line_count),
     )
+    record_llm_observation(stage=stage, model=model, usage=usage_summary, elapsed_seconds=elapsed_seconds, log_path=log_path)
     usage_payload = usage_summary.to_json() if usage_summary else None
     if usage_payload is not None:
         write_json(

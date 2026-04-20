@@ -93,3 +93,4 @@ openai>=1.0.0
 fastapi>=0.115.0
 uvicorn>=0.32.0
 cos-python-sdk-v5>=1.9.31
+redis>=5.0.0

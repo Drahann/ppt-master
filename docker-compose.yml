@@ -1,7 +1,17 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: ppt-master-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
   ppt-master-api:
     build: .
     container_name: ppt-master-api
+    depends_on:
+      - redis
     ports:
       - "3001:3000"
     env_file:
@@ -9,11 +19,20 @@ services:
     environment:
       PPT_API_HOST: 0.0.0.0
       PPT_API_PORT: 3000
+      REDIS_URL: redis://redis:6379/0
+      PPT_REDIS_KEY_PREFIX: ppt
       PPT_API_PROJECT_BASE_DIR: /app/projects
       PPT_API_JOBS_DIR: /app/tmp/api-jobs
       PPT_API_MAX_CONCURRENT_JOBS: 15
+      PPT_API_ASYNC_WORKERS: 15
+      PPT_API_DEFAULT_RESPONSE_MODE: sync
+      PPT_API_DEFAULT_CALLBACK_MODE: auto
       PPT_API_PARALLEL_BATCH_WORKERS: 3
       PPT_API_BATCH_PARTITION: ramp_2_3_4_5_6_7_8
+      PPT_API_LLM_BUDGET_TPM: 0
+      PPT_API_LLM_TARGET_UTILIZATION: 0.75
+      PPT_API_LLM_MIN_SVG_CONCURRENCY: 1
+      PPT_API_LLM_HARD_MAX_SVG_CONCURRENCY: 10
       PPT_API_LLM_SPEC_SLOTS: 4
       PPT_API_LLM_SVG_SLOTS: 10
       PPT_API_LLM_NOTES_SLOTS: 8
@@ -26,3 +45,6 @@ services:
       - ./projects:/app/projects
       - ./tmp:/app/tmp
     restart: unless-stopped
+
+volumes:
+  redis-data:

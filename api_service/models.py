@@ -19,6 +19,8 @@ class ReportRequest(BaseModel):
     batchPartition: str | None = Field(default=None, pattern="^(fixed|ramp|2\\+3\\+4\\+5\\+6\\+7\\+8|ramp_2_3_4_5_6_7_8)$")
     specModel: str | None = None
     notesModel: str | None = None
+    responseMode: str | None = Field(default=None, pattern="^(sync|async)$")
+    callbackMode: str | None = Field(default=None, pattern="^(auto|defer|none)$")
 
 
 class GeneratePptRequest(BaseModel):
@@ -40,6 +42,8 @@ class GeneratePptRequest(BaseModel):
     batchPartition: str | None = Field(default=None, pattern="^(fixed|ramp|2\\+3\\+4\\+5\\+6\\+7\\+8|ramp_2_3_4_5_6_7_8)$")
     specModel: str | None = None
     notesModel: str | None = None
+    responseMode: str | None = Field(default=None, pattern="^(sync|async)$")
+    callbackMode: str | None = Field(default=None, pattern="^(auto|defer|none)$")
 
 
 @dataclass(frozen=True)
@@ -56,6 +60,8 @@ class NormalizedRequest:
     batch_partition: str | None
     spec_model: str | None
     notes_model: str | None
+    response_mode: str
+    callback_mode: str
 
 
 class CallbackResult(BaseModel):
@@ -66,16 +72,22 @@ class CallbackResult(BaseModel):
 class ReportResponse(BaseModel):
     success: bool
     reportId: str
-    pptUrl: str
-    slideCount: int
-    title: str
-    callback: CallbackResult
+    pptUrl: str | None = None
+    slideCount: int = 0
+    title: str | None = None
+    callback: CallbackResult | None = None
+    status: str | None = None
+    job_id: str | None = None
+    pollingUrl: str | None = None
 
 
 class GeneratePptResponse(BaseModel):
     success: bool
     report_id: str
-    pptUrl: str
-    slideCount: int
-    title: str
-    callback: CallbackResult
+    pptUrl: str | None = None
+    slideCount: int = 0
+    title: str | None = None
+    callback: CallbackResult | None = None
+    status: str | None = None
+    job_id: str | None = None
+    pollingUrl: str | None = None
