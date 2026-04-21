@@ -832,7 +832,7 @@ def redis_dynamic_svg_limit(default_limit: int) -> int:
     return max(min_limit, min(hard_max, calculated))
 
 
-def redis_stage_token_estimate(stage: str, client=None) -> int:
+def redis_stage_token_estimate(stage: str, client=None, *, window_seconds: int = 60) -> int:
     client = client or get_runner_redis_client()
     env_name = {
         "svg": "PPT_API_LLM_DEFAULT_SVG_RESERVE_TOKENS",
@@ -840,15 +840,26 @@ def redis_stage_token_estimate(stage: str, client=None) -> int:
         "notes": "PPT_API_LLM_DEFAULT_NOTES_RESERVE_TOKENS",
     }.get(stage, "PPT_API_LLM_DEFAULT_RESERVE_TOKENS")
     default_tokens = env_int(env_name, 700000 if stage == "svg" else 100000, minimum=1)
+    safety_factor = env_float("PPT_API_LLM_PACING_SAFETY_FACTOR", 1.15, minimum=1.0, maximum=3.0)
+    if stage == "svg" and env_bool("PPT_API_LLM_PACING_USE_WORKER_TPM", True):
+        default_worker_tpm = env_int("PPT_API_LLM_DEFAULT_SVG_WORKER_TPM", 150000, minimum=1)
+        observed_worker_tpm = 0.0
+        if client is not None:
+            try:
+                observed_worker_tpm = float(client.get(redis_key("llm:ewma:svg:tpm")) or 0)
+            except Exception:
+                observed_worker_tpm = 0.0
+        worker_tpm = observed_worker_tpm if observed_worker_tpm > 0 else float(default_worker_tpm)
+        window_factor = max(window_seconds, 1) / 60
+        return max(1, math.ceil(worker_tpm * window_factor * safety_factor))
     if client is None:
-        return default_tokens
+        return max(1, math.ceil(default_tokens * safety_factor))
     try:
         observed = float(client.get(redis_key(f"llm:ewma:{stage}:tokens")) or 0)
     except Exception:
-        return default_tokens
+        return max(1, math.ceil(default_tokens * safety_factor))
     if observed <= 0:
-        return default_tokens
-    safety_factor = env_float("PPT_API_LLM_PACING_SAFETY_FACTOR", 1.15, minimum=1.0, maximum=3.0)
+        return max(1, math.ceil(default_tokens * safety_factor))
     return max(1, math.ceil(observed * safety_factor))
 
 
@@ -864,7 +875,7 @@ def wait_for_redis_tpm_budget(client, stage: str, *, label: str, log_path: Path 
     utilization = env_float("PPT_API_LLM_TARGET_UTILIZATION", 0.75, minimum=0.1, maximum=1.0)
     window_seconds = env_int("PPT_API_LLM_PACING_WINDOW_SECONDS", 60, minimum=5)
     budget_window = max(1, int(budget_tpm * utilization * (window_seconds / 60)))
-    reserve_tokens = redis_stage_token_estimate(stage, client)
+    reserve_tokens = redis_stage_token_estimate(stage, client, window_seconds=window_seconds)
     reserve_tokens = min(reserve_tokens, budget_window)
     pacing_key = redis_key(f"llm:pacing:{stage}")
     wait_timeout = env_int("PPT_API_LLM_SLOT_WAIT_TIMEOUT_SECONDS", LLM_SLOT_WAIT_TIMEOUT_SECONDS, minimum=60)
