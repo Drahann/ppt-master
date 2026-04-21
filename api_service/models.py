@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+BATCH_PARTITION_PATTERN = r"^((fixed|ramp|ramp_2_3_4_5_6_7_8|anchor_even)|([0-9]+\+)*[0-9]+\+?)$"
+
 
 class ReportRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -16,7 +18,7 @@ class ReportRequest(BaseModel):
     batchMode: str | None = Field(default=None, pattern="^(auto|always|never|parallel)$")
     batchSize: int | None = Field(default=None, ge=1)
     parallelBatchWorkers: int | None = Field(default=None, ge=1)
-    batchPartition: str | None = Field(default=None, pattern="^(fixed|ramp|2\\+3\\+4\\+5\\+6\\+7\\+8|ramp_2_3_4_5_6_7_8)$")
+    batchPartition: str | None = Field(default=None, pattern=BATCH_PARTITION_PATTERN)
     specModel: str | None = None
     notesModel: str | None = None
     responseMode: str | None = Field(default=None, pattern="^(sync|async)$")
@@ -39,7 +41,7 @@ class GeneratePptRequest(BaseModel):
     batchMode: str | None = Field(default=None, pattern="^(auto|always|never|parallel)$")
     batchSize: int | None = Field(default=None, ge=1)
     parallelBatchWorkers: int | None = Field(default=None, ge=1)
-    batchPartition: str | None = Field(default=None, pattern="^(fixed|ramp|2\\+3\\+4\\+5\\+6\\+7\\+8|ramp_2_3_4_5_6_7_8)$")
+    batchPartition: str | None = Field(default=None, pattern=BATCH_PARTITION_PATTERN)
     specModel: str | None = None
     notesModel: str | None = None
     responseMode: str | None = Field(default=None, pattern="^(sync|async)$")

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import shutil
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -27,11 +29,14 @@ settings = load_settings()
 settings.project_base_dir.mkdir(parents=True, exist_ok=True)
 settings.jobs_dir.mkdir(parents=True, exist_ok=True)
 settings.llm_slot_dir.mkdir(parents=True, exist_ok=True)
+settings.metrics_export_dir.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="ppt-master-api", version="1.0.0")
 job_semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
 execution_semaphore = threading.BoundedSemaphore(settings.max_concurrent_jobs)
 worker_stop_event = threading.Event()
 worker_threads: list[threading.Thread] = []
+metrics_export_stop_event = threading.Event()
+metrics_export_thread: threading.Thread | None = None
 job_store_error: str | None = None
 try:
     job_store = RedisJobStore.from_settings(settings)
@@ -44,9 +49,10 @@ _DASHBOARD_HTML = (Path(__file__).parent / "dashboard.html").read_text(encoding=
 
 
 def _llm_slot_snapshot() -> dict[str, dict[str, int | str]]:
+    svg_effective_limit = _effective_svg_limit()
     limits = {
         "spec": settings.llm_spec_slots,
-        "svg": settings.llm_svg_slots,
+        "svg": svg_effective_limit,
         "notes": settings.llm_notes_slots,
         "postprocess": settings.postprocess_slots,
     }
@@ -98,22 +104,19 @@ def healthz() -> dict[str, object]:
             "keyPrefix": settings.redis_key_prefix,
         },
         "asyncWorkers": len(worker_threads),
+        "metricsExport": {
+            "enabled": settings.metrics_export_enabled,
+            "dir": str(settings.metrics_export_dir),
+            "intervalSeconds": settings.metrics_export_interval_seconds,
+            "retentionFiles": settings.metrics_export_retention_files,
+        },
     }
 
 
 @app.get("/metrics")
 def get_metrics() -> dict:
     """Real-time performance metrics JSON."""
-    payload = metrics.snapshot(settings.max_concurrent_jobs)
-    payload["llmSlots"] = _llm_slot_snapshot()
-    payload["redisJobs"] = _redis_job_snapshot()
-    payload["llmBudget"] = _llm_budget_snapshot()
-    payload["asyncWorkers"] = {
-        "configured": settings.async_worker_count,
-        "running": len(worker_threads),
-        "stopped": worker_stop_event.is_set(),
-    }
-    return payload
+    return _build_metrics_payload()
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -133,25 +136,26 @@ async def request_validation_exception_handler(_request, exc: RequestValidationE
 
 @app.on_event("startup")
 def start_async_workers() -> None:
-    if job_store is None:
-        return
-    if worker_threads:
-        return
-    try:
-        job_store.ping()
-    except Exception as exc:
-        global job_store_error
-        job_store_error = str(exc)
+    if job_store is not None:
+        if worker_threads:
+            return
+        try:
+            job_store.ping()
+        except Exception as exc:
+            global job_store_error
+            job_store_error = str(exc)
 
-    for index in range(settings.async_worker_count):
-        thread = threading.Thread(
-            target=_async_worker_loop,
-            name=f"ppt-async-worker-{index + 1}",
-            daemon=True,
-        )
-        thread.start()
-        worker_threads.append(thread)
-        logger.info("Started async worker thread %s", thread.name)
+        for index in range(settings.async_worker_count):
+            thread = threading.Thread(
+                target=_async_worker_loop,
+                name=f"ppt-async-worker-{index + 1}",
+                daemon=True,
+            )
+            thread.start()
+            worker_threads.append(thread)
+            logger.info("Started async worker thread %s", thread.name)
+    _start_metrics_exporter()
+    _snapshot_metrics_to_disk("startup")
 
 
 @app.on_event("shutdown")
@@ -160,6 +164,8 @@ def stop_async_workers() -> None:
     for thread in worker_threads:
         thread.join(timeout=2)
         logger.info("Stopped async worker thread %s", thread.name)
+    _stop_metrics_exporter()
+    _snapshot_metrics_to_disk("shutdown")
 
 
 @app.post("/api/report-to-ppt", response_model=ReportResponse)
@@ -338,6 +344,7 @@ def _enqueue_async_request(request: NormalizedRequest, *, report_style: bool) ->
             request.batch_mode or settings.batch_mode,
             request.batch_partition or settings.batch_partition,
         )
+        _snapshot_metrics_to_disk("enqueue")
     except Exception as exc:
         return JSONResponse(status_code=503, content={"success": False, "error": str(exc)})
 
@@ -383,9 +390,11 @@ def _run_async_job(job_id: str) -> None:
         payload = _process_request(request, job_id=job_id)
         job_store.complete(job_id, payload)
         logger.info("Worker %s completed job_id=%s", threading.current_thread().name, job_id)
+        _snapshot_metrics_to_disk("job_complete")
     except Exception as exc:
         job_store.fail(job_id, str(exc))
         logger.exception("Worker %s failed job_id=%s error=%s", threading.current_thread().name, job_id, exc)
+        _snapshot_metrics_to_disk("job_fail")
 
 
 def _update_job_stage(metric_job_id: str, queue_job_id: str | None, stage: str, *, event: str | None = None) -> None:
@@ -395,6 +404,7 @@ def _update_job_stage(metric_job_id: str, queue_job_id: str | None, stage: str, 
             job_store.update_stage(queue_job_id, stage)
         except Exception:
             pass
+    _snapshot_metrics_to_disk(f"stage_{stage}")
 
 
 def _redis_available() -> bool:
@@ -437,14 +447,25 @@ def _llm_budget_snapshot() -> dict[str, object]:
         observed_svg_worker_tpm = float(observed_svg_worker_tpm_raw) if observed_svg_worker_tpm_raw else None
     except Exception:
         observed_svg_worker_tpm = None
-    dynamic_svg_limit = settings.llm_svg_slots
-    if configured_budget_tpm > 0 and observed_svg_worker_tpm and observed_svg_worker_tpm > 0:
-        dynamic_svg_limit = max(1, int((configured_budget_tpm * target_utilization) // observed_svg_worker_tpm))
+    try:
+        observed_svg_tokens_raw = job_store.client.get(f"{settings.redis_key_prefix}:llm:ewma:svg:tokens")
+        observed_svg_tokens = float(observed_svg_tokens_raw) if observed_svg_tokens_raw else None
+    except Exception:
+        observed_svg_tokens = None
+    try:
+        pacing_window_seconds = int((os.getenv("PPT_API_LLM_PACING_WINDOW_SECONDS") or "60").strip() or "60")
+    except ValueError:
+        pacing_window_seconds = 60
+    dynamic_svg_limit = _effective_svg_limit(configured_budget_tpm, target_utilization, observed_svg_worker_tpm)
     return {
         "configured_budget_tpm": configured_budget_tpm,
         "target_utilization": target_utilization,
         "observed_svg_worker_tpm": round(observed_svg_worker_tpm, 1) if observed_svg_worker_tpm else None,
+        "observed_svg_turn_tokens": round(observed_svg_tokens, 1) if observed_svg_tokens else None,
         "dynamic_svg_limit": dynamic_svg_limit,
+        "configured_svg_limit": settings.llm_svg_slots,
+        "tpm_pacing_enabled": (os.getenv("PPT_API_LLM_TPM_PACING_ENABLED", "1").strip().lower() not in {"0", "false", "no"}),
+        "pacing_window_seconds": pacing_window_seconds,
         "backend": "redis",
     }
 
@@ -478,6 +499,139 @@ def _job_queue_wait_seconds(job_id: str | None) -> float:
         return round(max(0.0, started_at - created_at), 1)
     except Exception:
         return 0.0
+
+
+def _build_metrics_payload() -> dict:
+    payload = metrics.snapshot(settings.max_concurrent_jobs)
+    payload["llmSlots"] = _llm_slot_snapshot()
+    payload["redisJobs"] = _redis_job_snapshot()
+    payload["llmBudget"] = _llm_budget_snapshot()
+    payload["asyncWorkers"] = {
+        "configured": settings.async_worker_count,
+        "running": len(worker_threads),
+        "stopped": worker_stop_event.is_set(),
+    }
+    payload["captured_at"] = datetime.now().isoformat(timespec="seconds")
+    return payload
+
+
+def _start_metrics_exporter() -> None:
+    global metrics_export_thread
+    if not settings.metrics_export_enabled:
+        return
+    if metrics_export_thread is not None and metrics_export_thread.is_alive():
+        return
+    metrics_export_stop_event.clear()
+    metrics_export_thread = threading.Thread(
+        target=_metrics_export_loop,
+        name="ppt-metrics-exporter",
+        daemon=True,
+    )
+    metrics_export_thread.start()
+    logger.info("Started metrics exporter thread %s", metrics_export_thread.name)
+
+
+def _stop_metrics_exporter() -> None:
+    global metrics_export_thread
+    metrics_export_stop_event.set()
+    if metrics_export_thread is not None:
+        metrics_export_thread.join(timeout=2)
+        logger.info("Stopped metrics exporter thread %s", metrics_export_thread.name)
+        metrics_export_thread = None
+
+
+def _metrics_export_loop() -> None:
+    while not metrics_export_stop_event.is_set():
+        _snapshot_metrics_to_disk("interval")
+        metrics_export_stop_event.wait(settings.metrics_export_interval_seconds)
+
+
+def _snapshot_metrics_to_disk(reason: str) -> None:
+    if not settings.metrics_export_enabled:
+        return
+    try:
+        root = settings.metrics_export_dir
+        root.mkdir(parents=True, exist_ok=True)
+        day_dir = root / datetime.now().strftime("%Y%m%d")
+        day_dir.mkdir(parents=True, exist_ok=True)
+
+        payload = _build_metrics_payload()
+        payload["snapshot_reason"] = reason
+        payload["export_dir"] = str(root)
+
+        timestamp = datetime.now().strftime("%H%M%S_%f")
+        snapshot_path = day_dir / f"metrics_{timestamp}_{_safe_filename(reason)}.json"
+        latest_path = root / "latest.json"
+
+        text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+        snapshot_path.write_text(text, encoding="utf-8")
+        latest_path.write_text(text, encoding="utf-8")
+        _prune_metrics_exports(root)
+    except Exception as exc:
+        logger.warning("Failed to export metrics snapshot: %s", exc)
+
+
+def _prune_metrics_exports(root: Path) -> None:
+    files = sorted(
+        (path for path in root.rglob("metrics_*.json") if path.is_file()),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )
+    for extra in files[settings.metrics_export_retention_files :]:
+        try:
+            extra.unlink()
+        except OSError:
+            pass
+
+
+def _safe_filename(value: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in value.strip())
+    return cleaned[:40] or "snapshot"
+
+
+def _effective_svg_limit(
+    configured_budget_tpm: int | None = None,
+    target_utilization: float | None = None,
+    observed_svg_worker_tpm: float | None = None,
+) -> int:
+    static_limit = settings.llm_svg_slots
+    hard_max_raw = (os.getenv("PPT_API_LLM_HARD_MAX_SVG_CONCURRENCY") or "").strip()
+    hard_max = static_limit
+    if hard_max_raw:
+        try:
+            hard_max = max(1, int(hard_max_raw))
+        except ValueError:
+            hard_max = static_limit
+    min_limit_raw = (os.getenv("PPT_API_LLM_MIN_SVG_CONCURRENCY") or "").strip()
+    min_limit = 1
+    if min_limit_raw:
+        try:
+            min_limit = max(1, int(min_limit_raw))
+        except ValueError:
+            min_limit = 1
+    budget = configured_budget_tpm
+    if budget is None:
+        try:
+            budget = int((os.getenv("PPT_API_LLM_BUDGET_TPM") or "0").strip() or "0")
+        except ValueError:
+            budget = 0
+    utilization = target_utilization
+    if utilization is None:
+        try:
+            utilization = float((os.getenv("PPT_API_LLM_TARGET_UTILIZATION") or "0.75").strip() or "0.75")
+        except ValueError:
+            utilization = 0.75
+    observed = observed_svg_worker_tpm
+    if observed is None and job_store is not None:
+        try:
+            observed_raw = job_store.client.get(f"{settings.redis_key_prefix}:llm:ewma:svg:tpm")
+            observed = float(observed_raw) if observed_raw else None
+        except Exception:
+            observed = None
+    if not budget or not observed or observed <= 0:
+        return static_limit
+    calculated = max(min_limit, int((budget * utilization) // observed))
+    return min(hard_max, calculated)
 
 
 def _build_job_dir(report_id: str) -> Path:

@@ -26,9 +26,11 @@ PPT_API_ASYNC_WORKERS=15
   "callbackMode": "none",
   "batchMode": "parallel",
   "parallelBatchWorkers": 3,
-  "batchPartition": "ramp_2_3_4_5_6_7_8"
+  "batchPartition": "anchor_even"
 }
 ```
+
+`anchor_even` means: use the first 2 pages as the anchor batch, then split the remaining pages into near-even follow-up groups with a target size around 6 pages.
 
 Response:
 
@@ -95,6 +97,10 @@ PPT_API_LLM_TARGET_UTILIZATION=0.75
 PPT_API_LLM_MIN_SVG_CONCURRENCY=1
 PPT_API_LLM_HARD_MAX_SVG_CONCURRENCY=32
 PPT_API_LLM_EWMA_ALPHA=0.2
+PPT_API_LLM_TPM_PACING_ENABLED=1
+PPT_API_LLM_PACING_WINDOW_SECONDS=60
+PPT_API_LLM_PACING_SAFETY_FACTOR=1.15
+PPT_API_LLM_DEFAULT_SVG_RESERVE_TOKENS=700000
 ```
 
 The runner records observed token-per-minute EWMA in Redis:
@@ -111,3 +117,5 @@ global_svg_concurrency = floor(PPT_API_LLM_BUDGET_TPM * PPT_API_LLM_TARGET_UTILI
 ```
 
 The result is clamped by `PPT_API_LLM_MIN_SVG_CONCURRENCY` and `PPT_API_LLM_HARD_MAX_SVG_CONCURRENCY`.
+
+TPM pacing is separate from slot concurrency. Before a new SVG turn starts, the runner reserves an estimated token budget in a rolling Redis window. If the current window is full, the turn waits instead of creating a new provider-side TPM spike.

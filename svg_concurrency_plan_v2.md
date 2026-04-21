@@ -26,10 +26,10 @@
 | 能力 | 当前证据 | 判断 |
 |---|---|---|
 | API 级任务并发粗控 | `api_service/app.py:26` 创建 `asyncio.Semaphore(settings.max_concurrent_jobs)`；`app.py:93-107` 在两个入口中持有 semaphore 执行 `_process_request` | 可限制同时运行 job，但仍是同步长请求 |
-| 默认配置已收敛 | `api_service/config.py:59-85` 默认 `batch_mode=parallel`、`parallel_batch_workers=3`、`batch_partition=ramp_2_3_4_5_6_7_8`、`llm_svg_slots=10` | 比旧的 7 路/45 slot 更保守 |
+| 默认配置已收敛 | `api_service/config.py:59-85` 默认 `batch_mode=parallel`、`parallel_batch_workers=3`、`batch_partition=anchor_even`、`llm_svg_slots=10` | 默认 batch 采用“2 页锚点 + 剩余页均衡切分” |
 | 请求模型已支持并发参数 | `api_service/models.py:16-19`、`models.py:37-40` 支持 `batchMode`、`batchSize`、`parallelBatchWorkers`、`batchPartition` | 前端或压测脚本可逐次覆盖 |
 | API runner 已透传参数 | `api_service/runner.py:68-95` 将 batch 与模型参数写入 `runner_request.json` | API 层与 runner 层参数链路已通 |
-| ramp 分组已实现 | `qwen_ppt_runner.py:2364-2388` 支持 `2+3+4+5+6+7+8`，尾部 1 页并入前组 | 旧计划里的分组策略已不是待办 |
+| batch 分组已实现 | `qwen_ppt_runner.py` 同时支持 `ramp`、`anchor_even` 和显式数字序列，尾部 1 页并入前组 | 默认值已切到“2 页锚点 + 剩余页均衡切分” |
 | SVG 文件 slot 已实现 | `qwen_ppt_runner.py:687-703` 读取 slot 目录与上限；`852-912` 用 `O_EXCL` 抢占并释放 slot | 能限制本机同阶段 qwen/direct turn 数 |
 | fair-share 已实现 | `qwen_ppt_runner.py:755-803` 注册活跃 SVG job 并按 `svg_slots / active_jobs` 计算有效 worker | 已有保守公平窗口，但只在启动时计算 |
 | anchor-first 已实现一版 | `qwen_ppt_runner.py:3942-4016` 默认先跑第一个 batch，再启动后续 batch | 能减少完全无锚点并行，但锚点上下文仍需增强 |
@@ -47,6 +47,30 @@
 3. “加全局 LLM slot”已有文件 slot 版本；它是临时止血层，不等于最终预算调度器。
 4. “25 并发”必须拆成两个概念：25 个请求被接收，与 25 个 runner 同时执行。当前同步 API 把这两个概念绑在一起，容易误判压测结果。
 5. “1500 万 TPM 下跑 50 并发”不能直接由 slot 数推导。必须先用实测 EWMA 算单 batch token 速率，再做 admission control。
+
+### 1.3 Round 421 运行复盘
+
+基于 `projects/421` 这一轮 5 任务压测，当前架构已经有三条明确结论：
+
+1. 本轮真正的主瓶颈是 SVG 阶段，不是 spec、notes 或 postprocess。
+2. 当前实现的公平性仍是“进入 SVG 时的一次性快照”，存在明显的早到任务优势。
+3. 这轮并没有真正验证 500 万 TPM 的动态预算调度，因为实际生效的主约束仍是 `svg_slots=10`。
+
+本轮证据摘要：
+
+- task1 总时长约 18.1 分钟，task4 约 37.3 分钟，额外时长几乎全部出现在 SVG 段。
+- task5 在 spec 上只排队约 1.5 分钟，而 SVG 仍耗时约 28.2 分钟。
+- 运行日志显示：
+  - task1 在 `active_svg_jobs=1` 时拿到 `effective=7`
+  - task2 在 `active_svg_jobs=2` 时拿到 `effective=5`
+  - task4 / task5 在 `active_svg_jobs=4/5` 时拿到 `effective=2`
+- 但后续大量 batch 长时间停在 `Waiting for Redis svg slot`，说明“窗口请求值”不等于“真正公平的调度结果”。
+- 所有任务 `svg_quality_report` 通过，`svg_repair_report.total_repairs=0`，导出 32 页成功，说明当前问题主要是吞吐与公平性，不是质量回归。
+
+这一轮还暴露了一个配置治理问题：
+
+- 运行时仍使用了 `spec slot = 4`、`postprocess slot = 4`、`stage_stagger = 0`。
+- 后续应统一由 `.env.api` 驱动，避免 `docker-compose.yml` 覆盖导致测试配置与预期不一致。
 
 ---
 
@@ -220,7 +244,7 @@ active_svg_sessions = running_jobs * per_job_parallel_svg_batches
 ```env
 PPT_API_MAX_CONCURRENT_JOBS=15
 PPT_API_BATCH_MODE=parallel
-PPT_API_BATCH_PARTITION=ramp_2_3_4_5_6_7_8
+PPT_API_BATCH_PARTITION=anchor_even
 PPT_API_PARALLEL_BATCH_WORKERS=3
 PPT_API_LLM_SVG_SLOTS=10
 PPT_API_SVG_FAIR_SHARE=1
@@ -305,17 +329,26 @@ PPT_API_SVG_BATCH_STAGGER_SECONDS=5
      - `layout_do_not_repeat`
    - 回写 `svg_anchor_context.json` 后再创建后续 batch prompt。
 2. 将 fair-share 计算从“只在启动时一次”改为“提交 batch 前再确认”：
-   - 当前 `ThreadPoolExecutor` 的 worker 数仍可保留。
-   - 每个 batch 开始前必须重新读取 active jobs / slot 状态。
-   - 如果当前 job 超出 fair-share，则延迟提交，而不是让线程长时间占住。
-3. 给请求参数加硬上限：
+   - 不再一次性把所有剩余 batch 都提交给 `ThreadPoolExecutor`。
+   - 改成动态补位：只在当前 inflight 小于 `effective_svg_worker_count(...)` 时继续 submit。
+   - 每次 batch 完成后重新计算 fair-share，再决定是否补位。
+   - 如果当前 job 超出 fair-share，则延迟提交，而不是让线程长期在 slot 前空等。
+3. 修正 active SVG job 统计边界：
+   - `stage_stagger` 和 `fair_share_delay` 完成后再注册 active SVG job。
+   - 避免“还没开始抢 slot 的 job”提前占用 fair-share 份额。
+4. 增加 Redis TPM pacing：
+   - Redis slot 只限制“同时跑几个 turn”，不能削平 provider 侧 TPM 尖峰。
+   - SVG turn 启动前按 `llm:ewma:svg:tokens` 预留 rolling-window token 预算。
+   - 如果当前 60 秒窗口预算不足，先等待再启动 turn。
+   - 默认只对 SVG 开启，避免把 spec/notes/postprocess 也纳入本轮瓶颈。
+5. 给请求参数加硬上限：
    - `parallelBatchWorkers <= 7`。
    - fixed `batchSize <= 8`，避免单 turn 输出过长。
-   - `batchPartition` 默认保持 ramp。
-4. slot 观测增强：
+   - `batchPartition` 默认使用 `anchor_even`，即“2 页锚点 + 剩余页按约 6 页目标均衡切分”；保留 `ramp` 和显式数字序列作为对照实验选项。
+6. slot 观测增强：
    - 记录等待开始时间、获得 slot 时间、释放时间。
    - waiting slot 不仅写日志，也写 metrics snapshot。
-5. 压测脚本输出完整元数据：
+7. 压测脚本输出完整元数据：
    - 写入本轮 env 配置。
    - 拉取 `/metrics` 快照。
    - 汇总每个 task 的 HTTP 状态、耗时、错误。

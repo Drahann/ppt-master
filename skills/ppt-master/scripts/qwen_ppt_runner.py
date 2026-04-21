@@ -21,7 +21,7 @@ import urllib.error
 import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from difflib import get_close_matches
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import asdict, dataclass
@@ -95,8 +95,11 @@ COOKBOOK_REREAD_INTERVAL = 8
 BATCH_SIZE = 5
 BATCH_MODE_THRESHOLD = 15
 DEFAULT_PARALLEL_BATCH_WORKERS = 3
-DEFAULT_BATCH_PARTITION = "ramp_2_3_4_5_6_7_8"
+DEFAULT_BATCH_PARTITION = "anchor_even"
 RAMP_BATCH_SIZES = (2, 3, 4, 5, 6, 7, 8)
+ANCHOR_BATCH_SIZE = 2
+ANCHOR_EVEN_TARGET_GROUP_SIZE = 6
+ANCHOR_EVEN_MAX_FOLLOWUP_GROUPS = 5
 DEFAULT_LLM_SLOT_LIMITS = {
     "spec": 4,
     "svg": 10,
@@ -109,6 +112,7 @@ LLM_SLOT_WAIT_TIMEOUT_SECONDS = 2 * 60 * 60
 SVG_FAIR_SHARE_DELAY_SECONDS = 8
 REDIS_CLIENT = None
 REDIS_CLIENT_LOCK = Lock()
+BATCH_PARTITION_REPEAT_SENTINEL = "+"
 QWEN_ALLOWED_TOOLS = (
     "edit",
     "write_file",
@@ -661,6 +665,48 @@ def sanitize_token(value: str) -> str:
     return safe or "job"
 
 
+def is_valid_batch_partition(value: str | None) -> bool:
+    partition = (value or "").strip().lower()
+    if not partition:
+        return False
+    if partition in {"fixed", "ramp", "ramp_2_3_4_5_6_7_8", "anchor_even"}:
+        return True
+    candidate = partition[:-1] if partition.endswith(BATCH_PARTITION_REPEAT_SENTINEL) else partition
+    parts = candidate.split("+")
+    return bool(parts) and all(part.isdigit() and int(part) > 0 for part in parts)
+
+
+def parse_numeric_batch_partition(partition: str) -> tuple[list[int], bool]:
+    normalized = partition.strip().lower()
+    repeat_last = normalized.endswith(BATCH_PARTITION_REPEAT_SENTINEL)
+    if repeat_last:
+        normalized = normalized[:-1]
+    sizes = [int(item) for item in normalized.split("+") if item]
+    if not sizes or any(size <= 0 for size in sizes):
+        raise RunnerError(f"Invalid numeric batch_partition: {partition}")
+    return sizes, repeat_last
+
+
+def split_anchor_even_batch_sizes(total_pages: int) -> list[int]:
+    if total_pages <= 0:
+        return []
+    if total_pages <= ANCHOR_BATCH_SIZE:
+        return [total_pages]
+
+    remaining = total_pages - ANCHOR_BATCH_SIZE
+    followup_groups = max(1, math.ceil(remaining / ANCHOR_EVEN_TARGET_GROUP_SIZE))
+    followup_groups = min(ANCHOR_EVEN_MAX_FOLLOWUP_GROUPS, followup_groups)
+
+    base = remaining // followup_groups
+    remainder = remaining % followup_groups
+    sizes = [ANCHOR_BATCH_SIZE]
+    for index in range(followup_groups):
+        size = base + (1 if index < remainder else 0)
+        if size > 0:
+            sizes.append(size)
+    return sizes
+
+
 def append_log(log_path: Path, message: str) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8") as handle:
@@ -782,6 +828,111 @@ def redis_dynamic_svg_limit(default_limit: int) -> int:
     min_limit = env_int("PPT_API_LLM_MIN_SVG_CONCURRENCY", 1, minimum=1)
     calculated = math.floor((budget_tpm * utilization) / observed_tpm)
     return max(min_limit, min(hard_max, calculated))
+
+
+def redis_stage_token_estimate(stage: str, client=None) -> int:
+    client = client or get_runner_redis_client()
+    env_name = {
+        "svg": "PPT_API_LLM_DEFAULT_SVG_RESERVE_TOKENS",
+        "spec": "PPT_API_LLM_DEFAULT_SPEC_RESERVE_TOKENS",
+        "notes": "PPT_API_LLM_DEFAULT_NOTES_RESERVE_TOKENS",
+    }.get(stage, "PPT_API_LLM_DEFAULT_RESERVE_TOKENS")
+    default_tokens = env_int(env_name, 700000 if stage == "svg" else 100000, minimum=1)
+    if client is None:
+        return default_tokens
+    try:
+        observed = float(client.get(redis_key(f"llm:ewma:{stage}:tokens")) or 0)
+    except Exception:
+        return default_tokens
+    if observed <= 0:
+        return default_tokens
+    safety_factor = env_float("PPT_API_LLM_PACING_SAFETY_FACTOR", 1.15, minimum=1.0, maximum=3.0)
+    return max(1, math.ceil(observed * safety_factor))
+
+
+def wait_for_redis_tpm_budget(client, stage: str, *, label: str, log_path: Path | None = None) -> None:
+    if not env_bool("PPT_API_LLM_TPM_PACING_ENABLED", True):
+        return
+    if stage != "svg" and not env_bool("PPT_API_LLM_TPM_PACING_ALL_STAGES", False):
+        return
+
+    budget_tpm = env_int("PPT_API_LLM_BUDGET_TPM", 0, minimum=0)
+    if budget_tpm <= 0:
+        return
+    utilization = env_float("PPT_API_LLM_TARGET_UTILIZATION", 0.75, minimum=0.1, maximum=1.0)
+    window_seconds = env_int("PPT_API_LLM_PACING_WINDOW_SECONDS", 60, minimum=5)
+    budget_window = max(1, int(budget_tpm * utilization * (window_seconds / 60)))
+    reserve_tokens = redis_stage_token_estimate(stage, client)
+    reserve_tokens = min(reserve_tokens, budget_window)
+    pacing_key = redis_key(f"llm:pacing:{stage}")
+    wait_timeout = env_int("PPT_API_LLM_SLOT_WAIT_TIMEOUT_SECONDS", LLM_SLOT_WAIT_TIMEOUT_SECONDS, minimum=60)
+    started = time.time()
+    last_wait_log = 0.0
+
+    reserve_script = """
+    redis.call('zremrangebyscore', KEYS[1], '-inf', ARGV[2])
+    local members = redis.call('zrange', KEYS[1], 0, -1)
+    local total = 0
+    for _, member in ipairs(members) do
+      local token_text = string.match(member, '^(%d+)|')
+      if token_text then
+        total = total + tonumber(token_text)
+      end
+    end
+    local estimate = tonumber(ARGV[4])
+    local budget = tonumber(ARGV[3])
+    if total + estimate <= budget then
+      redis.call('zadd', KEYS[1], ARGV[1], ARGV[5])
+      redis.call('expire', KEYS[1], tonumber(ARGV[6]) * 2)
+      return {1, total + estimate, budget}
+    end
+    return {0, total, budget}
+    """
+
+    while True:
+        now = time.time()
+        cutoff = now - window_seconds
+        member = f"{reserve_tokens}|{os.getpid()}|{uuid.uuid4().hex}"
+        try:
+            result = client.eval(
+                reserve_script,
+                1,
+                pacing_key,
+                f"{now:.6f}",
+                f"{cutoff:.6f}",
+                str(budget_window),
+                str(reserve_tokens),
+                member,
+                str(window_seconds),
+            )
+        except Exception as exc:
+            if log_path is not None:
+                append_log(log_path, f"Redis TPM pacing unavailable for {stage}; continuing without pacing: {exc}")
+            return
+
+        allowed = bool(result and int(result[0]) == 1)
+        current_total = int(result[1]) if result and len(result) > 1 else 0
+        if allowed:
+            if log_path is not None:
+                append_log(
+                    log_path,
+                    f"Reserved Redis TPM budget for {stage}: reserve={reserve_tokens} "
+                    f"window_used={current_total}/{budget_window} label={label}",
+                )
+            return
+
+        if time.time() - started > wait_timeout:
+            raise RunnerError(
+                f"Timed out waiting for Redis TPM pacing after {wait_timeout}s: stage={stage} label={label}"
+            )
+        if log_path is not None and time.time() - last_wait_log >= 30:
+            append_log(
+                log_path,
+                f"Waiting for Redis TPM pacing: stage={stage} "
+                f"used={current_total}/{budget_window} reserve={reserve_tokens} label={label}",
+            )
+            last_wait_log = time.time()
+        time.sleep(2)
 
 
 def stable_delay_seconds(label: str, max_seconds: int) -> int:
@@ -1035,6 +1186,7 @@ def acquire_resource_slot(
     limit = llm_slot_limit(stage)
     redis_client = get_runner_redis_client(log_path)
     if redis_client is not None:
+        wait_for_redis_tpm_budget(redis_client, stage, label=label, log_path=log_path)
         with acquire_redis_resource_slot(
             redis_client,
             stage,
@@ -1213,6 +1365,9 @@ def record_llm_observation(
         old_value = float(client.get(stage_key) or 0)
         ewma = observed_tpm if old_value <= 0 else (alpha * observed_tpm + (1 - alpha) * old_value)
         client.set(stage_key, f"{ewma:.6f}")
+        old_tokens = float(client.get(redis_key(f"llm:ewma:{stage}:tokens")) or 0)
+        ewma_tokens = usage.total_tokens if old_tokens <= 0 else (alpha * usage.total_tokens + (1 - alpha) * old_tokens)
+        client.set(redis_key(f"llm:ewma:{stage}:tokens"), f"{ewma_tokens:.6f}")
         client.hset(
             model_key,
             mapping={
@@ -1220,6 +1375,7 @@ def record_llm_observation(
                 "stage": stage,
                 "observed_tpm": f"{observed_tpm:.6f}",
                 "ewma_tpm": f"{ewma:.6f}",
+                "ewma_tokens": f"{ewma_tokens:.6f}",
                 "total_tokens": usage.total_tokens,
                 "elapsed_seconds": f"{elapsed_seconds:.3f}",
                 "updated_at": f"{time.time():.3f}",
@@ -1461,8 +1617,10 @@ def load_request(request_path: Path) -> dict[str, Any]:
     if not isinstance(batch_partition, str):
         raise RunnerError("batch_partition must be a string")
     batch_partition = batch_partition.strip().lower() or DEFAULT_BATCH_PARTITION
-    if batch_partition not in {"fixed", DEFAULT_BATCH_PARTITION, "2+3+4+5+6+7+8", "ramp"}:
-        raise RunnerError("batch_partition must be one of: fixed, ramp, 2+3+4+5+6+7+8, ramp_2_3_4_5_6_7_8")
+    if not is_valid_batch_partition(batch_partition):
+        raise RunnerError(
+            "batch_partition must be one of: fixed, ramp, anchor_even, ramp_2_3_4_5_6_7_8, or a numeric sequence like 2+6+6+6+6+6+"
+        )
     request["batch_partition"] = batch_partition
     model = request.get("model")
     request["model"] = model.strip() if isinstance(model, str) and model.strip() else DEFAULT_QWEN_MODEL
@@ -2599,7 +2757,7 @@ def split_plan_into_batches(
         return []
 
     partition = (batch_partition or "fixed").strip().lower()
-    if partition in {DEFAULT_BATCH_PARTITION, "2+3+4+5+6+7+8", "ramp"}:
+    if partition in {"2+3+4+5+6+7+8", "ramp", "ramp_2_3_4_5_6_7_8"}:
         batches: list[list[SlidePlanEntry]] = []
         cursor = 0
         for size in RAMP_BATCH_SIZES:
@@ -2609,6 +2767,42 @@ def split_plan_into_batches(
             cursor += size
         if cursor < len(plan):
             batches.append(plan[cursor:])
+        if len(batches) >= 2 and len(batches[-1]) == 1:
+            batches[-2].extend(batches[-1])
+            batches.pop()
+        return batches
+
+    if partition == "anchor_even":
+        sizes = split_anchor_even_batch_sizes(len(plan))
+        batches = []
+        cursor = 0
+        for size in sizes:
+            if cursor >= len(plan):
+                break
+            batches.append(plan[cursor : min(cursor + size, len(plan))])
+            cursor += size
+        if cursor < len(plan):
+            batches.append(plan[cursor:])
+        if len(batches) >= 2 and len(batches[-1]) == 1:
+            batches[-2].extend(batches[-1])
+            batches.pop()
+        return batches
+
+    if partition != "fixed" and is_valid_batch_partition(partition):
+        sizes, repeat_last = parse_numeric_batch_partition(partition)
+        batches = []
+        cursor = 0
+        index = 0
+        while cursor < len(plan):
+            if index < len(sizes):
+                size = sizes[index]
+            elif repeat_last:
+                size = sizes[-1]
+            else:
+                size = len(plan) - cursor
+            batches.append(plan[cursor : min(cursor + size, len(plan))])
+            cursor += size
+            index += 1
         if len(batches) >= 2 and len(batches[-1]) == 1:
             batches[-2].extend(batches[-1])
             batches.pop()
@@ -4117,19 +4311,19 @@ def execute_parallel_svg_generation(
     runner_dir: Path,
     log_path: Path,
 ) -> list[str]:
-    with register_active_svg_job(str(request.get("job_id") or project_path.name), runner_dir, log_path):
-        fair_delay = env_int("PPT_API_SVG_FAIR_SHARE_DELAY_SECONDS", SVG_FAIR_SHARE_DELAY_SECONDS, minimum=0)
-        stage_stagger_window = env_int("PPT_API_SVG_STAGE_STAGGER_SECONDS", 0, minimum=0)
-        stage_stagger = stable_delay_seconds(str(request.get("job_id") or project_path.name), stage_stagger_window)
-        total_delay = fair_delay + stage_stagger
-        if total_delay > 0:
-            append_log(
-                log_path,
-                f"Staggering SVG stage start for {total_delay}s "
-                f"(fair_share_delay={fair_delay}s stage_stagger={stage_stagger}s)",
-            )
-            time.sleep(total_delay)
+    fair_delay = env_int("PPT_API_SVG_FAIR_SHARE_DELAY_SECONDS", SVG_FAIR_SHARE_DELAY_SECONDS, minimum=0)
+    stage_stagger_window = env_int("PPT_API_SVG_STAGE_STAGGER_SECONDS", 0, minimum=0)
+    stage_stagger = stable_delay_seconds(str(request.get("job_id") or project_path.name), stage_stagger_window)
+    total_delay = fair_delay + stage_stagger
+    if total_delay > 0:
+        append_log(
+            log_path,
+            f"Staggering SVG stage start for {total_delay}s "
+            f"(fair_share_delay={fair_delay}s stage_stagger={stage_stagger}s)",
+        )
+        time.sleep(total_delay)
 
+    with register_active_svg_job(str(request.get("job_id") or project_path.name), runner_dir, log_path):
         return _execute_parallel_svg_generation_registered(
             request=request,
             project_path=project_path,
@@ -4164,14 +4358,14 @@ def _execute_parallel_svg_generation_registered(
         str(request.get("batch_partition", "fixed")),
     )
     requested_workers = int(request.get("parallel_batch_workers", DEFAULT_PARALLEL_BATCH_WORKERS))
-    max_workers = effective_svg_worker_count(
+    initial_workers = effective_svg_worker_count(
         requested_workers=requested_workers,
         total_batches=len(batches),
         log_path=log_path,
     )
     append_log(
         log_path,
-        f"Launching parallel SVG batches: total_batches={len(batches)} requested_workers={requested_workers} workers={max_workers}",
+        f"Launching parallel SVG batches: total_batches={len(batches)} requested_workers={requested_workers} initial_workers={initial_workers}",
     )
 
     batch_artifacts: list[tuple[int, list[SlidePlanEntry], Path, Path, str]] = []
@@ -4250,19 +4444,38 @@ def _execute_parallel_svg_generation_registered(
         append_log(log_path, f"Anchor SVG batch {first_index + 1} completed")
         remaining_batch_artifacts = batch_artifacts[1:]
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_map = {}
+    max_executor_workers = max(1, min(len(remaining_batch_artifacts), requested_workers))
+    with ThreadPoolExecutor(max_workers=max_executor_workers) as executor:
+        future_map: dict[Any, tuple[int, list[SlidePlanEntry], str]] = {}
+        pending_batch_artifacts = list(remaining_batch_artifacts)
         batch_stagger = env_int("PPT_API_SVG_BATCH_STAGGER_SECONDS", 0, minimum=0)
-        for item_index, (batch_index, batch_plan, _prompt_path, _batch_slide_plan_path, batch_prompt) in enumerate(
-            remaining_batch_artifacts
-        ):
-            future_map[executor.submit(run_single_parallel_batch, batch_index, batch_plan, batch_prompt)] = batch_index
-            if batch_stagger > 0 and item_index < len(remaining_batch_artifacts) - 1:
-                time.sleep(batch_stagger)
-        for future in as_completed(future_map):
-            batch_index = future_map[future]
-            session_by_index[batch_index] = future.result()
-            append_log(log_path, f"Parallel SVG batch {batch_index + 1} completed")
+        while pending_batch_artifacts or future_map:
+            remaining_total = len(pending_batch_artifacts) + len(future_map)
+            desired_inflight = effective_svg_worker_count(
+                requested_workers=requested_workers,
+                total_batches=max(1, remaining_total),
+                log_path=log_path,
+            )
+            while pending_batch_artifacts and len(future_map) < desired_inflight:
+                batch_index, batch_plan, _prompt_path, _batch_slide_plan_path, batch_prompt = pending_batch_artifacts.pop(0)
+                append_log(
+                    log_path,
+                    f"Submitting SVG batch {batch_index + 1} to executor "
+                    f"(inflight={len(future_map) + 1}/{desired_inflight}, remaining={len(pending_batch_artifacts)})",
+                )
+                future = executor.submit(run_single_parallel_batch, batch_index, batch_plan, batch_prompt)
+                future_map[future] = (batch_index, batch_plan, batch_prompt)
+                if batch_stagger > 0 and pending_batch_artifacts and len(future_map) < desired_inflight:
+                    time.sleep(batch_stagger)
+
+            if not future_map:
+                continue
+
+            done, _pending = wait(tuple(future_map.keys()), return_when=FIRST_COMPLETED)
+            for future in done:
+                batch_index, _batch_plan, _batch_prompt = future_map.pop(future)
+                session_by_index[batch_index] = future.result()
+                append_log(log_path, f"Parallel SVG batch {batch_index + 1} completed")
 
     return [session_by_index[index] for index in sorted(session_by_index)]
 

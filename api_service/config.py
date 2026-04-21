@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+BATCH_PARTITION_DEFAULT = "anchor_even"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -16,6 +17,25 @@ def _env_int(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_valid_batch_partition(value: str) -> bool:
+    normalized = (value or "").strip().lower()
+    if not normalized:
+        return False
+    if normalized in {"fixed", "ramp", "ramp_2_3_4_5_6_7_8", "anchor_even"}:
+        return True
+    if normalized.endswith("+"):
+        normalized = normalized[:-1]
+    parts = normalized.split("+")
+    return bool(parts) and all(part.isdigit() and int(part) > 0 for part in parts)
 
 
 @dataclass(frozen=True)
@@ -52,6 +72,10 @@ class Settings:
     async_worker_count: int
     default_response_mode: str
     default_callback_mode: str
+    metrics_export_enabled: bool
+    metrics_export_dir: Path
+    metrics_export_interval_seconds: int
+    metrics_export_retention_files: int
 
     @property
     def cos_enabled(self) -> bool:
@@ -65,15 +89,18 @@ def load_settings() -> Settings:
     batch_mode = (os.getenv("PPT_API_BATCH_MODE", "parallel") or "parallel").strip().lower()
     if batch_mode not in {"auto", "always", "never", "parallel"}:
         batch_mode = "auto"
-    batch_partition = (os.getenv("PPT_API_BATCH_PARTITION", "ramp_2_3_4_5_6_7_8") or "ramp_2_3_4_5_6_7_8").strip().lower()
-    if batch_partition not in {"fixed", "ramp", "2+3+4+5+6+7+8", "ramp_2_3_4_5_6_7_8"}:
-        batch_partition = "ramp_2_3_4_5_6_7_8"
+    batch_partition = (os.getenv("PPT_API_BATCH_PARTITION", BATCH_PARTITION_DEFAULT) or BATCH_PARTITION_DEFAULT).strip().lower()
+    if not _is_valid_batch_partition(batch_partition):
+        batch_partition = BATCH_PARTITION_DEFAULT
     default_response_mode = (os.getenv("PPT_API_DEFAULT_RESPONSE_MODE", "sync") or "sync").strip().lower()
     if default_response_mode not in {"sync", "async"}:
         default_response_mode = "sync"
     default_callback_mode = (os.getenv("PPT_API_DEFAULT_CALLBACK_MODE", "auto") or "auto").strip().lower()
     if default_callback_mode not in {"auto", "defer", "none"}:
         default_callback_mode = "auto"
+    metrics_export_dir = Path(
+        os.getenv("PPT_API_METRICS_EXPORT_DIR", str(project_base_dir / "metrics"))
+    ).expanduser()
     return Settings(
         repo_root=REPO_ROOT,
         host=os.getenv("PPT_API_HOST", "0.0.0.0"),
@@ -107,4 +134,8 @@ def load_settings() -> Settings:
         async_worker_count=max(1, _env_int("PPT_API_ASYNC_WORKERS", max_concurrent_jobs)),
         default_response_mode=default_response_mode,
         default_callback_mode=default_callback_mode,
+        metrics_export_enabled=_env_bool("PPT_API_METRICS_EXPORT_ENABLED", True),
+        metrics_export_dir=metrics_export_dir,
+        metrics_export_interval_seconds=max(1, _env_int("PPT_API_METRICS_EXPORT_INTERVAL_SECONDS", 10)),
+        metrics_export_retention_files=max(50, _env_int("PPT_API_METRICS_EXPORT_RETENTION_FILES", 2000)),
     )
