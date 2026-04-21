@@ -21,13 +21,14 @@ import urllib.error
 import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
+from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from difflib import get_close_matches
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 from typing import Any
 
 try:
@@ -62,6 +63,7 @@ QWEN_DEBUG_ROOT = Path.home() / ".qwen" / "debug"
 RUNNER_DIRNAME = "runner"
 LOG_FILENAME = "runner.log"
 USAGE_SUMMARY_FILENAME = "usage_summary.json"
+LIVE_USAGE_FILENAME_SUFFIX = ".live_usage.json"
 SVG_QUALITY_REPORT_FILENAME = "svg_quality_report.txt"
 SVG_ANCHOR_CONTEXT_FILENAME = "svg_anchor_context.json"
 QWEN_PROJECT_GUIDE_PATH = REPO_ROOT / "QWEN.md"
@@ -229,6 +231,9 @@ class SvgBudgetLease:
     completion_bucket_after: int
     completion_bucket_limit: int
     completion_bucket_key: str
+    live_window_tpm_after: int = 0
+    startup_reserve_tpm: int = 0
+    admission_mode: str = "estimated"
 
 
 @dataclass
@@ -275,6 +280,34 @@ class TurnUsageSummary:
         payload = asdict(self)
         payload["models"] = sorted(set(self.models or []))
         return payload
+
+
+@dataclass
+class LiveUsageSnapshot:
+    stage: str
+    label: str
+    session_id: str
+    window_seconds: int
+    poll_seconds: float
+    log_interval_seconds: float
+    cumulative: TurnUsageSummary
+    rolling_tpm_60s: int = 0
+    last_event_epoch: float | None = None
+    observed_events: int = 0
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "stage": self.stage,
+            "label": self.label,
+            "session_id": self.session_id,
+            "window_seconds": self.window_seconds,
+            "poll_seconds": self.poll_seconds,
+            "log_interval_seconds": self.log_interval_seconds,
+            "rolling_tpm_60s": self.rolling_tpm_60s,
+            "last_event_epoch": self.last_event_epoch,
+            "observed_events": self.observed_events,
+            "cumulative": self.cumulative.to_json(),
+        }
 
 
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -792,6 +825,41 @@ def env_float(name: str, default: float, *, minimum: float | None = None, maximu
     return value
 
 
+def live_usage_enabled(stage: str) -> bool:
+    if not env_bool("PPT_API_LIVE_USAGE_ENABLED", True):
+        return False
+    if stage == "svg":
+        return True
+    return env_bool("PPT_API_LIVE_USAGE_ALL_STAGES", False)
+
+
+def live_usage_poll_seconds() -> float:
+    return env_float("PPT_API_LIVE_USAGE_POLL_SECONDS", 10.0, minimum=1.0, maximum=60.0)
+
+
+def live_usage_log_interval_seconds() -> float:
+    return env_float("PPT_API_LIVE_USAGE_LOG_INTERVAL_SECONDS", 60.0, minimum=5.0, maximum=300.0)
+
+
+def live_tpm_window_seconds() -> int:
+    default_window = env_int("PPT_API_LLM_PACING_WINDOW_SECONDS", 60, minimum=5)
+    return env_int("PPT_API_LIVE_TPM_WINDOW_SECONDS", default_window, minimum=5)
+
+
+def live_tpm_admission_enabled(stage: str) -> bool:
+    return stage == "svg" and env_bool("PPT_API_LIVE_TPM_ADMISSION_ENABLED", True)
+
+
+def live_tpm_bypass_completion_guard(stage: str) -> bool:
+    return stage == "svg" and env_bool("PPT_API_SVG_LIVE_TPM_BYPASS_COMPLETION_GUARD", True)
+
+
+def live_tpm_startup_reserve_seconds(stage: str) -> float:
+    if stage != "svg":
+        return env_float("PPT_API_LIVE_TPM_STARTUP_RESERVE_SECONDS", 10.0, minimum=1.0, maximum=60.0)
+    return env_float("PPT_API_SVG_LIVE_TPM_STARTUP_RESERVE_SECONDS", 15.0, minimum=1.0, maximum=60.0)
+
+
 def redis_url() -> str | None:
     return ((os.getenv("PPT_REDIS_URL") or os.getenv("REDIS_URL") or "").strip() or None)
 
@@ -1022,6 +1090,10 @@ def acquire_svg_budget_lease(
     completion_budget = max(1, int(budget_tpm * completion_utilization))
     completion_guard_enabled = env_bool("PPT_API_SVG_COMPLETION_GUARD_ENABLED", True)
     worker_tpm = redis_svg_worker_tpm_estimate(client)
+    live_admission_enabled = live_tpm_admission_enabled(stage)
+    completion_guard_bypassed = live_tpm_bypass_completion_guard(stage) if live_admission_enabled else False
+    live_window_seconds = live_tpm_window_seconds()
+    startup_reserve_tpm = max(1, math.ceil(worker_tpm * (live_tpm_startup_reserve_seconds(stage) / 60.0)))
     duration_seconds = redis_svg_duration_estimate(client)
     estimated_tokens = redis_svg_turn_token_estimate(
         client,
@@ -1051,6 +1123,10 @@ def acquire_svg_budget_lease(
     local completion_budget = tonumber(ARGV[9])
     local ttl = tonumber(ARGV[10])
     local completion_enabled = tonumber(ARGV[11])
+    local live_window_seconds = tonumber(ARGV[12])
+    local startup_reserve = tonumber(ARGV[13])
+    local live_enabled = tonumber(ARGV[14])
+    local completion_bypass = tonumber(ARGV[15])
     local completion_bucket_epoch = tostring(math.floor((now + estimated_duration) / 60) * 60)
     local completion_key = KEYS[4] .. completion_bucket_epoch
 
@@ -1071,12 +1147,43 @@ def acquire_svg_budget_lease(
       end
     end
 
+    local live_total = 0
+    if live_enabled == 1 then
+      redis.call('zremrangebyscore', KEYS[6], '-inf', now - live_window_seconds)
+      local live_members = redis.call('zrange', KEYS[6], 0, -1)
+      for _, live_member in ipairs(live_members) do
+        local token_text = string.match(live_member, '^(%d+)|')
+        if token_text then
+          live_total = live_total + tonumber(token_text)
+        end
+      end
+    end
+
     local completion_current = 0
     if completion_enabled == 1 then
       completion_current = tonumber(redis.call('get', completion_key) or '0')
     end
 
-    if active_tpm + estimated_tpm <= active_budget and (completion_enabled == 0 or completion_current + estimated_tokens <= completion_budget) then
+    local accounted_tpm = active_tpm
+    if live_enabled == 1 and live_total > accounted_tpm then
+      accounted_tpm = live_total
+    end
+
+    local admission_allowed = 0
+    if live_enabled == 1 then
+      if accounted_tpm + startup_reserve <= active_budget then
+        admission_allowed = 1
+      end
+    elseif active_tpm + estimated_tpm <= active_budget then
+      admission_allowed = 1
+    end
+
+    local completion_allowed = 1
+    if completion_enabled == 1 and completion_bypass == 0 and completion_current + estimated_tokens > completion_budget then
+      completion_allowed = 0
+    end
+
+    if admission_allowed == 1 and completion_allowed == 1 then
       redis.call('hset', KEYS[2] .. lease_id,
         'lease_id', lease_id,
         'label', label,
@@ -1084,6 +1191,10 @@ def acquire_svg_budget_lease(
         'estimated_worker_tpm', estimated_tpm,
         'estimated_tokens', estimated_tokens,
         'estimated_duration_seconds', estimated_duration,
+        'live_window_tpm_after', accounted_tpm + startup_reserve,
+        'live_window_tpm_before', live_total,
+        'startup_reserve_tpm', startup_reserve,
+        'admission_mode', live_enabled == 1 and 'live' or 'estimated',
         'created_at', now,
         'expires_at', now + ttl,
         'completion_bucket_epoch', completion_bucket_epoch,
@@ -1092,16 +1203,16 @@ def acquire_svg_budget_lease(
       redis.call('expire', KEYS[2] .. lease_id, ttl)
       redis.call('zadd', KEYS[1], now + ttl, lease_id)
       redis.call('expire', KEYS[1], ttl)
-      if completion_enabled == 1 then
+      if completion_enabled == 1 and completion_bypass == 0 then
         redis.call('incrby', completion_key, estimated_tokens)
         redis.call('expire', completion_key, math.max(ttl, estimated_duration + 180))
         completion_current = completion_current + estimated_tokens
       end
       redis.call('incr', KEYS[3])
-      return {1, active_tpm + estimated_tpm, active_budget, completion_current, completion_budget, completion_key}
+      return {1, active_tpm + estimated_tpm, active_budget, completion_current, completion_budget, completion_key, accounted_tpm + startup_reserve, live_total, startup_reserve}
     end
     redis.call('incr', KEYS[5])
-    return {0, active_tpm, active_budget, completion_current, completion_budget, completion_key}
+    return {0, active_tpm, active_budget, completion_current, completion_budget, completion_key, accounted_tpm, live_total, startup_reserve}
     """
 
     release_script = """
@@ -1116,12 +1227,13 @@ def acquire_svg_budget_lease(
             try:
                 result = client.eval(
                     acquire_script,
-                    5,
+                    6,
                     redis_key("svg:budget:leases"),
                     redis_key("svg:budget:lease:"),
                     redis_key("svg:budget:granted_starts"),
                     redis_key("svg:budget:completion:"),
                     redis_key("svg:budget:denied_starts"),
+                    redis_live_stage_key(stage),
                     f"{now:.6f}",
                     lease_id,
                     label,
@@ -1133,6 +1245,10 @@ def acquire_svg_budget_lease(
                     str(completion_budget),
                     str(ttl_seconds),
                     "1" if completion_guard_enabled else "0",
+                    str(live_window_seconds),
+                    str(startup_reserve_tpm),
+                    "1" if live_admission_enabled else "0",
+                    "1" if completion_guard_bypassed else "0",
                 )
             except Exception as exc:
                 if log_path is not None:
@@ -1146,6 +1262,9 @@ def acquire_svg_budget_lease(
             completion_after = int(result[3]) if result and len(result) > 3 else 0
             completion_limit = int(result[4]) if result and len(result) > 4 else completion_budget
             completion_key = str(result[5]) if result and len(result) > 5 else ""
+            live_window_after = int(result[6]) if result and len(result) > 6 else 0
+            live_window_before = int(result[7]) if result and len(result) > 7 else 0
+            startup_reserve_after = int(result[8]) if result and len(result) > 8 else startup_reserve_tpm
             if allowed:
                 lease = SvgBudgetLease(
                     lease_id=lease_id,
@@ -1157,12 +1276,17 @@ def acquire_svg_budget_lease(
                     completion_bucket_after=completion_after,
                     completion_bucket_limit=completion_limit,
                     completion_bucket_key=completion_key,
+                    live_window_tpm_after=live_window_after,
+                    startup_reserve_tpm=startup_reserve_after,
+                    admission_mode="live" if live_admission_enabled else "estimated",
                 )
                 if log_path is not None:
                     append_log(
                         log_path,
                         "Acquired Redis SVG budget lease: "
                         f"lease={lease_id} tpm={worker_tpm} active={active_tpm_after}/{budget_after} "
+                        f"live={live_window_before}->{live_window_after}/{budget_after} "
+                        f"reserve={startup_reserve_after} mode={lease.admission_mode} "
                         f"tokens={estimated_tokens} duration={duration_seconds}s "
                         f"completion={completion_after}/{completion_limit} label={label}",
                     )
@@ -1176,7 +1300,9 @@ def acquire_svg_budget_lease(
                 append_log(
                     log_path,
                     "Waiting for Redis SVG budget lease: "
-                    f"active={active_tpm_after}/{budget_after} completion={completion_after}/{completion_limit} "
+                    f"active={active_tpm_after}/{budget_after} live={live_window_before}/{budget_after} "
+                    f"reserve={startup_reserve_after} mode={'live' if live_admission_enabled else 'estimated'} "
+                    f"completion={completion_after}/{completion_limit} "
                     f"estimate_tpm={worker_tpm} estimate_tokens={estimated_tokens} label={label}",
                 )
                 last_wait_log = time.time()
@@ -1608,8 +1734,67 @@ def merge_turn_usage(summaries: list[TurnUsageSummary]) -> TurnUsageSummary | No
     return merged
 
 
-def summarize_usage_from_records(session_id: str, records: list[dict[str, Any]]) -> TurnUsageSummary | None:
-    summaries: list[TurnUsageSummary] = []
+def accumulate_usage_summary(target: TurnUsageSummary, summary: TurnUsageSummary) -> None:
+    target.api_calls += summary.api_calls
+    target.prompt_tokens += summary.prompt_tokens
+    target.completion_tokens += summary.completion_tokens
+    target.cached_tokens += summary.cached_tokens
+    target.thoughts_tokens += summary.thoughts_tokens
+    target.total_tokens += summary.total_tokens
+    target.tool_tokens += summary.tool_tokens
+    target.models = sorted(set((target.models or []) + (summary.models or [])))
+
+
+def parse_record_epoch(record: dict[str, Any], *, fallback: float | None = None) -> float:
+    candidates = [
+        record.get("timestamp"),
+        record.get("createdAt"),
+        record.get("created_at"),
+        record.get("time"),
+    ]
+    for value in candidates:
+        if value is None:
+            continue
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                continue
+            try:
+                return float(text)
+            except ValueError:
+                pass
+            normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+            try:
+                return datetime.fromisoformat(normalized).timestamp()
+            except ValueError:
+                continue
+    return fallback if fallback is not None else time.time()
+
+
+def usage_summary_from_ui_payload(payload: dict[str, Any]) -> TurnUsageSummary | None:
+    if payload.get("event.name") != "qwen-code.api_response":
+        return None
+    return TurnUsageSummary(
+        api_calls=1,
+        prompt_tokens=safe_int(payload.get("input_token_count")),
+        completion_tokens=safe_int(payload.get("output_token_count")),
+        cached_tokens=safe_int(payload.get("cached_content_token_count")),
+        thoughts_tokens=safe_int(payload.get("thoughts_token_count")),
+        total_tokens=safe_int(payload.get("total_token_count")),
+        tool_tokens=safe_int(payload.get("tool_token_count")),
+        models=[str(payload.get("model"))] if payload.get("model") else [],
+    )
+
+
+def extract_usage_events_from_records(
+    session_id: str,
+    records: list[dict[str, Any]],
+    *,
+    fallback_epoch: float | None = None,
+) -> list[tuple[float, TurnUsageSummary]]:
+    events: list[tuple[float, TurnUsageSummary]] = []
     for record in records:
         if record.get("sessionId") != session_id:
             continue
@@ -1617,23 +1802,80 @@ def summarize_usage_from_records(session_id: str, records: list[dict[str, Any]])
             continue
         if record.get("subtype") != "ui_telemetry":
             continue
-
         payload = ((record.get("systemPayload") or {}).get("uiEvent") or {})
-        if payload.get("event.name") != "qwen-code.api_response":
+        if not isinstance(payload, dict):
             continue
+        summary = usage_summary_from_ui_payload(payload)
+        if summary is None:
+            continue
+        event_epoch = parse_record_epoch(record, fallback=fallback_epoch)
+        events.append((event_epoch, summary))
+    return events
 
-        summary = TurnUsageSummary(
-            api_calls=1,
-            prompt_tokens=safe_int(payload.get("input_token_count")),
-            completion_tokens=safe_int(payload.get("output_token_count")),
-            cached_tokens=safe_int(payload.get("cached_content_token_count")),
-            thoughts_tokens=safe_int(payload.get("thoughts_token_count")),
-            total_tokens=safe_int(payload.get("total_token_count")),
-            tool_tokens=safe_int(payload.get("tool_token_count")),
-            models=[str(payload.get("model"))] if payload.get("model") else [],
-        )
-        summaries.append(summary)
-    return merge_turn_usage(summaries)
+
+def summarize_usage_from_records(session_id: str, records: list[dict[str, Any]]) -> TurnUsageSummary | None:
+    return merge_turn_usage([summary for _event_epoch, summary in extract_usage_events_from_records(session_id, records)])
+
+
+def redis_live_stage_key(stage: str) -> str:
+    return redis_key(f"llm:live:{stage}:tokens")
+
+
+def record_live_stage_usage(
+    stage: str,
+    summary: TurnUsageSummary,
+    *,
+    event_epoch: float,
+    session_id: str,
+    label: str,
+    log_path: Path | None = None,
+) -> None:
+    if summary.total_tokens <= 0:
+        return
+    client = get_runner_redis_client(log_path)
+    if client is None:
+        return
+    window_seconds = live_tpm_window_seconds()
+    member = f"{summary.total_tokens}|{sanitize_token(session_id)}|{sanitize_token(label)}|{uuid.uuid4().hex}"
+    try:
+        client.zremrangebyscore(redis_live_stage_key(stage), "-inf", f"{event_epoch - window_seconds:.6f}")
+        client.zadd(redis_live_stage_key(stage), {member: event_epoch})
+        client.expire(redis_live_stage_key(stage), window_seconds * 4)
+    except Exception as exc:
+        if log_path is not None:
+            append_log(log_path, f"Failed to record Redis live {stage} usage: {exc}")
+
+
+def redis_live_stage_window_snapshot(
+    stage: str,
+    client=None,
+    *,
+    window_seconds: int | None = None,
+) -> dict[str, int] | None:
+    client = client or get_runner_redis_client()
+    if client is None:
+        return None
+    window = window_seconds or live_tpm_window_seconds()
+    now = time.time()
+    try:
+        client.zremrangebyscore(redis_live_stage_key(stage), "-inf", f"{now - window:.6f}")
+        total = 0
+        members = client.zrange(redis_live_stage_key(stage), 0, -1)
+        for member in members:
+            if not isinstance(member, str):
+                continue
+            token_text = member.split("|", 1)[0]
+            try:
+                total += int(token_text)
+            except ValueError:
+                continue
+        return {
+            "tokens": max(0, total),
+            "events": len(members),
+            "window_seconds": window,
+        }
+    except Exception:
+        return None
 
 
 def format_usage_summary(summary: TurnUsageSummary | None) -> str:
@@ -2338,6 +2580,103 @@ def read_latest_assistant_message(chat_path: Path | None, session_id: str) -> st
             if text:
                 latest_text = text
     return latest_text
+
+
+def turn_live_usage_path(runner_dir: Path, artifact_prefix: str, turn_index: int) -> Path:
+    return runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}{LIVE_USAGE_FILENAME_SUFFIX}"
+
+
+def write_live_usage_snapshot(path: Path, snapshot: LiveUsageSnapshot) -> None:
+    write_json(path, snapshot.to_json())
+
+
+def monitor_qwen_live_usage(
+    process: subprocess.Popen[str],
+    *,
+    session_id: str,
+    stage: str,
+    label: str,
+    runner_dir: Path,
+    artifact_prefix: str,
+    turn_index: int,
+    initial_chat_path: Path | None,
+    initial_line_count: int,
+    log_path: Path | None = None,
+) -> None:
+    if not live_usage_enabled(stage):
+        return
+
+    chat_path = initial_chat_path
+    last_line = initial_line_count
+    poll_seconds = live_usage_poll_seconds()
+    log_interval_seconds = live_usage_log_interval_seconds()
+    window_seconds = live_tpm_window_seconds()
+    snapshot_path = turn_live_usage_path(runner_dir, artifact_prefix, turn_index)
+    cumulative = TurnUsageSummary(models=[])
+    rolling_events: deque[tuple[float, int]] = deque()
+    observed_events = 0
+    last_log_at = 0.0
+    last_event_epoch: float | None = None
+    exit_seen_at: float | None = None
+
+    while True:
+        now = time.time()
+        if chat_path is None:
+            chat_path = find_chat_recording_path(session_id)
+            if chat_path is not None:
+                last_line = count_file_lines(chat_path)
+
+        if chat_path is not None and chat_path.exists():
+            current_line_count = count_file_lines(chat_path)
+            if current_line_count > last_line:
+                records = read_chat_records_after_line(chat_path, last_line)
+                last_line = current_line_count
+                for event_epoch, summary in extract_usage_events_from_records(session_id, records, fallback_epoch=now):
+                    accumulate_usage_summary(cumulative, summary)
+                    observed_events += 1
+                    last_event_epoch = event_epoch
+                    rolling_events.append((event_epoch, summary.total_tokens))
+                    record_live_stage_usage(
+                        stage,
+                        summary,
+                        event_epoch=event_epoch,
+                        session_id=session_id,
+                        label=label,
+                        log_path=log_path,
+                    )
+                while rolling_events and rolling_events[0][0] < now - window_seconds:
+                    rolling_events.popleft()
+
+        rolling_tpm = sum(tokens for _epoch, tokens in rolling_events)
+        should_log = now - last_log_at >= log_interval_seconds
+        snapshot = LiveUsageSnapshot(
+            stage=stage,
+            label=label,
+            session_id=session_id,
+            window_seconds=window_seconds,
+            poll_seconds=poll_seconds,
+            log_interval_seconds=log_interval_seconds,
+            cumulative=cumulative,
+            rolling_tpm_60s=rolling_tpm,
+            last_event_epoch=last_event_epoch,
+            observed_events=observed_events,
+        )
+        write_live_usage_snapshot(snapshot_path, snapshot)
+        if should_log and observed_events:
+            if log_path is not None:
+                append_log(
+                    log_path,
+                    f"Live qwen usage for {label}: {format_usage_summary(cumulative)} "
+                    f"rolling_tpm_60s={rolling_tpm} observed_events={observed_events}",
+                )
+            last_log_at = now
+
+        if process.poll() is not None:
+            if exit_seen_at is None:
+                exit_seen_at = now
+            if now - exit_seen_at >= max(1.0, poll_seconds * 2):
+                break
+        time.sleep(poll_seconds)
 
 
 def collect_expected_svg_names(plan: list[SlidePlanEntry]) -> set[str]:
@@ -4345,6 +4684,10 @@ def run_qwen_prompt(
     wait_for_svg_start_jitter(stage, label=f"{runner_dir.name}:{label}", log_path=log_path)
     safe_command = redact_sensitive_command_parts(command)
     append_log(log_path, f"Starting qwen turn {turn_index}: {' '.join(safe_command)} (prompt via stdin, {len(prompt)} chars)")
+    completed_stdout = ""
+    completed_stderr = ""
+    completed_returncode = 0
+    elapsed_seconds = 0.0
     with acquire_svg_budget_lease(
         stage,
         label=f"{runner_dir.name}:{label}",
@@ -4359,25 +4702,57 @@ def run_qwen_prompt(
             skip_tpm_pacing=svg_budget_lease is not None,
         ):
             run_started = time.time()
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 command,
                 cwd=repo_root,
-                input=prompt,
-                capture_output=True,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=QWEN_CALL_TIMEOUT_SECONDS,
-                check=False,
             )
+            monitor_thread: Thread | None = None
+            if live_usage_enabled(stage):
+                monitor_thread = Thread(
+                    target=monitor_qwen_live_usage,
+                    kwargs={
+                        "process": process,
+                        "session_id": session_id,
+                        "stage": stage,
+                        "label": label,
+                        "runner_dir": runner_dir,
+                        "artifact_prefix": artifact_prefix,
+                        "turn_index": turn_index,
+                        "initial_chat_path": existing_chat_path,
+                        "initial_line_count": existing_chat_line_count,
+                        "log_path": log_path,
+                    },
+                    name=f"qwen-live-usage-{sanitize_token(label)}",
+                    daemon=True,
+                )
+                monitor_thread.start()
+            try:
+                stdout_text, stderr_text = process.communicate(input=prompt, timeout=QWEN_CALL_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired as exc:
+                process.kill()
+                stdout_text, stderr_text = process.communicate()
+                if monitor_thread is not None:
+                    monitor_thread.join(timeout=max(2.0, live_usage_poll_seconds() * 3))
+                raise RunnerError(f"Qwen turn timed out after {QWEN_CALL_TIMEOUT_SECONDS}s: {label}") from exc
             elapsed_seconds = time.time() - run_started
+            completed_stdout = stdout_text
+            completed_stderr = stderr_text
+            completed_returncode = safe_int(process.returncode)
+            if monitor_thread is not None:
+                monitor_thread.join(timeout=max(2.0, live_usage_poll_seconds() * 3))
 
     (runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.stdout.txt").write_text(
-        completed.stdout,
+        completed_stdout,
         encoding="utf-8",
     )
     (runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.stderr.txt").write_text(
-        completed.stderr,
+        completed_stderr,
         encoding="utf-8",
     )
     chat_path = wait_for_chat_recording_path(session_id)
@@ -4394,12 +4769,12 @@ def run_qwen_prompt(
         )
     append_log(
         log_path,
-        f"Finished qwen turn {turn_index} with rc={completed.returncode}; stdout={len(completed.stdout)} chars stderr={len(completed.stderr)} chars; {format_usage_summary(usage_summary)}",
+        f"Finished qwen turn {turn_index} with rc={completed_returncode}; stdout={len(completed_stdout)} chars stderr={len(completed_stderr)} chars; {format_usage_summary(usage_summary)}",
     )
     return QwenCallResult(
-        returncode=completed.returncode,
-        stdout=completed.stdout,
-        stderr=completed.stderr,
+        returncode=completed_returncode,
+        stdout=completed_stdout,
+        stderr=completed_stderr,
         usage=usage_payload,
     )
 

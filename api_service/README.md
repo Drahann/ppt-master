@@ -101,6 +101,13 @@ PPT_API_LLM_TPM_PACING_ENABLED=1
 PPT_API_LLM_PACING_WINDOW_SECONDS=60
 PPT_API_LLM_PACING_SAFETY_FACTOR=1.15
 PPT_API_LLM_DEFAULT_SVG_RESERVE_TOKENS=700000
+PPT_API_LIVE_USAGE_ENABLED=1
+PPT_API_LIVE_USAGE_POLL_SECONDS=10
+PPT_API_LIVE_USAGE_LOG_INTERVAL_SECONDS=60
+PPT_API_LIVE_TPM_WINDOW_SECONDS=60
+PPT_API_LIVE_TPM_ADMISSION_ENABLED=1
+PPT_API_SVG_LIVE_TPM_BYPASS_COMPLETION_GUARD=1
+PPT_API_SVG_LIVE_TPM_STARTUP_RESERVE_SECONDS=15
 PPT_API_SVG_QWEN_START_STAGGER_SECONDS=12
 PPT_API_QWEN_START_STAGGER_PER_STAGE=1
 ```
@@ -121,5 +128,7 @@ global_svg_concurrency = floor(PPT_API_LLM_BUDGET_TPM * PPT_API_LLM_TARGET_UTILI
 The result is clamped by `PPT_API_LLM_MIN_SVG_CONCURRENCY` and `PPT_API_LLM_HARD_MAX_SVG_CONCURRENCY`.
 
 TPM pacing is separate from slot concurrency. Before a new SVG turn starts, the runner reserves an estimated token budget in a rolling Redis window. If the current window is full, the turn waits instead of creating a new provider-side TPM spike.
+
+When live usage observation is enabled, running CLI turns also stream actual usage events into Redis from chat-recording telemetry. Metrics expose the current rolling SVG TPM, and SVG admission can prefer that live rolling window plus a bounded startup reserve over the older completion-bucket-only estimate.
 
 Local start staggering is an additional per-runner guard. It spaces out qwen CLI process starts inside one PPT job, so one runner cannot launch several SVG qwen turns in the same few seconds even if global slots are available.

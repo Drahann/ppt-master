@@ -458,6 +458,11 @@ def _llm_budget_snapshot() -> dict[str, object]:
     except ValueError:
         pacing_window_seconds = 60
     dynamic_svg_limit = _effective_svg_limit(configured_budget_tpm, target_utilization, observed_svg_worker_tpm)
+    try:
+        live_window_seconds = int((os.getenv("PPT_API_LIVE_TPM_WINDOW_SECONDS") or str(pacing_window_seconds)).strip() or str(pacing_window_seconds))
+    except ValueError:
+        live_window_seconds = pacing_window_seconds
+    live_svg_snapshot = _redis_live_stage_snapshot("svg", live_window_seconds)
     return {
         "configured_budget_tpm": configured_budget_tpm,
         "target_utilization": target_utilization,
@@ -467,8 +472,36 @@ def _llm_budget_snapshot() -> dict[str, object]:
         "configured_svg_limit": settings.llm_svg_slots,
         "tpm_pacing_enabled": (os.getenv("PPT_API_LLM_TPM_PACING_ENABLED", "1").strip().lower() not in {"0", "false", "no"}),
         "pacing_window_seconds": pacing_window_seconds,
+        "live_window_seconds": live_window_seconds,
+        "live_svg_tpm_60s": (live_svg_snapshot or {}).get("tokens"),
+        "live_svg_events_60s": (live_svg_snapshot or {}).get("events"),
         "backend": "redis",
     }
+
+
+def _redis_live_stage_snapshot(stage: str, window_seconds: int) -> dict[str, object] | None:
+    if job_store is None:
+        return None
+    key = f"{settings.redis_key_prefix}:llm:live:{stage}:tokens"
+    now = time.time()
+    cutoff = now - window_seconds
+    try:
+        job_store.client.zremrangebyscore(key, "-inf", f"{cutoff:.6f}")
+        members = job_store.client.zrange(key, 0, -1)
+        total = 0
+        for member in members:
+            token_text = str(member).split("|", 1)[0]
+            try:
+                total += int(token_text)
+            except ValueError:
+                continue
+        return {
+            "tokens": max(0, total),
+            "events": len(members),
+            "window_seconds": window_seconds,
+        }
+    except Exception:
+        return None
 
 
 def _redis_svg_budget_snapshot() -> dict[str, object]:
@@ -501,6 +534,10 @@ def _redis_svg_budget_snapshot() -> dict[str, object]:
                     "estimated_worker_tpm": estimated_worker_tpm,
                     "estimated_tokens": estimated_tokens,
                     "estimated_duration_seconds": int(float(payload.get("estimated_duration_seconds") or 0)),
+                    "live_window_tpm_after": int(float(payload.get("live_window_tpm_after") or 0)),
+                    "live_window_tpm_before": int(float(payload.get("live_window_tpm_before") or 0)),
+                    "startup_reserve_tpm": int(float(payload.get("startup_reserve_tpm") or 0)),
+                    "admission_mode": payload.get("admission_mode"),
                     "expires_at": float(payload.get("expires_at") or 0),
                     "completion_bucket_epoch": payload.get("completion_bucket_epoch"),
                 }
