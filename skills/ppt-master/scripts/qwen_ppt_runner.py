@@ -219,6 +219,19 @@ class QwenCallResult:
 
 
 @dataclass
+class SvgBudgetLease:
+    lease_id: str
+    estimated_worker_tpm: int
+    estimated_tokens: int
+    estimated_duration_seconds: int
+    active_tpm_after: int
+    budget_tpm: int
+    completion_bucket_after: int
+    completion_bucket_limit: int
+    completion_bucket_key: str
+
+
+@dataclass
 class RunOutput:
     job_id: str
     status: str
@@ -832,6 +845,47 @@ def redis_dynamic_svg_limit(default_limit: int) -> int:
     return max(min_limit, min(hard_max, calculated))
 
 
+def redis_svg_worker_tpm_estimate(client=None) -> int:
+    client = client or get_runner_redis_client()
+    default_worker_tpm = env_int("PPT_API_LLM_DEFAULT_SVG_WORKER_TPM", 150000, minimum=1)
+    observed_worker_tpm = 0.0
+    if client is not None:
+        try:
+            observed_worker_tpm = float(client.get(redis_key("llm:ewma:svg:tpm")) or 0)
+        except Exception:
+            observed_worker_tpm = 0.0
+    worker_tpm = observed_worker_tpm if observed_worker_tpm > 0 else float(default_worker_tpm)
+    safety_factor = env_float("PPT_API_LLM_PACING_SAFETY_FACTOR", 1.15, minimum=1.0, maximum=3.0)
+    return max(1, math.ceil(worker_tpm * safety_factor))
+
+
+def redis_svg_duration_estimate(client=None) -> int:
+    client = client or get_runner_redis_client()
+    default_seconds = env_int("PPT_API_LLM_DEFAULT_SVG_DURATION_SECONDS", 600, minimum=1)
+    observed_seconds = 0.0
+    if client is not None:
+        try:
+            observed_seconds = float(client.get(redis_key("llm:ewma:svg:duration_seconds")) or 0)
+        except Exception:
+            observed_seconds = 0.0
+    return max(1, math.ceil(observed_seconds if observed_seconds > 0 else default_seconds))
+
+
+def redis_svg_turn_token_estimate(client=None, *, worker_tpm: int | None = None, duration_seconds: int | None = None) -> int:
+    client = client or get_runner_redis_client()
+    observed_tokens = 0.0
+    if client is not None:
+        try:
+            observed_tokens = float(client.get(redis_key("llm:ewma:svg:tokens")) or 0)
+        except Exception:
+            observed_tokens = 0.0
+    if observed_tokens > 0:
+        return max(1, math.ceil(observed_tokens))
+    worker_tpm = worker_tpm if worker_tpm is not None else redis_svg_worker_tpm_estimate(client)
+    duration_seconds = duration_seconds if duration_seconds is not None else redis_svg_duration_estimate(client)
+    return max(1, math.ceil(worker_tpm * (duration_seconds / 60)))
+
+
 def redis_stage_token_estimate(stage: str, client=None, *, window_seconds: int = 60) -> int:
     client = client or get_runner_redis_client()
     env_name = {
@@ -842,16 +896,9 @@ def redis_stage_token_estimate(stage: str, client=None, *, window_seconds: int =
     default_tokens = env_int(env_name, 700000 if stage == "svg" else 100000, minimum=1)
     safety_factor = env_float("PPT_API_LLM_PACING_SAFETY_FACTOR", 1.15, minimum=1.0, maximum=3.0)
     if stage == "svg" and env_bool("PPT_API_LLM_PACING_USE_WORKER_TPM", True):
-        default_worker_tpm = env_int("PPT_API_LLM_DEFAULT_SVG_WORKER_TPM", 150000, minimum=1)
-        observed_worker_tpm = 0.0
-        if client is not None:
-            try:
-                observed_worker_tpm = float(client.get(redis_key("llm:ewma:svg:tpm")) or 0)
-            except Exception:
-                observed_worker_tpm = 0.0
-        worker_tpm = observed_worker_tpm if observed_worker_tpm > 0 else float(default_worker_tpm)
+        worker_tpm = redis_svg_worker_tpm_estimate(client)
         window_factor = max(window_seconds, 1) / 60
-        return max(1, math.ceil(worker_tpm * window_factor * safety_factor))
+        return max(1, math.ceil(worker_tpm * window_factor))
     if client is None:
         return max(1, math.ceil(default_tokens * safety_factor))
     try:
@@ -946,6 +993,210 @@ def wait_for_redis_tpm_budget(client, stage: str, *, label: str, log_path: Path 
             )
             last_wait_log = time.time()
         time.sleep(2)
+
+
+@contextmanager
+def acquire_svg_budget_lease(
+    stage: str,
+    *,
+    label: str,
+    runner_dir: Path,
+    log_path: Path | None = None,
+):
+    if stage != "svg" or not env_bool("PPT_API_SVG_BUDGET_LEASE_ENABLED", True):
+        yield None
+        return
+
+    client = get_runner_redis_client(log_path)
+    if client is None:
+        yield None
+        return
+
+    budget_tpm = env_int("PPT_API_LLM_BUDGET_TPM", 0, minimum=0)
+    if budget_tpm <= 0:
+        yield None
+        return
+    utilization = env_float("PPT_API_LLM_TARGET_UTILIZATION", 0.75, minimum=0.1, maximum=1.0)
+    active_budget = max(1, int(budget_tpm * utilization))
+    completion_utilization = env_float("PPT_API_SVG_COMPLETION_BUCKET_UTILIZATION", 1.0, minimum=0.1, maximum=2.0)
+    completion_budget = max(1, int(budget_tpm * completion_utilization))
+    completion_guard_enabled = env_bool("PPT_API_SVG_COMPLETION_GUARD_ENABLED", True)
+    worker_tpm = redis_svg_worker_tpm_estimate(client)
+    duration_seconds = redis_svg_duration_estimate(client)
+    estimated_tokens = redis_svg_turn_token_estimate(
+        client,
+        worker_tpm=worker_tpm,
+        duration_seconds=duration_seconds,
+    )
+    ttl_seconds = max(
+        env_int("PPT_API_SVG_BUDGET_LEASE_TTL_SECONDS", 3600, minimum=60),
+        duration_seconds * 3,
+    )
+    wait_timeout = env_int("PPT_API_SVG_BUDGET_LEASE_WAIT_TIMEOUT_SECONDS", LLM_SLOT_WAIT_TIMEOUT_SECONDS, minimum=60)
+    retry_seconds = env_float("PPT_API_SVG_BUDGET_LEASE_RETRY_SECONDS", 2.0, minimum=0.2, maximum=30.0)
+    started = time.time()
+    last_wait_log = 0.0
+    lease_id: str | None = None
+    lease: SvgBudgetLease | None = None
+
+    acquire_script = """
+    local now = tonumber(ARGV[1])
+    local lease_id = ARGV[2]
+    local label = ARGV[3]
+    local runner_dir = ARGV[4]
+    local estimated_tpm = tonumber(ARGV[5])
+    local estimated_tokens = tonumber(ARGV[6])
+    local estimated_duration = tonumber(ARGV[7])
+    local active_budget = tonumber(ARGV[8])
+    local completion_budget = tonumber(ARGV[9])
+    local ttl = tonumber(ARGV[10])
+    local completion_enabled = tonumber(ARGV[11])
+    local completion_bucket_epoch = tostring(math.floor((now + estimated_duration) / 60) * 60)
+    local completion_key = KEYS[4] .. completion_bucket_epoch
+
+    local expired = redis.call('zrangebyscore', KEYS[1], '-inf', now)
+    for _, expired_id in ipairs(expired) do
+      redis.call('del', KEYS[2] .. expired_id)
+    end
+    if #expired > 0 then
+      redis.call('zremrangebyscore', KEYS[1], '-inf', now)
+    end
+
+    local active_ids = redis.call('zrangebyscore', KEYS[1], now, '+inf')
+    local active_tpm = 0
+    for _, active_id in ipairs(active_ids) do
+      local tpm_text = redis.call('hget', KEYS[2] .. active_id, 'estimated_worker_tpm')
+      if tpm_text then
+        active_tpm = active_tpm + tonumber(tpm_text)
+      end
+    end
+
+    local completion_current = 0
+    if completion_enabled == 1 then
+      completion_current = tonumber(redis.call('get', completion_key) or '0')
+    end
+
+    if active_tpm + estimated_tpm <= active_budget and (completion_enabled == 0 or completion_current + estimated_tokens <= completion_budget) then
+      redis.call('hset', KEYS[2] .. lease_id,
+        'lease_id', lease_id,
+        'label', label,
+        'runner_dir', runner_dir,
+        'estimated_worker_tpm', estimated_tpm,
+        'estimated_tokens', estimated_tokens,
+        'estimated_duration_seconds', estimated_duration,
+        'created_at', now,
+        'expires_at', now + ttl,
+        'completion_bucket_epoch', completion_bucket_epoch,
+        'completion_key', completion_key
+      )
+      redis.call('expire', KEYS[2] .. lease_id, ttl)
+      redis.call('zadd', KEYS[1], now + ttl, lease_id)
+      redis.call('expire', KEYS[1], ttl)
+      if completion_enabled == 1 then
+        redis.call('incrby', completion_key, estimated_tokens)
+        redis.call('expire', completion_key, math.max(ttl, estimated_duration + 180))
+        completion_current = completion_current + estimated_tokens
+      end
+      redis.call('incr', KEYS[3])
+      return {1, active_tpm + estimated_tpm, active_budget, completion_current, completion_budget, completion_key}
+    end
+    redis.call('incr', KEYS[5])
+    return {0, active_tpm, active_budget, completion_current, completion_budget, completion_key}
+    """
+
+    release_script = """
+    redis.call('zrem', KEYS[1], ARGV[1])
+    return redis.call('del', KEYS[2] .. ARGV[1])
+    """
+
+    try:
+        while lease is None:
+            lease_id = f"{os.getpid()}:{uuid.uuid4().hex}"
+            now = time.time()
+            try:
+                result = client.eval(
+                    acquire_script,
+                    5,
+                    redis_key("svg:budget:leases"),
+                    redis_key("svg:budget:lease:"),
+                    redis_key("svg:budget:granted_starts"),
+                    redis_key("svg:budget:completion:"),
+                    redis_key("svg:budget:denied_starts"),
+                    f"{now:.6f}",
+                    lease_id,
+                    label,
+                    str(runner_dir),
+                    str(worker_tpm),
+                    str(estimated_tokens),
+                    str(duration_seconds),
+                    str(active_budget),
+                    str(completion_budget),
+                    str(ttl_seconds),
+                    "1" if completion_guard_enabled else "0",
+                )
+            except Exception as exc:
+                if log_path is not None:
+                    append_log(log_path, f"Redis SVG budget lease unavailable; falling back to legacy pacing: {exc}")
+                yield None
+                return
+
+            allowed = bool(result and int(result[0]) == 1)
+            active_tpm_after = int(result[1]) if result and len(result) > 1 else 0
+            budget_after = int(result[2]) if result and len(result) > 2 else active_budget
+            completion_after = int(result[3]) if result and len(result) > 3 else 0
+            completion_limit = int(result[4]) if result and len(result) > 4 else completion_budget
+            completion_key = str(result[5]) if result and len(result) > 5 else ""
+            if allowed:
+                lease = SvgBudgetLease(
+                    lease_id=lease_id,
+                    estimated_worker_tpm=worker_tpm,
+                    estimated_tokens=estimated_tokens,
+                    estimated_duration_seconds=duration_seconds,
+                    active_tpm_after=active_tpm_after,
+                    budget_tpm=budget_after,
+                    completion_bucket_after=completion_after,
+                    completion_bucket_limit=completion_limit,
+                    completion_bucket_key=completion_key,
+                )
+                if log_path is not None:
+                    append_log(
+                        log_path,
+                        "Acquired Redis SVG budget lease: "
+                        f"lease={lease_id} tpm={worker_tpm} active={active_tpm_after}/{budget_after} "
+                        f"tokens={estimated_tokens} duration={duration_seconds}s "
+                        f"completion={completion_after}/{completion_limit} label={label}",
+                    )
+                break
+
+            if time.time() - started > wait_timeout:
+                raise RunnerError(
+                    f"Timed out waiting for Redis SVG budget lease after {wait_timeout}s: {label}"
+                )
+            if log_path is not None and time.time() - last_wait_log >= 30:
+                append_log(
+                    log_path,
+                    "Waiting for Redis SVG budget lease: "
+                    f"active={active_tpm_after}/{budget_after} completion={completion_after}/{completion_limit} "
+                    f"estimate_tpm={worker_tpm} estimate_tokens={estimated_tokens} label={label}",
+                )
+                last_wait_log = time.time()
+            time.sleep(retry_seconds)
+
+        yield lease
+    finally:
+        if lease is not None:
+            try:
+                client.eval(
+                    release_script,
+                    2,
+                    redis_key("svg:budget:leases"),
+                    redis_key("svg:budget:lease:"),
+                    lease.lease_id,
+                )
+                if log_path is not None:
+                    append_log(log_path, f"Released Redis SVG budget lease: lease={lease.lease_id} label={label}")
+            except Exception:
+                pass
 
 
 def qwen_turn_start_stagger_seconds(stage: str) -> float:
@@ -1238,12 +1489,14 @@ def acquire_resource_slot(
     label: str,
     runner_dir: Path,
     log_path: Path | None = None,
+    skip_tpm_pacing: bool = False,
 ):
     stage = stage if stage in DEFAULT_LLM_SLOT_LIMITS else "generic"
     limit = llm_slot_limit(stage)
     redis_client = get_runner_redis_client(log_path)
     if redis_client is not None:
-        wait_for_redis_tpm_budget(redis_client, stage, label=label, log_path=log_path)
+        if not skip_tpm_pacing:
+            wait_for_redis_tpm_budget(redis_client, stage, label=label, log_path=log_path)
         with acquire_redis_resource_slot(
             redis_client,
             stage,
@@ -1425,6 +1678,9 @@ def record_llm_observation(
         old_tokens = float(client.get(redis_key(f"llm:ewma:{stage}:tokens")) or 0)
         ewma_tokens = usage.total_tokens if old_tokens <= 0 else (alpha * usage.total_tokens + (1 - alpha) * old_tokens)
         client.set(redis_key(f"llm:ewma:{stage}:tokens"), f"{ewma_tokens:.6f}")
+        old_duration = float(client.get(redis_key(f"llm:ewma:{stage}:duration_seconds")) or 0)
+        ewma_duration = elapsed_seconds if old_duration <= 0 else (alpha * elapsed_seconds + (1 - alpha) * old_duration)
+        client.set(redis_key(f"llm:ewma:{stage}:duration_seconds"), f"{ewma_duration:.6f}")
         client.hset(
             model_key,
             mapping={
@@ -1433,6 +1689,7 @@ def record_llm_observation(
                 "observed_tpm": f"{observed_tpm:.6f}",
                 "ewma_tpm": f"{ewma:.6f}",
                 "ewma_tokens": f"{ewma_tokens:.6f}",
+                "ewma_duration_seconds": f"{ewma_duration:.6f}",
                 "total_tokens": usage.total_tokens,
                 "elapsed_seconds": f"{elapsed_seconds:.3f}",
                 "updated_at": f"{time.time():.3f}",
@@ -4088,25 +4345,32 @@ def run_qwen_prompt(
     wait_for_svg_start_jitter(stage, label=f"{runner_dir.name}:{label}", log_path=log_path)
     safe_command = redact_sensitive_command_parts(command)
     append_log(log_path, f"Starting qwen turn {turn_index}: {' '.join(safe_command)} (prompt via stdin, {len(prompt)} chars)")
-    with acquire_resource_slot(
+    with acquire_svg_budget_lease(
         stage,
-        label=label,
+        label=f"{runner_dir.name}:{label}",
         runner_dir=runner_dir,
         log_path=log_path,
-    ):
-        run_started = time.time()
-        completed = subprocess.run(
-            command,
-            cwd=repo_root,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=QWEN_CALL_TIMEOUT_SECONDS,
-            check=False,
-        )
-        elapsed_seconds = time.time() - run_started
+    ) as svg_budget_lease:
+        with acquire_resource_slot(
+            stage,
+            label=label,
+            runner_dir=runner_dir,
+            log_path=log_path,
+            skip_tpm_pacing=svg_budget_lease is not None,
+        ):
+            run_started = time.time()
+            completed = subprocess.run(
+                command,
+                cwd=repo_root,
+                input=prompt,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=QWEN_CALL_TIMEOUT_SECONDS,
+                check=False,
+            )
+            elapsed_seconds = time.time() - run_started
 
     (runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.stdout.txt").write_text(
         completed.stdout,

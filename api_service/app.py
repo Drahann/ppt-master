@@ -471,6 +471,61 @@ def _llm_budget_snapshot() -> dict[str, object]:
     }
 
 
+def _redis_svg_budget_snapshot() -> dict[str, object]:
+    if job_store is None:
+        return {"enabled": False, "backend": "file"}
+    prefix = settings.redis_key_prefix
+    now = time.time()
+    leases_key = f"{prefix}:svg:budget:leases"
+    active_leases: list[dict[str, object]] = []
+    active_reserved_tpm = 0
+    completion_peak_tokens = 0
+    completion_peak_bucket = None
+    try:
+        lease_ids = [str(item) for item in job_store.client.zrangebyscore(leases_key, now, "+inf")]
+        for lease_id in lease_ids[:100]:
+            payload = job_store.client.hgetall(f"{prefix}:svg:budget:lease:{lease_id}")
+            if not payload:
+                continue
+            estimated_worker_tpm = int(float(payload.get("estimated_worker_tpm") or 0))
+            estimated_tokens = int(float(payload.get("estimated_tokens") or 0))
+            active_reserved_tpm += estimated_worker_tpm
+            active_leases.append(
+                {
+                    "lease_id": lease_id,
+                    "label": payload.get("label"),
+                    "estimated_worker_tpm": estimated_worker_tpm,
+                    "estimated_tokens": estimated_tokens,
+                    "estimated_duration_seconds": int(float(payload.get("estimated_duration_seconds") or 0)),
+                    "expires_at": float(payload.get("expires_at") or 0),
+                    "completion_bucket_epoch": payload.get("completion_bucket_epoch"),
+                }
+            )
+        for key in job_store.client.scan_iter(f"{prefix}:svg:budget:completion:*", count=100):
+            try:
+                value = int(float(job_store.client.get(key) or 0))
+            except Exception:
+                value = 0
+            if value > completion_peak_tokens:
+                completion_peak_tokens = value
+                completion_peak_bucket = str(key).split(":")[-1]
+        denied = int(job_store.client.get(f"{prefix}:svg:budget:denied_starts") or 0)
+        granted = int(job_store.client.get(f"{prefix}:svg:budget:granted_starts") or 0)
+        return {
+            "enabled": True,
+            "backend": "redis",
+            "active_leases": len(active_leases),
+            "active_reserved_tpm": active_reserved_tpm,
+            "active_leases_sample": active_leases[:20],
+            "completion_bucket_peak_tokens": completion_peak_tokens,
+            "completion_bucket_peak_epoch": completion_peak_bucket,
+            "granted_starts": granted,
+            "denied_starts": denied,
+        }
+    except Exception as exc:
+        return {"enabled": True, "backend": "redis", "error": str(exc)}
+
+
 def _redis_slot_active(stage: str, limit: int) -> tuple[int, int] | None:
     if job_store is None:
         return None
@@ -507,6 +562,7 @@ def _build_metrics_payload() -> dict:
     payload["llmSlots"] = _llm_slot_snapshot()
     payload["redisJobs"] = _redis_job_snapshot()
     payload["llmBudget"] = _llm_budget_snapshot()
+    payload["svgBudget"] = _redis_svg_budget_snapshot()
     payload["asyncWorkers"] = {
         "configured": settings.async_worker_count,
         "running": len(worker_threads),
