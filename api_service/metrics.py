@@ -25,11 +25,26 @@ class JobRecord:
     error: str | None = None
     slide_count: int = 0
     peak_rss_mb: float = 0.0
+    current_stage: str = "accepted"
+    stage_started_at: float | None = None
+    stage_durations: dict[str, float] = field(default_factory=dict)
+    queue_wait_seconds: float = 0.0
+    response_mode: str = "sync"
+    callback_mode: str = "auto"
+    worker_name: str | None = None
+    last_event: str | None = None
 
     @property
     def elapsed_seconds(self) -> float:
         end = self.end_time or time.time()
         return round(end - self.start_time, 1)
+
+    @property
+    def current_stage_elapsed_seconds(self) -> float:
+        if self.stage_started_at is None:
+            return 0.0
+        end = self.end_time or time.time()
+        return round(max(0.0, end - self.stage_started_at), 1)
 
 
 class JobMetrics:
@@ -44,32 +59,66 @@ class JobMetrics:
 
     # ── lifecycle ──
 
-    def start_job(self, job_id: str, report_id: str, title: str) -> None:
+    def start_job(
+        self,
+        job_id: str,
+        report_id: str,
+        title: str,
+        *,
+        queue_wait_seconds: float = 0.0,
+        response_mode: str = "sync",
+        callback_mode: str = "auto",
+        worker_name: str | None = None,
+    ) -> None:
         with self._lock:
             self._jobs[job_id] = JobRecord(
                 job_id=job_id,
                 report_id=report_id,
                 title=title,
                 start_time=time.time(),
+                current_stage="started",
+                stage_started_at=time.time(),
+                queue_wait_seconds=round(max(0.0, queue_wait_seconds), 1),
+                response_mode=response_mode,
+                callback_mode=callback_mode,
+                worker_name=worker_name,
+                last_event="job_started",
             )
 
     def finish_job(self, job_id: str, slide_count: int = 0) -> None:
         with self._lock:
             rec = self._jobs.get(job_id)
             if rec:
+                _finalize_stage_duration(rec)
                 rec.status = "succeeded"
                 rec.end_time = time.time()
                 rec.slide_count = slide_count
+                rec.current_stage = "succeeded"
+                rec.last_event = "job_succeeded"
                 self._total_completed += 1
 
     def fail_job(self, job_id: str, error: str) -> None:
         with self._lock:
             rec = self._jobs.get(job_id)
             if rec:
+                _finalize_stage_duration(rec)
                 rec.status = "failed"
                 rec.end_time = time.time()
                 rec.error = error
+                rec.current_stage = "failed"
+                rec.last_event = error[:200]
                 self._total_failed += 1
+
+    def update_job_stage(self, job_id: str, stage: str, *, event: str | None = None) -> None:
+        with self._lock:
+            rec = self._jobs.get(job_id)
+            if rec is None:
+                return
+            if rec.current_stage != stage:
+                _finalize_stage_duration(rec)
+                rec.current_stage = stage
+                rec.stage_started_at = time.time()
+            rec.last_event = event or stage
 
     # ── queries ──
 
@@ -82,8 +131,14 @@ class JobMetrics:
                 key=lambda j: j.end_time or 0,
                 reverse=True,
             )[:20]
+            stage_counts: dict[str, int] = {}
+            for job in active:
+                stage_counts[job.current_stage] = stage_counts.get(job.current_stage, 0) + 1
 
         cpu_percent, mem_rss_mb, mem_total_mb, mem_percent, child_count = _system_stats()
+        active_elapsed = [j.elapsed_seconds for j in active]
+        recent_elapsed = [j.elapsed_seconds for j in recent]
+        active_queue_waits = [j.queue_wait_seconds for j in active if j.queue_wait_seconds > 0]
 
         return {
             "uptime_seconds": round(time.time() - self._boot_time, 0),
@@ -101,6 +156,10 @@ class JobMetrics:
                 "slots_available": max(0, max_concurrent - len(active)),
                 "total_completed": self._total_completed,
                 "total_failed": self._total_failed,
+                "stage_counts": stage_counts,
+                "active_avg_elapsed_seconds": round(sum(active_elapsed) / len(active_elapsed), 1) if active_elapsed else 0.0,
+                "recent_avg_elapsed_seconds": round(sum(recent_elapsed) / len(recent_elapsed), 1) if recent_elapsed else 0.0,
+                "active_avg_queue_wait_seconds": round(sum(active_queue_waits) / len(active_queue_waits), 1) if active_queue_waits else 0.0,
                 "active": [_job_to_dict(j) for j in active],
                 "recent": [_job_to_dict(j) for j in recent],
             },
@@ -121,10 +180,25 @@ def _job_to_dict(j: JobRecord) -> dict[str, Any]:
         "report_id": j.report_id,
         "title": j.title[:60],
         "status": j.status,
+        "current_stage": j.current_stage,
+        "current_stage_elapsed_seconds": j.current_stage_elapsed_seconds,
         "elapsed_seconds": j.elapsed_seconds,
         "slide_count": j.slide_count,
+        "queue_wait_seconds": j.queue_wait_seconds,
+        "response_mode": j.response_mode,
+        "callback_mode": j.callback_mode,
+        "worker_name": j.worker_name,
+        "last_event": j.last_event[:120] if j.last_event else None,
+        "stage_durations": {key: round(value, 1) for key, value in sorted(j.stage_durations.items())},
         "error": j.error[:120] if j.error else None,
     }
+
+
+def _finalize_stage_duration(record: JobRecord) -> None:
+    if record.stage_started_at is None or not record.current_stage:
+        return
+    elapsed = max(0.0, time.time() - record.stage_started_at)
+    record.stage_durations[record.current_stage] = round(record.stage_durations.get(record.current_stage, 0.0) + elapsed, 1)
 
 
 def _system_stats() -> tuple[float, float, float, float, int]:
@@ -207,4 +281,3 @@ def _system_stats() -> tuple[float, float, float, float, int]:
     except Exception:
         pass
     return cpu_percent, proc_tree_rss_mb, mem_total_mb, mem_percent, child_count
-

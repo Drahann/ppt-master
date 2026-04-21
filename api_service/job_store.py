@@ -163,12 +163,58 @@ class RedisJobStore:
         return payload if isinstance(payload, dict) else None
 
     def snapshot(self) -> dict[str, Any]:
+        pending_ids = [str(item) for item in self.client.lrange(self.pending_queue_key, 0, 49)]
+        running_ids = [str(item) for item in self.client.smembers(self.running_key)]
+        recent_ids = [str(item) for item in self.client.lrange(self.recent_key, 0, 19)]
+        pending_records = self._load_records(pending_ids)
+        running_records = self._load_records(running_ids)
+        recent_records = self._load_records(recent_ids)
+        status_counts: dict[str, int] = {}
+        stage_counts: dict[str, int] = {}
+        now = time.time()
+        for record in pending_records + running_records:
+            status = str(record.get("status") or "unknown")
+            stage = str(record.get("stage") or "unknown")
+            status_counts[status] = status_counts.get(status, 0) + 1
+            stage_counts[stage] = stage_counts.get(stage, 0) + 1
+        oldest_pending_seconds = 0.0
+        if pending_records:
+            oldest_created_at = min(float(record.get("created_at") or now) for record in pending_records)
+            oldest_pending_seconds = round(max(0.0, now - oldest_created_at), 1)
         return {
             "enabled": True,
             "pending": self.client.llen(self.pending_queue_key),
             "running": self.client.scard(self.running_key),
-            "recent": self.client.lrange(self.recent_key, 0, 19),
+            "recent": recent_ids,
+            "pending_records": pending_records,
+            "running_records": running_records,
+            "recent_records": recent_records,
+            "status_counts": status_counts,
+            "stage_counts": stage_counts,
+            "oldest_pending_seconds": oldest_pending_seconds,
         }
 
     def _write(self, record: dict[str, Any]) -> None:
         self.client.set(self.job_key(str(record["job_id"])), json.dumps(record, ensure_ascii=False))
+
+    def _load_records(self, job_ids: list[str]) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        for job_id in job_ids:
+            record = self.get_job(job_id)
+            if record is not None:
+                records.append(
+                    {
+                        "job_id": record.get("job_id"),
+                        "report_id": record.get("report_id"),
+                        "title": record.get("title"),
+                        "status": record.get("status"),
+                        "stage": record.get("stage"),
+                        "created_at": record.get("created_at"),
+                        "updated_at": record.get("updated_at"),
+                        "started_at": record.get("started_at"),
+                        "finished_at": record.get("finished_at"),
+                        "error": record.get("error"),
+                    }
+                )
+        records.sort(key=lambda item: float(item.get("created_at") or 0))
+        return records

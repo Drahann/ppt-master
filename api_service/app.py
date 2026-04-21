@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 import shutil
 import threading
 import time
@@ -20,6 +22,7 @@ from .runner import derive_title, execute_runner
 from .storage import build_result_zip, notify_report_server, sanitize_title, upload_to_cos
 
 
+logger = logging.getLogger(__name__)
 settings = load_settings()
 settings.project_base_dir.mkdir(parents=True, exist_ok=True)
 settings.jobs_dir.mkdir(parents=True, exist_ok=True)
@@ -104,6 +107,12 @@ def get_metrics() -> dict:
     payload = metrics.snapshot(settings.max_concurrent_jobs)
     payload["llmSlots"] = _llm_slot_snapshot()
     payload["redisJobs"] = _redis_job_snapshot()
+    payload["llmBudget"] = _llm_budget_snapshot()
+    payload["asyncWorkers"] = {
+        "configured": settings.async_worker_count,
+        "running": len(worker_threads),
+        "stopped": worker_stop_event.is_set(),
+    }
     return payload
 
 
@@ -142,6 +151,7 @@ def start_async_workers() -> None:
         )
         thread.start()
         worker_threads.append(thread)
+        logger.info("Started async worker thread %s", thread.name)
 
 
 @app.on_event("shutdown")
@@ -149,6 +159,7 @@ def stop_async_workers() -> None:
     worker_stop_event.set()
     for thread in worker_threads:
         thread.join(timeout=2)
+        logger.info("Stopped async worker thread %s", thread.name)
 
 
 @app.post("/api/report-to-ppt", response_model=ReportResponse)
@@ -219,18 +230,40 @@ def _process_request(request: NormalizedRequest, job_id: str | None = None) -> d
     job_dir = settings.jobs_dir / job_id if job_id else _build_job_dir(request.report_id)
     job_dir.mkdir(parents=True, exist_ok=True)
     metric_job_id = job_id or job_dir.name
+    queue_wait_seconds = _job_queue_wait_seconds(job_id)
 
-    metrics.start_job(metric_job_id, request.report_id, title or "untitled")
+    metrics.start_job(
+        metric_job_id,
+        request.report_id,
+        title or "untitled",
+        queue_wait_seconds=queue_wait_seconds,
+        response_mode=request.response_mode,
+        callback_mode=request.callback_mode,
+        worker_name=threading.current_thread().name,
+    )
+    logger.info(
+        "Starting PPT job job_id=%s report_id=%s mode=%s callback_mode=%s queue_wait=%.1fs batch_mode=%s batch_size=%s parallel_batch_workers=%s batch_partition=%s",
+        metric_job_id,
+        request.report_id,
+        request.response_mode,
+        request.callback_mode,
+        queue_wait_seconds,
+        request.batch_mode or settings.batch_mode,
+        request.batch_size or settings.batch_size,
+        request.parallel_batch_workers or settings.parallel_batch_workers,
+        request.batch_partition or settings.batch_partition,
+    )
     try:
         with execution_semaphore:
-            _update_job_stage(job_id, "preparing")
+            _update_job_stage(metric_job_id, job_id, "preparing", event="processing_markdown")
             processed_markdown, image_warnings = process_markdown_images(request.content, job_dir)
             source_md_path = job_dir / "source.md"
             source_md_path.write_text(processed_markdown, encoding="utf-8")
             if image_warnings:
                 (job_dir / "image_warnings.txt").write_text("\n".join(image_warnings) + "\n", encoding="utf-8")
+                logger.warning("Job %s produced %s markdown image warnings", metric_job_id, len(image_warnings))
 
-            _update_job_stage(job_id, "runner")
+            _update_job_stage(metric_job_id, job_id, "runner", event="runner_started")
             runner_result = execute_runner(
                 source_md_path=source_md_path,
                 report_id=request.report_id,
@@ -250,11 +283,11 @@ def _process_request(request: NormalizedRequest, job_id: str | None = None) -> d
 
             safe_title = sanitize_title(runner_result.title)
             cos_path = f"ppt/{request.report_id}/{safe_title}.zip"
-            _update_job_stage(job_id, "uploading")
+            _update_job_stage(metric_job_id, job_id, "uploading", event=f"upload_to_cos:{cos_path}")
             ppt_url = upload_to_cos(zip_buffer, cos_path, settings)
 
             if request.callback_mode == "auto":
-                _update_job_stage(job_id, "callback")
+                _update_job_stage(metric_job_id, job_id, "callback", event="report_callback")
                 callback_result = notify_report_server(
                     report_id=request.report_id,
                     file_url=request.file_url,
@@ -269,6 +302,14 @@ def _process_request(request: NormalizedRequest, job_id: str | None = None) -> d
                 shutil.rmtree(job_dir, ignore_errors=True)
 
             metrics.finish_job(metric_job_id, runner_result.slide_count)
+            logger.info(
+                "Finished PPT job job_id=%s report_id=%s slide_count=%s ppt_url=%s callback_success=%s",
+                metric_job_id,
+                request.report_id,
+                runner_result.slide_count,
+                ppt_url,
+                callback_result.success,
+            )
             return {
                 "success": True,
                 "reportId": request.report_id,
@@ -279,6 +320,7 @@ def _process_request(request: NormalizedRequest, job_id: str | None = None) -> d
             }
     except Exception as exc:
         metrics.fail_job(metric_job_id, str(exc))
+        logger.exception("PPT job failed job_id=%s report_id=%s error=%s", metric_job_id, request.report_id, exc)
         raise
 
 
@@ -288,6 +330,14 @@ def _enqueue_async_request(request: NormalizedRequest, *, report_style: bool) ->
     try:
         title = request.title or derive_title(request.content, request.report_id)
         job_id = job_store.create_job(request, title=title)
+        logger.info(
+            "Enqueued async PPT job job_id=%s report_id=%s callback_mode=%s batch_mode=%s batch_partition=%s",
+            job_id,
+            request.report_id,
+            request.callback_mode,
+            request.batch_mode or settings.batch_mode,
+            request.batch_partition or settings.batch_partition,
+        )
     except Exception as exc:
         return JSONResponse(status_code=503, content={"success": False, "error": str(exc)})
 
@@ -318,6 +368,7 @@ def _async_worker_loop() -> None:
             continue
         if not job_id:
             continue
+        logger.info("Worker %s dequeued job_id=%s", threading.current_thread().name, job_id)
         _run_async_job(job_id)
 
 
@@ -326,21 +377,24 @@ def _run_async_job(job_id: str) -> None:
     record = job_store.mark_running(job_id, stage="running")
     if record is None or record.get("status") == "cancelled":
         return
+    logger.info("Worker %s started job_id=%s report_id=%s", threading.current_thread().name, job_id, record.get("report_id"))
     try:
         request = NormalizedRequest(**record["request"])
         payload = _process_request(request, job_id=job_id)
         job_store.complete(job_id, payload)
+        logger.info("Worker %s completed job_id=%s", threading.current_thread().name, job_id)
     except Exception as exc:
         job_store.fail(job_id, str(exc))
+        logger.exception("Worker %s failed job_id=%s error=%s", threading.current_thread().name, job_id, exc)
 
 
-def _update_job_stage(job_id: str | None, stage: str) -> None:
-    if not job_id or job_store is None:
-        return
-    try:
-        job_store.update_stage(job_id, stage)
-    except Exception:
-        pass
+def _update_job_stage(metric_job_id: str, queue_job_id: str | None, stage: str, *, event: str | None = None) -> None:
+    metrics.update_job_stage(metric_job_id, stage, event=event)
+    if queue_job_id and job_store is not None:
+        try:
+            job_store.update_stage(queue_job_id, stage)
+        except Exception:
+            pass
 
 
 def _redis_available() -> bool:
@@ -361,6 +415,40 @@ def _redis_job_snapshot() -> dict[str, object]:
         return {"enabled": True, "error": str(exc)}
 
 
+def _llm_budget_snapshot() -> dict[str, object]:
+    try:
+        configured_budget_tpm = int((os.getenv("PPT_API_LLM_BUDGET_TPM") or "0").strip() or "0")
+    except ValueError:
+        configured_budget_tpm = 0
+    try:
+        target_utilization = float((os.getenv("PPT_API_LLM_TARGET_UTILIZATION") or "0.75").strip() or "0.75")
+    except ValueError:
+        target_utilization = 0.75
+    if job_store is None:
+        return {
+            "configured_budget_tpm": configured_budget_tpm,
+            "target_utilization": target_utilization,
+            "observed_svg_worker_tpm": None,
+            "dynamic_svg_limit": settings.llm_svg_slots,
+            "backend": "file",
+        }
+    try:
+        observed_svg_worker_tpm_raw = job_store.client.get(f"{settings.redis_key_prefix}:llm:ewma:svg:tpm")
+        observed_svg_worker_tpm = float(observed_svg_worker_tpm_raw) if observed_svg_worker_tpm_raw else None
+    except Exception:
+        observed_svg_worker_tpm = None
+    dynamic_svg_limit = settings.llm_svg_slots
+    if configured_budget_tpm > 0 and observed_svg_worker_tpm and observed_svg_worker_tpm > 0:
+        dynamic_svg_limit = max(1, int((configured_budget_tpm * target_utilization) // observed_svg_worker_tpm))
+    return {
+        "configured_budget_tpm": configured_budget_tpm,
+        "target_utilization": target_utilization,
+        "observed_svg_worker_tpm": round(observed_svg_worker_tpm, 1) if observed_svg_worker_tpm else None,
+        "dynamic_svg_limit": dynamic_svg_limit,
+        "backend": "redis",
+    }
+
+
 def _redis_slot_active(stage: str, limit: int) -> tuple[int, int] | None:
     if job_store is None:
         return None
@@ -374,6 +462,22 @@ def _redis_slot_active(stage: str, limit: int) -> tuple[int, int] | None:
         return active, max(0, int(waiting_raw))
     except Exception:
         return None
+
+
+def _job_queue_wait_seconds(job_id: str | None) -> float:
+    if not job_id or job_store is None:
+        return 0.0
+    try:
+        record = job_store.get_job(job_id)
+        if not record:
+            return 0.0
+        created_at = float(record.get("created_at") or 0)
+        started_at = time.time()
+        if created_at <= 0:
+            return 0.0
+        return round(max(0.0, started_at - created_at), 1)
+    except Exception:
+        return 0.0
 
 
 def _build_job_dir(report_id: str) -> Path:
