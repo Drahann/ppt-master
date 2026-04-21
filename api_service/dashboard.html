@@ -157,9 +157,16 @@ function setOffline(err){
   console.error(err);
 }
 
+let refreshInFlight = false;
+
 async function refresh(){
+  if (refreshInFlight) return;
+  refreshInFlight = true;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
   try{
-    const r = await fetch('/metrics');
+    const r = await fetch('/metrics', { signal: controller.signal, cache: 'no-store' });
+    if (!r.ok) throw new Error(`metrics HTTP ${r.status}`);
     const d = await r.json();
     const j = d.jobs || {};
     const s = d.system || {};
@@ -263,6 +270,9 @@ async function refresh(){
     `).join('') : '<tr><td colspan="10" class="empty">暂无历史记录</td></tr>';
   }catch(err){
     setOffline(err);
+  }finally{
+    clearTimeout(timeoutId);
+    refreshInFlight = false;
   }
 }
 
