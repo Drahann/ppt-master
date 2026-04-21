@@ -3,282 +3,236 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PPT Master — 运行监控</title>
+<title>PPT Master Monitor</title>
 <style>
-  :root { --bg:#0f1117; --card:#1a1d27; --border:#2a2d3a; --text:#e4e4e7; --dim:#8b8b96; --accent:#60a5fa; --green:#22c55e; --red:#ef4444; --yellow:#eab308; --cyan:#22d3ee; }
-  * { box-sizing:border-box; margin:0; padding:0; }
-  body { font-family:'Inter','Segoe UI',system-ui,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; }
-  .header { padding:20px 28px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
-  .header h1 { font-size:20px; font-weight:700; }
-  .badge { font-size:11px; padding:4px 8px; border-radius:99px; font-weight:700; }
-  .badge.live { background:rgba(34,197,94,.18); color:var(--green); }
-  .badge.offline { background:rgba(239,68,68,.18); color:var(--red); }
-  .header .meta { margin-left:auto; display:flex; gap:14px; flex-wrap:wrap; color:var(--dim); font-size:12px; }
-  .grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; padding:20px 28px; }
-  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; }
-  .label { font-size:12px; color:var(--dim); text-transform:uppercase; letter-spacing:.06em; margin-bottom:6px; }
-  .value { font-size:30px; font-weight:800; line-height:1.05; }
-  .sub { font-size:12px; color:var(--dim); margin-top:6px; line-height:1.4; }
-  .section { padding:0 28px 20px; }
-  .section h2 { font-size:15px; font-weight:700; color:var(--dim); margin-bottom:10px; }
-  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
-  th, td { padding:10px 12px; text-align:left; font-size:12px; border-bottom:1px solid var(--border); vertical-align:top; }
-  th { color:var(--dim); text-transform:uppercase; letter-spacing:.05em; font-size:11px; }
+  :root {
+    --bg:#101216; --panel:#191c22; --panel2:#20242c; --line:#303642;
+    --text:#eef2f7; --muted:#9aa4b2; --blue:#5aa7ff; --green:#22c55e;
+    --yellow:#eab308; --red:#ef4444; --cyan:#22d3ee;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:Inter,Segoe UI,system-ui,sans-serif; }
+  header { display:flex; align-items:center; gap:14px; padding:16px 22px; border-bottom:1px solid var(--line); background:#0d0f13; position:sticky; top:0; z-index:2; }
+  h1 { margin:0; font-size:18px; }
+  button { border:1px solid var(--line); background:var(--panel2); color:var(--text); border-radius:6px; padding:7px 10px; cursor:pointer; }
+  button:hover { border-color:var(--blue); }
+  .pill { display:inline-flex; align-items:center; border-radius:999px; padding:4px 8px; font-size:12px; font-weight:700; background:rgba(154,164,178,.15); color:var(--muted); }
+  .pill.live { background:rgba(34,197,94,.16); color:var(--green); }
+  .pill.warn { background:rgba(234,179,8,.16); color:var(--yellow); }
+  .pill.err { background:rgba(239,68,68,.16); color:var(--red); }
+  .meta { margin-left:auto; display:flex; gap:12px; flex-wrap:wrap; color:var(--muted); font-size:12px; }
+  main { padding:18px 22px 26px; }
+  .grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; margin-bottom:16px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:13px; min-height:98px; }
+  .label { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.06em; margin-bottom:8px; }
+  .value { font-size:28px; line-height:1; font-weight:800; }
+  .sub { color:var(--muted); font-size:12px; line-height:1.45; margin-top:8px; word-break:break-word; }
+  .ok { color:var(--green); } .bad { color:var(--red); } .warnText { color:var(--yellow); } .blue { color:var(--blue); } .cyan { color:var(--cyan); }
+  section { margin-top:16px; }
+  h2 { margin:0 0 8px; font-size:14px; color:var(--muted); }
+  table { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  th, td { padding:9px 10px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; font-size:12px; }
+  th { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.04em; background:rgba(255,255,255,.02); }
   tr:last-child td { border-bottom:none; }
-  code { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11px; }
-  .status { display:inline-block; padding:3px 8px; border-radius:999px; font-size:11px; font-weight:700; white-space:nowrap; }
-  .status.running { background:rgba(96,165,250,.18); color:var(--accent); }
-  .status.succeeded { background:rgba(34,197,94,.18); color:var(--green); }
-  .status.failed { background:rgba(239,68,68,.18); color:var(--red); }
-  .status.queued, .status.accepted { background:rgba(234,179,8,.18); color:var(--yellow); }
-  .status.cancelled { background:rgba(139,139,150,.2); color:#cfcfd6; }
-  .muted { color:var(--dim); }
-  .ok { color:var(--green); }
-  .warn { color:var(--yellow); }
-  .err { color:var(--red); }
-  .mono { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .empty { text-align:center; color:var(--dim); padding:26px 12px; }
-  .kv { display:flex; gap:10px; flex-wrap:wrap; margin-top:8px; font-size:12px; color:var(--dim); }
-  .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 8px; border-radius:999px; background:rgba(255,255,255,.04); }
-  .bar { width:110px; height:8px; border-radius:999px; background:var(--border); overflow:hidden; display:inline-block; vertical-align:middle; }
-  .bar > span { display:block; height:100%; }
-  .green { background:var(--green); }
-  .yellow { background:var(--yellow); }
-  .red { background:var(--red); }
-  .cyan { background:var(--cyan); }
-  @media (max-width:1200px) { .grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
-  @media (max-width:860px) { .grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-  @media (max-width:560px) { .grid { grid-template-columns:1fr; } .header { padding:16px; } .section { padding:0 16px 16px; } }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:11px; color:#dbeafe; }
+  .empty { text-align:center; color:var(--muted); padding:22px; }
+  .bar { height:7px; background:#2c3440; border-radius:999px; overflow:hidden; margin-top:8px; }
+  .bar span { display:block; height:100%; background:var(--blue); width:0%; }
+  pre { margin:0; padding:12px; overflow:auto; max-height:280px; background:var(--panel); border:1px solid var(--line); border-radius:8px; color:#d1d5db; font-size:11px; }
+  @media (max-width:1280px) { .grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+  @media (max-width:760px) { .grid { grid-template-columns:1fr; } header { align-items:flex-start; flex-direction:column; } .meta { margin-left:0; } }
 </style>
 </head>
 <body>
-  <div class="header">
-    <h1>PPT Master 运行监控</h1>
-    <span id="statusBadge" class="badge live">LIVE</span>
-    <div class="meta">
-      <span>3 秒刷新</span>
-      <span>最后更新 <span id="lastUpdate">--</span></span>
-      <span>Redis <span id="redisHealth">--</span></span>
-    </div>
+<header>
+  <h1>PPT Master Monitor</h1>
+  <span id="state" class="pill warn">BOOT</span>
+  <button id="refreshBtn" type="button">Refresh</button>
+  <div class="meta">
+    <span>poll <span id="pollState">5s</span></span>
+    <span>updated <span id="updatedAt">--</span></span>
+    <span>latency <span id="latency">--</span></span>
   </div>
+</header>
 
+<main>
   <div class="grid">
-    <div class="card"><div class="label">运行中 Job</div><div class="value" id="activeCount">-</div><div class="sub">Stage 分布 <span id="stageCounts">-</span></div></div>
-    <div class="card"><div class="label">排队 Job</div><div class="value" id="queuedCount">-</div><div class="sub">最老等待 <span id="oldestPending">-</span></div></div>
-    <div class="card"><div class="label">已完成 / 失败</div><div class="value"><span class="ok" id="completedCount">-</span> / <span class="err" id="failedCount">-</span></div><div class="sub">最近平均耗时 <span id="recentAvg">-</span></div></div>
-    <div class="card"><div class="label">SVG Slot</div><div class="value" id="svgSlotSummary">-</div><div class="sub">等待 <span id="svgSlotWaiting">-</span> / backend <span id="svgSlotBackend">-</span></div></div>
-    <div class="card"><div class="label">Redis Queue</div><div class="value" id="redisRunning">-</div><div class="sub">pending <span id="redisPending">-</span> / workers <span id="asyncWorkers">-</span></div></div>
-    <div class="card"><div class="label">LLM 预算</div><div class="value" id="budgetLimit">-</div><div class="sub">EWMA worker TPM <span id="workerTpm">-</span></div></div>
-    <div class="card"><div class="label">系统 CPU</div><div class="value" id="cpuPercent">-</div><div class="sub"><span class="bar"><span id="cpuBar" class="green" style="width:0%"></span></span></div></div>
-    <div class="card"><div class="label">进程树内存</div><div class="value" id="memRss">-</div><div class="sub">系统内存 <span id="memPercent">-</span> / 子进程 <span id="childCount">-</span></div></div>
+    <div class="card"><div class="label">Active Jobs</div><div class="value" id="activeJobs">-</div><div class="sub" id="jobSub">-</div></div>
+    <div class="card"><div class="label">SVG Slots</div><div class="value" id="svgSlots">-</div><div class="sub" id="svgSlotSub">-</div></div>
+    <div class="card"><div class="label">SVG Budget Lease</div><div class="value" id="svgBudgetLeases">-</div><div class="sub" id="svgBudgetSub">-</div></div>
+    <div class="card"><div class="label">TPM Budget</div><div class="value" id="tpmBudget">-</div><div class="sub" id="tpmSub">-</div></div>
+    <div class="card"><div class="label">System</div><div class="value" id="systemLoad">-</div><div class="sub" id="systemSub">-</div><div class="bar"><span id="cpuBar"></span></div></div>
+    <div class="card"><div class="label">Redis Queue</div><div class="value" id="redisQueue">-</div><div class="sub" id="redisSub">-</div></div>
+    <div class="card"><div class="label">Workers</div><div class="value" id="workers">-</div><div class="sub" id="workersSub">-</div></div>
+    <div class="card"><div class="label">Completion Guard</div><div class="value" id="completionPeak">-</div><div class="sub" id="completionSub">-</div></div>
+    <div class="card"><div class="label">Throughput Evidence</div><div class="value" id="doneFailed">-</div><div class="sub" id="recentSub">-</div></div>
+    <div class="card"><div class="label">Health</div><div class="value" id="health">-</div><div class="sub" id="healthSub">-</div></div>
   </div>
 
-  <div class="section">
-    <h2>LLM Slot</h2>
-    <table>
-      <thead><tr><th>Stage</th><th>Backend</th><th>Active</th><th>Waiting</th><th>Limit</th><th>Available</th></tr></thead>
-      <tbody id="slotTable"><tr><td colspan="6" class="empty">暂无 slot 数据</td></tr></tbody>
-    </table>
-  </div>
+  <section>
+    <h2>LLM Slots</h2>
+    <table><thead><tr><th>Stage</th><th>Backend</th><th>Active</th><th>Waiting</th><th>Limit</th><th>Available</th></tr></thead><tbody id="slotRows"></tbody></table>
+  </section>
 
-  <div class="section">
-    <h2>排队中的 Job</h2>
-    <table>
-      <thead><tr><th>Job ID</th><th>Report ID</th><th>标题</th><th>状态</th><th>Stage</th><th>等待时长</th><th>更新时间</th></tr></thead>
-      <tbody id="pendingTable"><tr><td colspan="7" class="empty">暂无排队任务</td></tr></tbody>
-    </table>
-  </div>
+  <section>
+    <h2>Active Jobs</h2>
+    <table><thead><tr><th>Job</th><th>Report</th><th>Title</th><th>Stage</th><th>Stage Time</th><th>Total</th><th>Worker</th><th>Event</th></tr></thead><tbody id="activeRows"></tbody></table>
+  </section>
 
-  <div class="section">
-    <h2>运行中的 Job</h2>
-    <table>
-      <thead><tr><th>Job ID</th><th>Report ID</th><th>标题</th><th>Stage</th><th>Stage 耗时</th><th>总耗时</th><th>队列等待</th><th>Worker</th><th>最近事件</th></tr></thead>
-      <tbody id="activeTable"><tr><td colspan="9" class="empty">暂无运行中的任务</td></tr></tbody>
-    </table>
-  </div>
+  <section>
+    <h2>SVG Budget Leases</h2>
+    <table><thead><tr><th>Lease</th><th>Label</th><th>TPM</th><th>Tokens</th><th>Duration</th><th>Expires</th><th>Finish Bucket</th></tr></thead><tbody id="leaseRows"></tbody></table>
+  </section>
 
-  <div class="section">
-    <h2>最近完成 / 失败</h2>
-    <table>
-      <thead><tr><th>Job ID</th><th>Report ID</th><th>标题</th><th>状态</th><th>Stage</th><th>总耗时</th><th>队列等待</th><th>页数</th><th>Stage 明细</th><th>错误</th></tr></thead>
-      <tbody id="recentTable"><tr><td colspan="10" class="empty">暂无历史记录</td></tr></tbody>
-    </table>
-  </div>
+  <section>
+    <h2>Recent Jobs</h2>
+    <table><thead><tr><th>Job</th><th>Report</th><th>Status</th><th>Stage</th><th>Total</th><th>Slides</th><th>Stages</th><th>Error</th></tr></thead><tbody id="recentRows"></tbody></table>
+  </section>
+
+  <section>
+    <h2>Raw Summary</h2>
+    <pre id="rawSummary">waiting...</pre>
+  </section>
+</main>
 
 <script>
-function fmtTime(value){
-  const s = Number(value || 0);
+const $ = (id) => document.getElementById(id);
+let inFlight = false;
+let timer = null;
+
+function num(v, digits = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: digits }) : '-';
+}
+function pct(v) {
+  const n = Number(v || 0);
+  return Number.isFinite(n) ? `${n.toFixed(1)}%` : '-';
+}
+function tsec(v) {
+  const s = Number(v || 0);
   if (!Number.isFinite(s) || s <= 0) return '-';
-  if (s < 60) return s.toFixed(0) + 's';
-  if (s < 3600) return Math.floor(s / 60) + 'm ' + Math.floor(s % 60) + 's';
-  return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm';
+  if (s < 60) return `${Math.round(s)}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+function safeText(v) {
+  return String(v ?? '-').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+}
+function shortId(v) {
+  const s = String(v || '');
+  return s.length > 22 ? s.slice(0, 22) : s || '-';
+}
+function setRows(id, rows, emptyCols) {
+  $(id).innerHTML = rows.length ? rows.join('') : `<tr><td colspan="${emptyCols}" class="empty">empty</td></tr>`;
+}
+function stageSummary(obj) {
+  const entries = Object.entries(obj || {});
+  return entries.length ? entries.map(([k,v]) => `${k}:${v}`).join(' ') : '-';
 }
 
-function fmtNumber(value, digits=1){
-  const n = Number(value);
-  return Number.isFinite(n) ? n.toFixed(digits) : '-';
-}
-
-function barColor(pct){
-  if (pct > 85) return 'red';
-  if (pct > 60) return 'yellow';
-  return 'green';
-}
-
-function stageSummary(stageCounts){
-  const entries = Object.entries(stageCounts || {});
-  if (!entries.length) return '-';
-  return entries.map(([k, v]) => `${k}:${v}`).join(' ');
-}
-
-function relAge(ts){
-  const n = Number(ts || 0);
-  if (!Number.isFinite(n) || n <= 0) return '-';
-  const now = Date.now() / 1000;
-  return fmtTime(Math.max(0, now - n));
-}
-
-function stageDurationsView(data){
-  const entries = Object.entries(data || {});
-  if (!entries.length) return '-';
-  return entries.map(([k, v]) => `${k}:${fmtTime(v)}`).join(' | ');
-}
-
-function badge(value){
-  const cls = ['running', 'queued', 'accepted', 'succeeded', 'failed', 'cancelled'].includes(value) ? value : 'queued';
-  return `<span class="status ${cls}">${value || '-'}</span>`;
-}
-
-function setOffline(err){
-  const badgeEl = document.getElementById('statusBadge');
-  badgeEl.textContent = 'OFFLINE';
-  badgeEl.className = 'badge offline';
-  document.getElementById('redisHealth').textContent = err && err.name === 'AbortError' ? 'metrics timeout' : 'unreachable';
-  document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
-  console.error(err);
-}
-
-let refreshInFlight = false;
-
-async function refresh(){
-  if (refreshInFlight) return;
-  refreshInFlight = true;
+async function refresh() {
+  if (inFlight) return;
+  inFlight = true;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 5000);
-  try{
-    const r = await fetch('/metrics', { signal: controller.signal, cache: 'no-store' });
-    if (!r.ok) throw new Error(`metrics HTTP ${r.status}`);
-    const d = await r.json();
-    const j = d.jobs || {};
-    const s = d.system || {};
-    const slots = d.llmSlots || {};
-    const redisJobs = d.redisJobs || {};
-    const budget = d.llmBudget || {};
-    const asyncWorkers = d.asyncWorkers || {};
-
-    document.getElementById('activeCount').textContent = j.active_count ?? '-';
-    document.getElementById('stageCounts').textContent = stageSummary(j.stage_counts);
-    document.getElementById('queuedCount').textContent = redisJobs.pending ?? 0;
-    document.getElementById('oldestPending').textContent = fmtTime(redisJobs.oldest_pending_seconds);
-    document.getElementById('completedCount').textContent = j.total_completed ?? 0;
-    document.getElementById('failedCount').textContent = j.total_failed ?? 0;
-    document.getElementById('recentAvg').textContent = fmtTime(j.recent_avg_elapsed_seconds);
-
-    const svg = slots.svg || {};
-    document.getElementById('svgSlotSummary').textContent = `${svg.active ?? 0} / ${svg.limit ?? 0}`;
-    document.getElementById('svgSlotWaiting').textContent = svg.waiting ?? 0;
-    document.getElementById('svgSlotBackend').textContent = svg.backend || '-';
-
-    document.getElementById('redisRunning').textContent = redisJobs.running ?? 0;
-    document.getElementById('redisPending').textContent = redisJobs.pending ?? 0;
-    document.getElementById('asyncWorkers').textContent = `${asyncWorkers.running ?? 0}/${asyncWorkers.configured ?? 0}`;
-    document.getElementById('budgetLimit').textContent = budget.dynamic_svg_limit ?? '-';
-    document.getElementById('workerTpm').textContent = budget.observed_svg_worker_tpm ? fmtNumber(budget.observed_svg_worker_tpm, 0) : '-';
-
-    document.getElementById('cpuPercent').textContent = `${fmtNumber(s.cpu_percent)}%`;
-    document.getElementById('memRss').textContent = s.mem_rss_mb >= 1024 ? `${fmtNumber(s.mem_rss_mb / 1024)}GB` : `${s.mem_rss_mb ?? '-'}MB`;
-    document.getElementById('memPercent').textContent = `${s.mem_percent ?? '-'}%`;
-    document.getElementById('childCount').textContent = s.child_processes ?? 0;
-
-    const cpuBar = document.getElementById('cpuBar');
-    cpuBar.style.width = `${Math.min(Number(s.cpu_percent || 0), 100)}%`;
-    cpuBar.className = barColor(Number(s.cpu_percent || 0));
-
-    document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
-    document.getElementById('redisHealth').textContent = redisJobs.enabled === false ? 'disabled' : (redisJobs.error ? 'error' : 'ok');
-    const badgeEl = document.getElementById('statusBadge');
-    badgeEl.textContent = 'LIVE';
-    badgeEl.className = 'badge live';
-
-    const slotTable = document.getElementById('slotTable');
-    const slotRows = Object.entries(slots);
-    slotTable.innerHTML = slotRows.length ? slotRows.map(([name, info]) => `
-      <tr>
-        <td>${name}</td>
-        <td>${info.backend || '-'}</td>
-        <td>${info.active ?? 0}</td>
-        <td>${info.waiting ?? 0}</td>
-        <td>${info.limit ?? 0}</td>
-        <td>${info.available ?? 0}</td>
-      </tr>
-    `).join('') : '<tr><td colspan="6" class="empty">暂无 slot 数据</td></tr>';
-
-    const pendingTable = document.getElementById('pendingTable');
-    const pendingRecords = redisJobs.pending_records || [];
-    pendingTable.innerHTML = pendingRecords.length ? pendingRecords.map(item => `
-      <tr>
-        <td><code>${String(item.job_id || '').slice(0, 18)}</code></td>
-        <td>${item.report_id || '-'}</td>
-        <td>${item.title || '-'}</td>
-        <td>${badge(item.status)}</td>
-        <td>${item.stage || '-'}</td>
-        <td>${relAge(item.created_at)}</td>
-        <td>${relAge(item.updated_at)}</td>
-      </tr>
-    `).join('') : '<tr><td colspan="7" class="empty">暂无排队任务</td></tr>';
-
-    const activeTable = document.getElementById('activeTable');
-    const activeRecords = j.active || [];
-    activeTable.innerHTML = activeRecords.length ? activeRecords.map(item => `
-      <tr>
-        <td><code>${String(item.job_id || '').slice(0, 18)}</code></td>
-        <td>${item.report_id || '-'}</td>
-        <td>${item.title || '-'}</td>
-        <td>${item.current_stage || '-'}</td>
-        <td>${fmtTime(item.current_stage_elapsed_seconds)}</td>
-        <td>${fmtTime(item.elapsed_seconds)}</td>
-        <td>${fmtTime(item.queue_wait_seconds)}</td>
-        <td>${item.worker_name || '-'}</td>
-        <td>${item.last_event || '-'}</td>
-      </tr>
-    `).join('') : '<tr><td colspan="9" class="empty">暂无运行中的任务</td></tr>';
-
-    const recentTable = document.getElementById('recentTable');
-    const recentRecords = j.recent || [];
-    recentTable.innerHTML = recentRecords.length ? recentRecords.map(item => `
-      <tr>
-        <td><code>${String(item.job_id || '').slice(0, 18)}</code></td>
-        <td>${item.report_id || '-'}</td>
-        <td>${item.title || '-'}</td>
-        <td>${badge(item.status)}</td>
-        <td>${item.current_stage || '-'}</td>
-        <td>${fmtTime(item.elapsed_seconds)}</td>
-        <td>${fmtTime(item.queue_wait_seconds)}</td>
-        <td>${item.slide_count || '-'}</td>
-        <td>${stageDurationsView(item.stage_durations)}</td>
-        <td>${item.error || '-'}</td>
-      </tr>
-    `).join('') : '<tr><td colspan="10" class="empty">暂无历史记录</td></tr>';
-  }catch(err){
-    setOffline(err);
-  }finally{
-    clearTimeout(timeoutId);
-    refreshInFlight = false;
+  const timeout = setTimeout(() => controller.abort(), 6000);
+  const started = performance.now();
+  try {
+    const response = await fetch('/metrics', { signal: controller.signal, cache: 'no-store' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const d = await response.json();
+    render(d, Math.round(performance.now() - started));
+    $('state').textContent = 'LIVE';
+    $('state').className = 'pill live';
+  } catch (err) {
+    $('state').textContent = err && err.name === 'AbortError' ? 'TIMEOUT' : 'OFFLINE';
+    $('state').className = 'pill err';
+    $('health').textContent = 'ERR';
+    $('healthSub').textContent = err && err.message ? err.message : String(err);
+  } finally {
+    clearTimeout(timeout);
+    inFlight = false;
   }
 }
 
+function render(d, latencyMs) {
+  const jobs = d.jobs || {};
+  const sys = d.system || {};
+  const slots = d.llmSlots || {};
+  const redis = d.redisJobs || {};
+  const budget = d.llmBudget || {};
+  const svgBudget = d.svgBudget || {};
+  const workers = d.asyncWorkers || {};
+  const svg = slots.svg || {};
+
+  $('updatedAt').textContent = new Date().toLocaleTimeString();
+  $('latency').textContent = `${latencyMs}ms`;
+
+  $('activeJobs').textContent = `${jobs.active_count ?? 0}/${jobs.max_concurrent ?? '-'}`;
+  $('jobSub').textContent = `stage ${stageSummary(jobs.stage_counts)} | avg ${tsec(jobs.active_avg_elapsed_seconds)}`;
+
+  $('svgSlots').textContent = `${svg.active ?? 0}/${svg.limit ?? 0}`;
+  $('svgSlotSub').textContent = `waiting ${svg.waiting ?? 0} | available ${svg.available ?? 0} | ${svg.backend || '-'}`;
+
+  $('svgBudgetLeases').textContent = `${svgBudget.active_leases ?? 0}`;
+  $('svgBudgetSub').textContent = `reserved ${num(svgBudget.active_reserved_tpm)} TPM | grant ${num(svgBudget.granted_starts)} | deny ${num(svgBudget.denied_starts)}`;
+
+  $('tpmBudget').textContent = num(budget.configured_budget_tpm);
+  $('tpmSub').textContent = `util ${budget.target_utilization ?? '-'} | dyn SVG ${budget.dynamic_svg_limit ?? '-'} | worker ${num(budget.observed_svg_worker_tpm)}`;
+
+  $('systemLoad').textContent = pct(sys.cpu_percent);
+  $('systemSub').textContent = `rss ${num(sys.mem_rss_mb,1)}MB | mem ${pct(sys.mem_percent)} | children ${sys.child_processes ?? 0}`;
+  $('cpuBar').style.width = `${Math.max(0, Math.min(100, Number(sys.cpu_percent || 0)))}%`;
+
+  $('redisQueue').textContent = `${redis.pending ?? 0}`;
+  $('redisSub').textContent = `running ${redis.running ?? 0} | oldest ${tsec(redis.oldest_pending_seconds)} | ${redis.enabled === false ? 'disabled' : 'enabled'}`;
+
+  $('workers').textContent = `${workers.running ?? 0}/${workers.configured ?? 0}`;
+  $('workersSub').textContent = workers.stopped ? 'stopped' : 'running';
+
+  $('completionPeak').textContent = num(svgBudget.completion_bucket_peak_tokens);
+  $('completionSub').textContent = `bucket ${svgBudget.completion_bucket_peak_epoch || '-'} | backend ${svgBudget.backend || '-'}`;
+
+  $('doneFailed').innerHTML = `<span class="ok">${jobs.total_completed ?? 0}</span> / <span class="bad">${jobs.total_failed ?? 0}</span>`;
+  $('recentSub').textContent = `recent avg ${tsec(jobs.recent_avg_elapsed_seconds)}`;
+
+  $('health').textContent = redis.error || svgBudget.error ? 'WARN' : 'OK';
+  $('health').className = redis.error || svgBudget.error ? 'value warnText' : 'value ok';
+  $('healthSub').textContent = redis.error || svgBudget.error || `captured ${d.captured_at || '-'}`;
+
+  setRows('slotRows', Object.entries(slots).map(([stage, info]) => `
+    <tr><td>${safeText(stage)}</td><td>${safeText(info.backend)}</td><td>${info.active ?? 0}</td><td>${info.waiting ?? 0}</td><td>${info.limit ?? 0}</td><td>${info.available ?? 0}</td></tr>
+  `), 6);
+
+  setRows('activeRows', (jobs.active || []).map(j => `
+    <tr><td><code>${safeText(shortId(j.job_id))}</code></td><td>${safeText(j.report_id)}</td><td>${safeText(j.title)}</td><td>${safeText(j.current_stage)}</td><td>${tsec(j.current_stage_elapsed_seconds)}</td><td>${tsec(j.elapsed_seconds)}</td><td>${safeText(j.worker_name)}</td><td>${safeText(j.last_event)}</td></tr>
+  `), 8);
+
+  setRows('leaseRows', (svgBudget.active_leases_sample || []).map(l => `
+    <tr><td><code>${safeText(shortId(l.lease_id))}</code></td><td>${safeText(l.label)}</td><td>${num(l.estimated_worker_tpm)}</td><td>${num(l.estimated_tokens)}</td><td>${tsec(l.estimated_duration_seconds)}</td><td>${l.expires_at ? tsec(l.expires_at - Date.now()/1000) : '-'}</td><td>${safeText(l.completion_bucket_epoch)}</td></tr>
+  `), 7);
+
+  setRows('recentRows', (jobs.recent || []).map(j => `
+    <tr><td><code>${safeText(shortId(j.job_id))}</code></td><td>${safeText(j.report_id)}</td><td>${safeText(j.status)}</td><td>${safeText(j.current_stage)}</td><td>${tsec(j.elapsed_seconds)}</td><td>${j.slide_count || '-'}</td><td>${safeText(Object.entries(j.stage_durations || {}).map(([k,v]) => `${k}:${tsec(v)}`).join(' | '))}</td><td>${safeText(j.error)}</td></tr>
+  `), 8);
+
+  $('rawSummary').textContent = JSON.stringify({
+    captured_at: d.captured_at,
+    jobs: {
+      active: jobs.active_count,
+      completed: jobs.total_completed,
+      failed: jobs.total_failed,
+      stage_counts: jobs.stage_counts
+    },
+    svg: slots.svg,
+    llmBudget: budget,
+    svgBudget,
+    system: sys
+  }, null, 2);
+}
+
+$('refreshBtn').addEventListener('click', refresh);
 refresh();
-setInterval(refresh, 3000);
+timer = setInterval(refresh, 5000);
 </script>
 </body>
 </html>
