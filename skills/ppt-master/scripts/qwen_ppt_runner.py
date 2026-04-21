@@ -984,6 +984,21 @@ def stable_delay_seconds(label: str, max_seconds: int) -> int:
     return int(digest[:8], 16) % (max_seconds + 1)
 
 
+def wait_for_svg_start_jitter(stage: str, *, label: str, log_path: Path | None = None) -> None:
+    if stage != "svg":
+        return
+    max_seconds = env_int("PPT_API_SVG_START_JITTER_SECONDS", 0, minimum=0)
+    delay_seconds = stable_delay_seconds(label, max_seconds)
+    if delay_seconds <= 0:
+        return
+    if log_path is not None:
+        append_log(
+            log_path,
+            f"SVG start jitter for {label}: waiting {delay_seconds}s (max={max_seconds}s)",
+        )
+    time.sleep(delay_seconds)
+
+
 def svg_job_dir() -> Path:
     return llm_slot_dir() / "svg_jobs"
 
@@ -4070,6 +4085,7 @@ def run_qwen_prompt(
     stage = infer_slot_stage(artifact_prefix)
     label = f"{artifact_prefix}_turn_{turn_index:02d}"
     wait_for_local_qwen_start(stage, label=label, log_path=log_path)
+    wait_for_svg_start_jitter(stage, label=f"{runner_dir.name}:{label}", log_path=log_path)
     safe_command = redact_sensitive_command_parts(command)
     append_log(log_path, f"Starting qwen turn {turn_index}: {' '.join(safe_command)} (prompt via stdin, {len(prompt)} chars)")
     with acquire_resource_slot(
