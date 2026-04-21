@@ -153,7 +153,8 @@ function setOffline(err){
   const badgeEl = document.getElementById('statusBadge');
   badgeEl.textContent = 'OFFLINE';
   badgeEl.className = 'badge offline';
-  document.getElementById('redisHealth').textContent = 'unreachable';
+  document.getElementById('redisHealth').textContent = err && err.name === 'AbortError' ? 'metrics timeout' : 'unreachable';
+  document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
   console.error(err);
 }
 

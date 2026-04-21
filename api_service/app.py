@@ -478,6 +478,7 @@ def _redis_svg_budget_snapshot() -> dict[str, object]:
     now = time.time()
     leases_key = f"{prefix}:svg:budget:leases"
     active_leases: list[dict[str, object]] = []
+    completion_keys: set[str] = set()
     active_reserved_tpm = 0
     completion_peak_tokens = 0
     completion_peak_bucket = None
@@ -490,6 +491,9 @@ def _redis_svg_budget_snapshot() -> dict[str, object]:
             estimated_worker_tpm = int(float(payload.get("estimated_worker_tpm") or 0))
             estimated_tokens = int(float(payload.get("estimated_tokens") or 0))
             active_reserved_tpm += estimated_worker_tpm
+            completion_key = str(payload.get("completion_key") or "")
+            if completion_key:
+                completion_keys.add(completion_key)
             active_leases.append(
                 {
                     "lease_id": lease_id,
@@ -501,7 +505,7 @@ def _redis_svg_budget_snapshot() -> dict[str, object]:
                     "completion_bucket_epoch": payload.get("completion_bucket_epoch"),
                 }
             )
-        for key in job_store.client.scan_iter(f"{prefix}:svg:budget:completion:*", count=100):
+        for key in completion_keys:
             try:
                 value = int(float(job_store.client.get(key) or 0))
             except Exception:
