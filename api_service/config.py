@@ -76,6 +76,7 @@ class Settings:
     metrics_export_dir: Path
     metrics_export_interval_seconds: int
     metrics_export_retention_files: int
+    metrics_export_archive_idle_intervals: bool
 
     @property
     def cos_enabled(self) -> bool:
@@ -136,6 +137,7 @@ def load_settings() -> Settings:
         default_callback_mode=default_callback_mode,
         metrics_export_enabled=_env_bool("PPT_API_METRICS_EXPORT_ENABLED", True),
         metrics_export_dir=metrics_export_dir,
-        metrics_export_interval_seconds=max(1, _env_int("PPT_API_METRICS_EXPORT_INTERVAL_SECONDS", 10)),
+        metrics_export_interval_seconds=max(1, _env_int("PPT_API_METRICS_EXPORT_INTERVAL_SECONDS", 30)),
         metrics_export_retention_files=max(50, _env_int("PPT_API_METRICS_EXPORT_RETENTION_FILES", 2000)),
+        metrics_export_archive_idle_intervals=_env_bool("PPT_API_METRICS_EXPORT_ARCHIVE_IDLE_INTERVALS", False),
     )

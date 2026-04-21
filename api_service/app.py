@@ -109,6 +109,7 @@ def healthz() -> dict[str, object]:
             "dir": str(settings.metrics_export_dir),
             "intervalSeconds": settings.metrics_export_interval_seconds,
             "retentionFiles": settings.metrics_export_retention_files,
+            "archiveIdleIntervals": settings.metrics_export_archive_idle_intervals,
         },
     }
 
@@ -560,15 +561,36 @@ def _snapshot_metrics_to_disk(reason: str) -> None:
         payload["export_dir"] = str(root)
 
         timestamp = datetime.now().strftime("%H%M%S_%f")
+        archive_snapshot = not (
+            reason == "interval"
+            and not settings.metrics_export_archive_idle_intervals
+            and _metrics_payload_is_idle(payload)
+        )
         snapshot_path = day_dir / f"metrics_{timestamp}_{_safe_filename(reason)}.json"
         latest_path = root / "latest.json"
 
         text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-        snapshot_path.write_text(text, encoding="utf-8")
+        if archive_snapshot:
+            snapshot_path.write_text(text, encoding="utf-8")
         latest_path.write_text(text, encoding="utf-8")
-        _prune_metrics_exports(root)
+        if archive_snapshot:
+            _prune_metrics_exports(root)
     except Exception as exc:
         logger.warning("Failed to export metrics snapshot: %s", exc)
+
+
+def _metrics_payload_is_idle(payload: dict) -> bool:
+    jobs = payload.get("jobs") or {}
+    redis_jobs = payload.get("redisJobs") or {}
+    slots = payload.get("llmSlots") or {}
+    if jobs.get("active_count", 0):
+        return False
+    if redis_jobs.get("pending", 0) or redis_jobs.get("running", 0):
+        return False
+    for stage_payload in slots.values():
+        if isinstance(stage_payload, dict) and (stage_payload.get("active", 0) or stage_payload.get("waiting", 0)):
+            return False
+    return True
 
 
 def _prune_metrics_exports(root: Path) -> None:

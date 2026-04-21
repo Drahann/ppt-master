@@ -147,6 +147,7 @@ yarn.lock
 
 # Environment variables
 .env
+.env.api
 .env.local
 .env.*.local
 
