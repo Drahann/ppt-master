@@ -341,14 +341,18 @@ PPT_API_SVG_BATCH_STAGGER_SECONDS=5
    - SVG turn 启动前按 `llm:ewma:svg:tokens` 预留 rolling-window token 预算。
    - 如果当前 60 秒窗口预算不足，先等待再启动 turn。
    - 默认只对 SVG 开启，避免把 spec/notes/postprocess 也纳入本轮瓶颈。
-5. 给请求参数加硬上限：
+5. 增加 runner 内部 qwen CLI 启动节流：
+   - 全局 slot 只能限制“同时有多少 turn”，不能阻止同一个 runner 在几秒内启动多个 qwen CLI。
+   - 对 SVG qwen CLI start 做 per-runner 间隔控制，例如 `PPT_API_SVG_QWEN_START_STAGGER_SECONDS=12`。
+   - 该等待发生在抢全局 slot 之前，避免占着 Redis slot 空等。
+6. 给请求参数加硬上限：
    - `parallelBatchWorkers <= 7`。
    - fixed `batchSize <= 8`，避免单 turn 输出过长。
    - `batchPartition` 默认使用 `anchor_even`，即“2 页锚点 + 剩余页按约 6 页目标均衡切分”；保留 `ramp` 和显式数字序列作为对照实验选项。
-6. slot 观测增强：
+7. slot 观测增强：
    - 记录等待开始时间、获得 slot 时间、释放时间。
    - waiting slot 不仅写日志，也写 metrics snapshot。
-7. 压测脚本输出完整元数据：
+8. 压测脚本输出完整元数据：
    - 写入本轮 env 配置。
    - 拉取 `/metrics` 快照。
    - 汇总每个 task 的 HTTP 状态、耗时、错误。

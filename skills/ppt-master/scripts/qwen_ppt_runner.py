@@ -112,6 +112,8 @@ LLM_SLOT_WAIT_TIMEOUT_SECONDS = 2 * 60 * 60
 SVG_FAIR_SHARE_DELAY_SECONDS = 8
 REDIS_CLIENT = None
 REDIS_CLIENT_LOCK = Lock()
+QWEN_TURN_START_LOCK = Lock()
+QWEN_TURN_LAST_START: dict[str, float] = {}
 BATCH_PARTITION_REPEAT_SENTINEL = "+"
 QWEN_ALLOWED_TOOLS = (
     "edit",
@@ -933,6 +935,35 @@ def wait_for_redis_tpm_budget(client, stage: str, *, label: str, log_path: Path 
             )
             last_wait_log = time.time()
         time.sleep(2)
+
+
+def qwen_turn_start_stagger_seconds(stage: str) -> float:
+    if stage == "svg":
+        fallback = env_float("PPT_API_QWEN_START_STAGGER_SECONDS", 0.0, minimum=0.0)
+        return env_float("PPT_API_SVG_QWEN_START_STAGGER_SECONDS", fallback, minimum=0.0)
+    if env_bool("PPT_API_QWEN_START_STAGGER_ALL_STAGES", False):
+        return env_float("PPT_API_QWEN_START_STAGGER_SECONDS", 0.0, minimum=0.0)
+    return 0.0
+
+
+def wait_for_local_qwen_start(stage: str, *, label: str, log_path: Path | None = None) -> None:
+    delay_seconds = qwen_turn_start_stagger_seconds(stage)
+    if delay_seconds <= 0:
+        return
+    key = stage if env_bool("PPT_API_QWEN_START_STAGGER_PER_STAGE", True) else "global"
+    with QWEN_TURN_START_LOCK:
+        now = time.time()
+        last_start = QWEN_TURN_LAST_START.get(key, 0.0)
+        wait_seconds = max(0.0, last_start + delay_seconds - now)
+        if wait_seconds > 0:
+            if log_path is not None:
+                append_log(
+                    log_path,
+                    f"Local qwen start stagger for {stage}: waiting {wait_seconds:.1f}s "
+                    f"(delay={delay_seconds:.1f}s label={label})",
+                )
+            time.sleep(wait_seconds)
+        QWEN_TURN_LAST_START[key] = time.time()
 
 
 def stable_delay_seconds(label: str, max_seconds: int) -> int:
@@ -4025,12 +4056,14 @@ def run_qwen_prompt(
     if model:
         command.extend(["--model", model])
 
+    stage = infer_slot_stage(artifact_prefix)
+    label = f"{artifact_prefix}_turn_{turn_index:02d}"
+    wait_for_local_qwen_start(stage, label=label, log_path=log_path)
     safe_command = redact_sensitive_command_parts(command)
     append_log(log_path, f"Starting qwen turn {turn_index}: {' '.join(safe_command)} (prompt via stdin, {len(prompt)} chars)")
-    stage = infer_slot_stage(artifact_prefix)
     with acquire_resource_slot(
         stage,
-        label=f"{artifact_prefix}_turn_{turn_index:02d}",
+        label=label,
         runner_dir=runner_dir,
         log_path=log_path,
     ):
