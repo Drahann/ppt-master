@@ -16,6 +16,7 @@ import statistics
 import sys
 import threading
 import time
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -189,6 +190,31 @@ def write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def resolve_log_dir() -> Path:
+    suffix = datetime.now().strftime("%Y%m%d_%H%M%S")
+    candidates = [
+        REPO_ROOT / "tmp",
+        Path(tempfile.gettempdir()),
+    ]
+    custom_root = os.getenv("PPT_STRESS_LOG_ROOT")
+    if custom_root and custom_root.strip():
+        candidates.insert(0, Path(custom_root).expanduser())
+
+    for root in candidates:
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            log_dir = root / f"ppt_async_stress_{suffix}"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            return log_dir
+        except OSError:
+            continue
+
+    raise RuntimeError(
+        "Unable to create a writable stress log directory. "
+        "Set PPT_STRESS_LOG_ROOT to a writable path and retry."
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Async stress harness for ppt-master")
     parser.add_argument("concurrency", type=int, nargs="?", default=3, help="number of concurrent jobs to submit")
@@ -224,8 +250,7 @@ def main() -> int:
     if health_status != 200:
         raise RuntimeError(f"Service health check failed: HTTP {health_status} {health_payload}")
 
-    log_dir = REPO_ROOT / "tmp" / f"ppt_async_stress_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    log_dir.mkdir(parents=True, exist_ok=True)
+    log_dir = resolve_log_dir()
     metrics_jsonl_path = log_dir / "metrics.jsonl"
 
     print_flush("=" * 72)
