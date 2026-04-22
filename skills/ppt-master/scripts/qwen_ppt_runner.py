@@ -41,6 +41,26 @@ except ImportError:
     from config import REPO_ROOT, PROJECTS_DIR  # type: ignore
     from project_manager import ProjectManager  # type: ignore
 
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+try:
+    from api_service.svg_scheduler import (
+        RedisSvgSchedulerStore,
+        SVG_TASK_FAILED,
+        SVG_TASK_SUCCEEDED,
+        SvgBatchTask,
+        build_svg_scheduler_task_id,
+        scheduler_enabled_from_env,
+    )
+except Exception:  # pragma: no cover - fallback when api_service import is unavailable
+    RedisSvgSchedulerStore = None  # type: ignore[assignment]
+    SvgBatchTask = None  # type: ignore[assignment]
+    build_svg_scheduler_task_id = None  # type: ignore[assignment]
+    scheduler_enabled_from_env = None  # type: ignore[assignment]
+    SVG_TASK_SUCCEEDED = "succeeded"
+    SVG_TASK_FAILED = "failed"
+
 
 COMPLETION_SENTINEL_PREFIX = "PPT_RUN_COMPLETE:"
 SPEC_COMPLETION_SENTINEL_PREFIX = "PPT_SPEC_COMPLETE:"
@@ -236,6 +256,16 @@ class SvgBudgetLease:
     admission_mode: str = "estimated"
 
 
+@dataclass(frozen=True)
+class PreparedSvgBatch:
+    batch_index: int
+    batch_plan: list[SlidePlanEntry]
+    prompt_path: Path
+    batch_slide_plan_path: Path
+    prompt_text: str
+    requires_anchor: bool = False
+
+
 @dataclass
 class RunOutput:
     job_id: str
@@ -329,11 +359,33 @@ def read_json(path: Path) -> dict[str, Any]:
         raise RunnerError(f"Invalid JSON in request file: {path} ({exc})") from exc
 
 
+def read_json_value(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError as exc:
+        raise RunnerError(f"Request file not found: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise RunnerError(f"Invalid JSON in request file: {path} ({exc})") from exc
+
+
 def write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+
+
+def load_slide_plan_entries(path: Path) -> list[SlidePlanEntry]:
+    payload = read_json_value(path)
+    if not isinstance(payload, list):
+        raise RunnerError(f"Invalid slide plan payload: {path}")
+    entries: list[SlidePlanEntry] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            raise RunnerError(f"Invalid slide plan entry in {path}: {item!r}")
+        entries.append(SlidePlanEntry(**item))
+    return entries
 
 
 def read_text(path: Path) -> str:
@@ -891,6 +943,23 @@ def get_runner_redis_client(log_path: Path | None = None):
             if log_path is not None:
                 append_log(log_path, f"Redis unavailable for runner scheduling; falling back to file slots: {exc}")
             return None
+
+
+def centralized_svg_scheduler_enabled(log_path: Path | None = None) -> bool:
+    if scheduler_enabled_from_env is None or RedisSvgSchedulerStore is None:
+        return False
+    if not scheduler_enabled_from_env():
+        return False
+    return get_runner_redis_client(log_path) is not None
+
+
+def get_svg_scheduler_store(log_path: Path | None = None) -> RedisSvgSchedulerStore | None:
+    if RedisSvgSchedulerStore is None:
+        return None
+    client = get_runner_redis_client(log_path)
+    if client is None:
+        return None
+    return RedisSvgSchedulerStore(client, key_prefix=redis_key_prefix())
 
 
 def redis_dynamic_svg_limit(default_limit: int) -> int:
@@ -4921,7 +4990,7 @@ def build_runner_reference_files(
     return slide_digest_path, chart_reference_path, icon_reference_path, icon_inventory_path, valid_chart_keys
 
 
-def execute_batched_svg_generation(
+def prepare_svg_batch_artifacts(
     request: dict[str, Any],
     project_path: Path,
     slide_plan_path: Path,
@@ -4932,15 +5001,18 @@ def execute_batched_svg_generation(
     executor_skill_pack_path: Path,
     plan: list[SlidePlanEntry],
     runner_dir: Path,
-    log_path: Path,
-) -> list[str]:
+) -> tuple[list[list[SlidePlanEntry]], list[PreparedSvgBatch], bool]:
     batches = split_plan_into_batches(
         plan,
         int(request.get("batch_size", BATCH_SIZE)),
         str(request.get("batch_partition", "fixed")),
     )
-    session_ids: list[str] = []
+    anchor_first = (os.getenv("PPT_API_SVG_ANCHOR_FIRST", "1").strip().lower() not in {"0", "false", "no"})
+    anchor_svg_path: Path | None = None
+    if anchor_first and len(batches) > 1:
+        anchor_svg_path = project_path / "svg_output" / batches[0][-1].filename
 
+    prepared: list[PreparedSvgBatch] = []
     for batch_index, batch_plan in enumerate(batches):
         batch_slide_plan_path = runner_dir / f"slide_plan.batch_{batch_index + 1:02d}.json"
         write_json(batch_slide_plan_path, [asdict(entry) for entry in batch_plan])
@@ -4950,12 +5022,6 @@ def execute_batched_svg_generation(
 
         batch_icon_reference_path = runner_dir / f"available_icon_candidates.batch_{batch_index + 1:02d}.json"
         write_batch_reference_file(icon_reference_path, batch_icon_reference_path, batch_plan)
-
-        prev_last_svg_path: Path | None = None
-        if batch_index > 0:
-            prev_last_svg_path = project_path / "svg_output" / batches[batch_index - 1][-1].filename
-            if not prev_last_svg_path.exists():
-                prev_last_svg_path = None
 
         batch_prompt = build_batch_svg_prompt(
             request=request,
@@ -4970,25 +5036,92 @@ def execute_batched_svg_generation(
             batch_plan=batch_plan,
             batch_index=batch_index,
             total_batches=len(batches),
-            prev_last_svg_path=prev_last_svg_path,
+            prev_last_svg_path=anchor_svg_path if anchor_svg_path is not None and batch_index > 0 else None,
         )
-        (runner_dir / f"svg_batch_{batch_index + 1:02d}_prompt.txt").write_text(batch_prompt, encoding="utf-8")
+        prompt_path = runner_dir / f"svg_batch_{batch_index + 1:02d}_prompt.txt"
+        prompt_path.write_text(batch_prompt, encoding="utf-8")
+        prepared.append(
+            PreparedSvgBatch(
+                batch_index=batch_index,
+                batch_plan=batch_plan,
+                prompt_path=prompt_path,
+                batch_slide_plan_path=batch_slide_plan_path,
+                prompt_text=batch_prompt,
+                requires_anchor=bool(anchor_first and batch_index > 0),
+            )
+        )
 
-        session_id = execute_qwen_stage(
-            stage_name=f"svg_batch_{batch_index + 1}",
-            artifact_prefix=f"svg_batch_{batch_index + 1:02d}",
-            initial_prompt=batch_prompt,
-            completion_sentinel_prefix=SVG_BATCH_COMPLETION_SENTINEL_PREFIX,
-            state_checker=lambda bp=batch_plan: check_batch_state(project_path, bp, plan, log_path),
-            continue_prompt_builder=lambda errors, bp=batch_plan: build_batch_svg_continue_prompt(
-                request,
-                project_path,
-                bp,
-                errors,
-                svg_anchor_context_path,
-            ),
-            confirmation_prompt_builder=lambda _errors, bp=batch_plan: build_batch_svg_confirmation_prompt(bp, request),
-            model=request.get("model"),
+    return batches, prepared, anchor_first
+
+
+def execute_single_svg_batch(
+    *,
+    request: dict[str, Any],
+    project_path: Path,
+    full_plan: list[SlidePlanEntry],
+    batch_plan: list[SlidePlanEntry],
+    batch_index: int,
+    batch_prompt: str,
+    svg_anchor_context_path: Path,
+    runner_dir: Path,
+    log_path: Path,
+) -> str:
+    return execute_qwen_stage(
+        stage_name=f"svg_batch_{batch_index + 1}",
+        artifact_prefix=f"svg_batch_{batch_index + 1:02d}",
+        initial_prompt=batch_prompt,
+        completion_sentinel_prefix=SVG_BATCH_COMPLETION_SENTINEL_PREFIX,
+        state_checker=lambda bp=batch_plan: check_batch_state(project_path, bp, full_plan, log_path),
+        continue_prompt_builder=lambda errors, bp=batch_plan: build_batch_svg_continue_prompt(
+            request,
+            project_path,
+            bp,
+            errors,
+            svg_anchor_context_path,
+        ),
+        confirmation_prompt_builder=lambda _errors, bp=batch_plan: build_batch_svg_confirmation_prompt(bp, request),
+        model=request.get("model"),
+        runner_dir=runner_dir,
+        log_path=log_path,
+    )
+
+
+def execute_batched_svg_generation(
+    request: dict[str, Any],
+    project_path: Path,
+    slide_plan_path: Path,
+    slide_digest_path: Path,
+    icon_reference_path: Path,
+    svg_anchor_context_path: Path,
+    executor_style_path: Path,
+    executor_skill_pack_path: Path,
+    plan: list[SlidePlanEntry],
+    runner_dir: Path,
+    log_path: Path,
+) -> list[str]:
+    _batches, prepared_batches, _anchor_first = prepare_svg_batch_artifacts(
+        request=request,
+        project_path=project_path,
+        slide_plan_path=slide_plan_path,
+        slide_digest_path=slide_digest_path,
+        icon_reference_path=icon_reference_path,
+        svg_anchor_context_path=svg_anchor_context_path,
+        executor_style_path=executor_style_path,
+        executor_skill_pack_path=executor_skill_pack_path,
+        plan=plan,
+        runner_dir=runner_dir,
+    )
+    session_ids: list[str] = []
+
+    for prepared in prepared_batches:
+        session_id = execute_single_svg_batch(
+            request=request,
+            project_path=project_path,
+            full_plan=plan,
+            batch_plan=prepared.batch_plan,
+            batch_index=prepared.batch_index,
+            batch_prompt=prepared.prompt_text,
+            svg_anchor_context_path=svg_anchor_context_path,
             runner_dir=runner_dir,
             log_path=log_path,
         )
@@ -5010,6 +5143,22 @@ def execute_parallel_svg_generation(
     runner_dir: Path,
     log_path: Path,
 ) -> list[str]:
+    if centralized_svg_scheduler_enabled(log_path):
+        append_log(log_path, "Using centralized Redis SVG scheduler")
+        return execute_parallel_svg_generation_centralized(
+            request=request,
+            project_path=project_path,
+            slide_plan_path=slide_plan_path,
+            slide_digest_path=slide_digest_path,
+            icon_reference_path=icon_reference_path,
+            svg_anchor_context_path=svg_anchor_context_path,
+            executor_style_path=executor_style_path,
+            executor_skill_pack_path=executor_skill_pack_path,
+            plan=plan,
+            runner_dir=runner_dir,
+            log_path=log_path,
+        )
+
     fair_delay = env_int("PPT_API_SVG_FAIR_SHARE_DELAY_SECONDS", SVG_FAIR_SHARE_DELAY_SECONDS, minimum=0)
     stage_stagger_window = env_int("PPT_API_SVG_STAGE_STAGGER_SECONDS", 0, minimum=0)
     stage_stagger = stable_delay_seconds(str(request.get("job_id") or project_path.name), stage_stagger_window)
@@ -5051,10 +5200,17 @@ def _execute_parallel_svg_generation_registered(
     runner_dir: Path,
     log_path: Path,
 ) -> list[str]:
-    batches = split_plan_into_batches(
-        plan,
-        int(request.get("batch_size", BATCH_SIZE)),
-        str(request.get("batch_partition", "fixed")),
+    batches, prepared_batches, anchor_first = prepare_svg_batch_artifacts(
+        request=request,
+        project_path=project_path,
+        slide_plan_path=slide_plan_path,
+        slide_digest_path=slide_digest_path,
+        icon_reference_path=icon_reference_path,
+        svg_anchor_context_path=svg_anchor_context_path,
+        executor_style_path=executor_style_path,
+        executor_skill_pack_path=executor_skill_pack_path,
+        plan=plan,
+        runner_dir=runner_dir,
     )
     requested_workers = int(request.get("parallel_batch_workers", DEFAULT_PARALLEL_BATCH_WORKERS))
     initial_workers = effective_svg_worker_count(
@@ -5067,85 +5223,28 @@ def _execute_parallel_svg_generation_registered(
         f"Launching parallel SVG batches: total_batches={len(batches)} requested_workers={requested_workers} initial_workers={initial_workers}",
     )
 
-    batch_artifacts: list[tuple[int, list[SlidePlanEntry], Path, Path, str]] = []
-    anchor_first = (os.getenv("PPT_API_SVG_ANCHOR_FIRST", "1").strip().lower() not in {"0", "false", "no"})
-    anchor_svg_path: Path | None = None
-    if anchor_first and len(batches) > 1:
-        anchor_svg_path = project_path / "svg_output" / batches[0][-1].filename
-    for batch_index, batch_plan in enumerate(batches):
-        batch_slide_plan_path = runner_dir / f"slide_plan.batch_{batch_index + 1:02d}.json"
-        write_json(batch_slide_plan_path, [asdict(entry) for entry in batch_plan])
-
-        batch_digest_path = runner_dir / f"slide_content_digest.batch_{batch_index + 1:02d}.json"
-        write_batch_reference_file(slide_digest_path, batch_digest_path, batch_plan)
-
-        batch_icon_reference_path = runner_dir / f"available_icon_candidates.batch_{batch_index + 1:02d}.json"
-        write_batch_reference_file(icon_reference_path, batch_icon_reference_path, batch_plan)
-
-        batch_prompt = build_batch_svg_prompt(
+    session_by_index: dict[int, str] = {}
+    remaining_batch_artifacts = list(prepared_batches)
+    if anchor_first and len(prepared_batches) > 1:
+        first_prepared = prepared_batches[0]
+        append_log(log_path, f"Running anchor SVG batch {first_prepared.batch_index + 1} before parallel window")
+        session_by_index[first_prepared.batch_index] = execute_single_svg_batch(
             request=request,
             project_path=project_path,
-            slide_plan_path=slide_plan_path,
-            batch_slide_plan_path=batch_slide_plan_path,
-            batch_digest_path=batch_digest_path,
-            batch_icon_reference_path=batch_icon_reference_path,
+            full_plan=plan,
+            batch_plan=first_prepared.batch_plan,
+            batch_index=first_prepared.batch_index,
+            batch_prompt=first_prepared.prompt_text,
             svg_anchor_context_path=svg_anchor_context_path,
-            executor_style_path=executor_style_path,
-            executor_skill_pack_path=executor_skill_pack_path,
-            batch_plan=batch_plan,
-            batch_index=batch_index,
-            total_batches=len(batches),
-            prev_last_svg_path=anchor_svg_path if anchor_svg_path is not None and batch_index > 0 else None,
-        )
-        prompt_path = runner_dir / f"svg_batch_{batch_index + 1:02d}_prompt.txt"
-        prompt_path.write_text(batch_prompt, encoding="utf-8")
-        batch_artifacts.append(
-            (
-                batch_index,
-                batch_plan,
-                prompt_path,
-                batch_slide_plan_path,
-                batch_prompt,
-            )
-        )
-
-    session_by_index: dict[int, str] = {}
-
-    def run_single_parallel_batch(
-        batch_index: int,
-        batch_plan: list[SlidePlanEntry],
-        batch_prompt: str,
-    ) -> str:
-        return execute_qwen_stage(
-            stage_name=f"svg_batch_{batch_index + 1}",
-            artifact_prefix=f"svg_batch_{batch_index + 1:02d}",
-            initial_prompt=batch_prompt,
-            completion_sentinel_prefix=SVG_BATCH_COMPLETION_SENTINEL_PREFIX,
-            state_checker=lambda bp=batch_plan: check_batch_state(project_path, bp, plan, log_path),
-            continue_prompt_builder=lambda errors, bp=batch_plan: build_batch_svg_continue_prompt(
-                request,
-                project_path,
-                bp,
-                errors,
-                svg_anchor_context_path,
-            ),
-            confirmation_prompt_builder=lambda _errors, bp=batch_plan: build_batch_svg_confirmation_prompt(bp, request),
-            model=request.get("model"),
             runner_dir=runner_dir,
             log_path=log_path,
         )
-
-    remaining_batch_artifacts = list(batch_artifacts)
-    if anchor_first and len(batch_artifacts) > 1:
-        first_index, first_plan, _first_prompt_path, _first_batch_slide_plan_path, first_prompt = batch_artifacts[0]
-        append_log(log_path, f"Running anchor SVG batch {first_index + 1} before parallel window")
-        session_by_index[first_index] = run_single_parallel_batch(first_index, first_plan, first_prompt)
-        append_log(log_path, f"Anchor SVG batch {first_index + 1} completed")
-        remaining_batch_artifacts = batch_artifacts[1:]
+        append_log(log_path, f"Anchor SVG batch {first_prepared.batch_index + 1} completed")
+        remaining_batch_artifacts = prepared_batches[1:]
 
     max_executor_workers = max(1, min(len(remaining_batch_artifacts), requested_workers))
     with ThreadPoolExecutor(max_workers=max_executor_workers) as executor:
-        future_map: dict[Any, tuple[int, list[SlidePlanEntry], str]] = {}
+        future_map: dict[Any, PreparedSvgBatch] = {}
         pending_batch_artifacts = list(remaining_batch_artifacts)
         batch_stagger = env_int("PPT_API_SVG_BATCH_STAGGER_SECONDS", 0, minimum=0)
         while pending_batch_artifacts or future_map:
@@ -5156,14 +5255,25 @@ def _execute_parallel_svg_generation_registered(
                 log_path=log_path,
             )
             while pending_batch_artifacts and len(future_map) < desired_inflight:
-                batch_index, batch_plan, _prompt_path, _batch_slide_plan_path, batch_prompt = pending_batch_artifacts.pop(0)
+                prepared = pending_batch_artifacts.pop(0)
                 append_log(
                     log_path,
-                    f"Submitting SVG batch {batch_index + 1} to executor "
+                    f"Submitting SVG batch {prepared.batch_index + 1} to executor "
                     f"(inflight={len(future_map) + 1}/{desired_inflight}, remaining={len(pending_batch_artifacts)})",
                 )
-                future = executor.submit(run_single_parallel_batch, batch_index, batch_plan, batch_prompt)
-                future_map[future] = (batch_index, batch_plan, batch_prompt)
+                future = executor.submit(
+                    execute_single_svg_batch,
+                    request=request,
+                    project_path=project_path,
+                    full_plan=plan,
+                    batch_plan=prepared.batch_plan,
+                    batch_index=prepared.batch_index,
+                    batch_prompt=prepared.prompt_text,
+                    svg_anchor_context_path=svg_anchor_context_path,
+                    runner_dir=runner_dir,
+                    log_path=log_path,
+                )
+                future_map[future] = prepared
                 if batch_stagger > 0 and pending_batch_artifacts and len(future_map) < desired_inflight:
                     time.sleep(batch_stagger)
 
@@ -5172,11 +5282,191 @@ def _execute_parallel_svg_generation_registered(
 
             done, _pending = wait(tuple(future_map.keys()), return_when=FIRST_COMPLETED)
             for future in done:
-                batch_index, _batch_plan, _batch_prompt = future_map.pop(future)
-                session_by_index[batch_index] = future.result()
-                append_log(log_path, f"Parallel SVG batch {batch_index + 1} completed")
+                prepared = future_map.pop(future)
+                session_by_index[prepared.batch_index] = future.result()
+                append_log(log_path, f"Parallel SVG batch {prepared.batch_index + 1} completed")
 
     return [session_by_index[index] for index in sorted(session_by_index)]
+
+
+def execute_parallel_svg_generation_centralized(
+    request: dict[str, Any],
+    project_path: Path,
+    slide_plan_path: Path,
+    slide_digest_path: Path,
+    icon_reference_path: Path,
+    svg_anchor_context_path: Path,
+    executor_style_path: Path,
+    executor_skill_pack_path: Path,
+    plan: list[SlidePlanEntry],
+    runner_dir: Path,
+    log_path: Path,
+) -> list[str]:
+    store = get_svg_scheduler_store(log_path)
+    if store is None or SvgBatchTask is None or build_svg_scheduler_task_id is None:
+        append_log(log_path, "Centralized SVG scheduler unavailable; falling back to local parallel scheduling")
+        fair_delay = env_int("PPT_API_SVG_FAIR_SHARE_DELAY_SECONDS", SVG_FAIR_SHARE_DELAY_SECONDS, minimum=0)
+        stage_stagger_window = env_int("PPT_API_SVG_STAGE_STAGGER_SECONDS", 0, minimum=0)
+        stage_stagger = stable_delay_seconds(str(request.get("job_id") or project_path.name), stage_stagger_window)
+        total_delay = fair_delay + stage_stagger
+        if total_delay > 0:
+            append_log(
+                log_path,
+                f"Staggering SVG stage start for {total_delay}s "
+                f"(fair_share_delay={fair_delay}s stage_stagger={stage_stagger}s)",
+            )
+            time.sleep(total_delay)
+        with register_active_svg_job(str(request.get("job_id") or project_path.name), runner_dir, log_path):
+            return _execute_parallel_svg_generation_registered(
+                request=request,
+                project_path=project_path,
+                slide_plan_path=slide_plan_path,
+                slide_digest_path=slide_digest_path,
+                icon_reference_path=icon_reference_path,
+                svg_anchor_context_path=svg_anchor_context_path,
+                executor_style_path=executor_style_path,
+                executor_skill_pack_path=executor_skill_pack_path,
+                plan=plan,
+                runner_dir=runner_dir,
+                log_path=log_path,
+            )
+
+    _batches, prepared_batches, _anchor_first = prepare_svg_batch_artifacts(
+        request=request,
+        project_path=project_path,
+        slide_plan_path=slide_plan_path,
+        slide_digest_path=slide_digest_path,
+        icon_reference_path=icon_reference_path,
+        svg_anchor_context_path=svg_anchor_context_path,
+        executor_style_path=executor_style_path,
+        executor_skill_pack_path=executor_skill_pack_path,
+        plan=plan,
+        runner_dir=runner_dir,
+    )
+    owner_job_id = str(request.get("job_id") or project_path.name)
+    requested_workers = int(request.get("parallel_batch_workers", DEFAULT_PARALLEL_BATCH_WORKERS))
+    append_log(
+        log_path,
+        f"Enqueueing centralized SVG batches: total_batches={len(prepared_batches)} requested_workers={requested_workers}",
+    )
+    task_ids: list[str] = []
+    task_id_to_batch_index: dict[str, int] = {}
+    for prepared in prepared_batches:
+        worker_request_path = runner_dir / f"svg_batch_{prepared.batch_index + 1:02d}.worker.json"
+        write_json(
+            worker_request_path,
+            {
+                "mode": "svg_batch_worker",
+                "project_path": str(project_path),
+                "runner_dir": str(runner_dir),
+                "batch_index": prepared.batch_index,
+            },
+        )
+        task_id = build_svg_scheduler_task_id(owner_job_id, prepared.batch_index)
+        task = SvgBatchTask(
+            task_id=task_id,
+            owner_job_id=owner_job_id,
+            report_id=str(request.get("report_id") or owner_job_id),
+            batch_index=prepared.batch_index,
+            total_batches=len(prepared_batches),
+            requested_workers=requested_workers,
+            worker_request_path=str(worker_request_path),
+            enqueued_at=time.time() + (prepared.batch_index * 0.001),
+            requires_anchor=prepared.requires_anchor,
+        )
+        store.enqueue_task(task)
+        task_ids.append(task_id)
+        task_id_to_batch_index[task_id] = prepared.batch_index
+        append_log(
+            log_path,
+            f"Centralized SVG task enqueued: batch={prepared.batch_index + 1} task_id={task_id} requires_anchor={prepared.requires_anchor}",
+        )
+
+    sessions_by_index = wait_for_centralized_svg_tasks(
+        store=store,
+        task_ids=task_ids,
+        task_id_to_batch_index=task_id_to_batch_index,
+        owner_job_id=owner_job_id,
+        log_path=log_path,
+    )
+    return [sessions_by_index[index] for index in sorted(sessions_by_index)]
+
+
+def wait_for_centralized_svg_tasks(
+    *,
+    store: RedisSvgSchedulerStore,
+    task_ids: list[str],
+    task_id_to_batch_index: dict[str, int],
+    owner_job_id: str,
+    log_path: Path,
+) -> dict[int, str]:
+    timeout_seconds = env_int("PPT_API_SVG_BUDGET_LEASE_WAIT_TIMEOUT_SECONDS", LLM_SLOT_WAIT_TIMEOUT_SECONDS, minimum=60)
+    started = time.time()
+    sessions_by_index: dict[int, str] = {}
+    remaining = set(task_ids)
+    while remaining:
+        if time.time() - started > timeout_seconds:
+            store.fail_pending_tasks_for_job(owner_job_id, "Timed out waiting for centralized SVG batches")
+            raise RunnerError(f"Timed out waiting for centralized SVG batches after {timeout_seconds}s")
+        completed_this_round: list[str] = []
+        for task_id in list(remaining):
+            task = store.get_task(task_id)
+            if task is None:
+                continue
+            if task.status == SVG_TASK_SUCCEEDED:
+                completed_this_round.append(task_id)
+                batch_index = task_id_to_batch_index[task_id]
+                sessions_by_index[batch_index] = task.session_id or task.task_id
+                append_log(log_path, f"Centralized SVG batch {batch_index + 1} completed via scheduler")
+            elif task.status == SVG_TASK_FAILED:
+                store.fail_pending_tasks_for_job(owner_job_id, task.error or f"Centralized SVG batch failed: {task_id}")
+                store.clear_job_state(owner_job_id)
+                raise RunnerError(task.error or f"Centralized SVG batch failed: {task_id}")
+        for task_id in completed_this_round:
+            remaining.discard(task_id)
+        if remaining:
+            time.sleep(1)
+    store.clear_job_state(owner_job_id)
+    return sessions_by_index
+
+
+def execute_svg_batch_worker(worker_request_path: Path) -> dict[str, Any]:
+    worker_request = read_json_value(worker_request_path)
+    if not isinstance(worker_request, dict):
+        raise RunnerError(f"Invalid SVG batch worker request: {worker_request_path}")
+    runner_dir = Path(str(worker_request.get("runner_dir") or "")).expanduser().resolve()
+    project_path = Path(str(worker_request.get("project_path") or "")).expanduser().resolve()
+    batch_index = safe_int(worker_request.get("batch_index"))
+    if not runner_dir.exists():
+        raise RunnerError(f"Runner directory not found: {runner_dir}")
+    if not project_path.exists():
+        raise RunnerError(f"Project path not found: {project_path}")
+
+    request = read_json(runner_dir / "request.json")
+    full_plan = load_slide_plan_entries(runner_dir / "slide_plan.json")
+    batch_plan = load_slide_plan_entries(runner_dir / f"slide_plan.batch_{batch_index + 1:02d}.json")
+    prompt_path = runner_dir / f"svg_batch_{batch_index + 1:02d}_prompt.txt"
+    batch_prompt = prompt_path.read_text(encoding="utf-8")
+    svg_anchor_context_path = runner_dir / SVG_ANCHOR_CONTEXT_FILENAME
+    log_path = runner_dir / LOG_FILENAME
+
+    append_log(log_path, f"Centralized SVG worker starting batch {batch_index + 1} from {worker_request_path}")
+    session_id = execute_single_svg_batch(
+        request=request,
+        project_path=project_path,
+        full_plan=full_plan,
+        batch_plan=batch_plan,
+        batch_index=batch_index,
+        batch_prompt=batch_prompt,
+        svg_anchor_context_path=svg_anchor_context_path,
+        runner_dir=runner_dir,
+        log_path=log_path,
+    )
+    return {
+        "status": SVG_TASK_SUCCEEDED,
+        "session_id": session_id,
+        "batch_index": batch_index,
+    }
 
 
 def build_svg_anchor_context(
@@ -5634,6 +5924,26 @@ def build_failure_output(
 
 
 def main() -> None:
+    if len(sys.argv) == 3 and sys.argv[1] == "--svg-batch-worker":
+        worker_request_path = Path(sys.argv[2]).expanduser().resolve()
+        ensure_qwen_available()
+        try:
+            payload = execute_svg_batch_worker(worker_request_path)
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return
+        except Exception as exc:
+            print(
+                json.dumps(
+                    {
+                        "status": SVG_TASK_FAILED,
+                        "error": str(exc),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            sys.exit(1)
+
     if len(sys.argv) != 2:
         print(__doc__)
         sys.exit(1)

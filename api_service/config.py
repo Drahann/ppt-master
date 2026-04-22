@@ -70,6 +70,7 @@ class Settings:
     redis_url: str | None
     redis_key_prefix: str
     async_worker_count: int
+    svg_scheduler_enabled: bool
     default_response_mode: str
     default_callback_mode: str
     metrics_export_enabled: bool
@@ -133,6 +134,7 @@ def load_settings() -> Settings:
         redis_url=((os.getenv("PPT_REDIS_URL") or os.getenv("REDIS_URL") or "").strip() or None),
         redis_key_prefix=(os.getenv("PPT_REDIS_KEY_PREFIX", "ppt") or "ppt").strip().strip(":") or "ppt",
         async_worker_count=max(1, _env_int("PPT_API_ASYNC_WORKERS", max_concurrent_jobs)),
+        svg_scheduler_enabled=_env_bool("PPT_API_SVG_SCHEDULER_ENABLED", True),
         default_response_mode=default_response_mode,
         default_callback_mode=default_callback_mode,
         metrics_export_enabled=_env_bool("PPT_API_METRICS_EXPORT_ENABLED", True),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -95,9 +96,12 @@ def execute_runner(
     request_path.write_text(json.dumps(request_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     command = [sys.executable, str(settings.repo_root / RUNNER_SCRIPT), str(request_path)]
+    child_env = dict(os.environ)
+    child_env["PPT_API_SVG_SCHEDULER_ENABLED"] = "1" if settings.svg_scheduler_enabled else "0"
     completed = subprocess.run(
         command,
         cwd=settings.repo_root,
+        env=child_env,
         capture_output=True,
         text=True,
         encoding="utf-8",

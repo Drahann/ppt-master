@@ -22,6 +22,7 @@ from .models import CallbackResult as CallbackResultModel
 from .models import GeneratePptRequest, GeneratePptResponse, NormalizedRequest, ReportRequest, ReportResponse
 from .runner import derive_title, execute_runner
 from .storage import build_result_zip, notify_report_server, sanitize_title, upload_to_cos
+from .svg_scheduler import RedisSvgSchedulerStore, SvgScheduler
 
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ job_semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
 execution_semaphore = threading.BoundedSemaphore(settings.max_concurrent_jobs)
 worker_stop_event = threading.Event()
 worker_threads: list[threading.Thread] = []
+svg_scheduler: SvgScheduler | None = None
 metrics_export_stop_event = threading.Event()
 metrics_export_thread: threading.Thread | None = None
 job_store_error: str | None = None
@@ -104,6 +106,10 @@ def healthz() -> dict[str, object]:
             "keyPrefix": settings.redis_key_prefix,
         },
         "asyncWorkers": len(worker_threads),
+        "svgScheduler": {
+            "enabled": settings.svg_scheduler_enabled,
+            "running": bool(svg_scheduler is not None),
+        },
         "metricsExport": {
             "enabled": settings.metrics_export_enabled,
             "dir": str(settings.metrics_export_dir),
@@ -137,6 +143,7 @@ async def request_validation_exception_handler(_request, exc: RequestValidationE
 
 @app.on_event("startup")
 def start_async_workers() -> None:
+    global svg_scheduler
     if job_store is not None:
         if worker_threads:
             return
@@ -155,16 +162,30 @@ def start_async_workers() -> None:
             thread.start()
             worker_threads.append(thread)
             logger.info("Started async worker thread %s", thread.name)
+        if settings.svg_scheduler_enabled and svg_scheduler is None:
+            svg_scheduler = SvgScheduler(
+                store=RedisSvgSchedulerStore(job_store.client, key_prefix=settings.redis_key_prefix),
+                runner_script=settings.repo_root / "skills" / "ppt-master" / "scripts" / "qwen_ppt_runner.py",
+                slot_limit_resolver=_effective_svg_limit,
+                max_workers=_svg_scheduler_max_workers(),
+            )
+            svg_scheduler.start()
+            logger.info("Started centralized SVG scheduler")
     _start_metrics_exporter()
     _snapshot_metrics_to_disk("startup")
 
 
 @app.on_event("shutdown")
 def stop_async_workers() -> None:
+    global svg_scheduler
     worker_stop_event.set()
     for thread in worker_threads:
         thread.join(timeout=2)
         logger.info("Stopped async worker thread %s", thread.name)
+    if svg_scheduler is not None:
+        svg_scheduler.stop()
+        svg_scheduler = None
+        logger.info("Stopped centralized SVG scheduler")
     _stop_metrics_exporter()
     _snapshot_metrics_to_disk("shutdown")
 
@@ -604,6 +625,24 @@ def _build_metrics_payload() -> dict:
     payload["redisJobs"] = _redis_job_snapshot()
     payload["llmBudget"] = _llm_budget_snapshot()
     payload["svgBudget"] = _redis_svg_budget_snapshot()
+    payload["svgScheduler"] = (
+        svg_scheduler.snapshot()
+        if svg_scheduler is not None
+        else {
+            "enabled": settings.svg_scheduler_enabled,
+            "running": False,
+            "runnable_jobs": 0,
+            "pending_batches": 0,
+            "running_batches": 0,
+            "base_share": 0,
+            "remainder_slots": 0,
+            "granted_slots_by_job": {},
+            "queue_wait_p50": 0.0,
+            "queue_wait_p95": 0.0,
+            "underutilized_slots": 0,
+            "total_slots": 0,
+        }
+    )
     payload["asyncWorkers"] = {
         "configured": settings.async_worker_count,
         "running": len(worker_threads),
@@ -751,6 +790,17 @@ def _effective_svg_limit(
         return static_limit
     calculated = max(min_limit, int((budget * utilization) // observed))
     return min(hard_max, calculated)
+
+
+def _svg_scheduler_max_workers() -> int:
+    default_limit = max(settings.llm_svg_slots, settings.max_concurrent_jobs)
+    raw = (os.getenv("PPT_API_LLM_HARD_MAX_SVG_CONCURRENCY") or "").strip()
+    if not raw:
+        return default_limit
+    try:
+        return max(default_limit, int(raw))
+    except ValueError:
+        return default_limit
 
 
 def _build_job_dir(report_id: str) -> Path:
