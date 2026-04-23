@@ -78,6 +78,11 @@ DEFAULT_CANVAS_FORMAT = "ppt169"
 DEFAULT_PROJECT_BASE_DIR = "projects"
 DEFAULT_QWEN_MODEL = "qwen3.6-plus"
 DEFAULT_REVIEW_MODEL = "qwen3.6-plus"
+LANGUAGE_CONSISTENCY_RULE = (
+    "- Language lock: Infer the source-document language from the received JSON/imported source markdown; "
+    "all PPT-visible content, design_spec.md content, SVG text, and speaker notes must use that same language. "
+    "Do not translate to another language unless the source explicitly requests translation."
+)
 DEFAULT_MAX_FOLLOW_UPS = 8
 QWEN_CALL_TIMEOUT_SECONDS = 60 * 60
 DIRECT_NOTES_TIMEOUT_SECONDS = 10 * 60
@@ -3846,6 +3851,7 @@ Hard constraints:
 - Must include cover and ending pages
 - Content density should be moderately high
 - Stay faithful to the source markdown and emphasize key points
+{LANGUAGE_CONSISTENCY_RULE}
 - For H2 `创新技术` and `产业验证`, do not create a parent H2 slide; create one slide per H3 instead.
 - If those H2 sections contain intro text before the first H3, absorb that intro into the first child slide.
 - For all other H2 sections, create one slide per H2 and absorb H3 details into that slide.
@@ -3879,6 +3885,7 @@ Keep these constraints locked:
 - Cover and ending pages are required
 - Content density should stay moderately high
 - Stay faithful to the source and highlight key points
+{LANGUAGE_CONSISTENCY_RULE}
 - Lock icon usage to `{DEFAULT_ICON_LIBRARY}` only
 - Do not use emoji in the design spec
 - Use only real visualization templates from `templates/charts/`
@@ -3916,6 +3923,7 @@ Repair the existing files in place and keep all original hard constraints:
 - total page count must stay exactly {len(plan)}
 - cover and ending pages are required
 - stay faithful to the source and keep the content dense
+{LANGUAGE_CONSISTENCY_RULE}
 - keep icon usage locked to `{DEFAULT_ICON_LIBRARY}`
 - do not use emoji in the design spec
 - use only real visualization templates from `templates/charts/`
@@ -3959,6 +3967,7 @@ Review checklist:
 5. Improve weak icon choices or weak visualization choices when a clearly better existing option fits
 6. Keep the deck in light theme and free design
 7. Preserve downstream anchorability: reviewed layouts should still support a stable header/title/icon/footer geometry across long sequential SVG generation
+8. Preserve the language lock from the source document; do not translate design_spec.md or downstream visible content into another language
 
 Output requirements:
 - Repair `design_spec.md` if needed
@@ -4034,6 +4043,7 @@ Project boundaries:
 
 Executor constraints:
 - Use the reviewed `design_spec.md` as the single source of truth
+{LANGUAGE_CONSISTENCY_RULE}
 - Keep free design and light theme
 - Treat `{SVG_DESIGN_COOKBOOK_PATH.name}` as a mandatory SVG visual design guide after design-parameter confirmation
 - Use the full cookbook copy embedded in `{executor_skill_pack_path.name}`; do not separately read generic workflow docs such as `AGENTS.md`, `QWEN.md`, `SKILL.md`, or `repo_skill.md` during SVG generation
@@ -4118,6 +4128,7 @@ Project boundaries:
 
 Executor constraints:
 - Use the reviewed `design_spec.md` as the single source of truth
+{LANGUAGE_CONSISTENCY_RULE}
 - Keep free design and light theme
 - Treat `{SVG_DESIGN_COOKBOOK_PATH.name}` as the mandatory visual execution guide
 - Use the full cookbook copy embedded in `{executor_skill_pack_path.name}`; do not separately read generic workflow docs such as `AGENTS.md`, `QWEN.md`, `SKILL.md`, or `repo_skill.md` during SVG generation
@@ -4159,6 +4170,7 @@ Keep these constraints locked:
 - No TOC page
 - No section header / chapter divider page
 - Cover and ending pages are required
+{LANGUAGE_CONSISTENCY_RULE}
 - Lock icon usage to `{DEFAULT_ICON_LIBRARY}` only
 - Do not use emoji in SVG
 - Use only real visualization templates from `templates/charts/`
@@ -4181,6 +4193,7 @@ Keep these constraints locked:
 - Free design
 - Light theme only
 - Canvas: {request["canvas_format"]}
+{LANGUAGE_CONSISTENCY_RULE}
 - Lock icon usage to `{DEFAULT_ICON_LIBRARY}` only
 - Do not use emoji in SVG
 - Use only real visualization templates from `templates/charts/`
@@ -4224,6 +4237,7 @@ Repair the SVG and notes outputs in place and keep all hard constraints:
 - no TOC page
 - no section header page
 - total page count must stay exactly {len(plan)}
+{LANGUAGE_CONSISTENCY_RULE}
 - keep icon usage locked to `{DEFAULT_ICON_LIBRARY}`
 - do not use emoji in SVG
 - use only real visualization templates from `templates/charts/`
@@ -4259,6 +4273,7 @@ The current batch output is still failing these checks:
 Repair only the current batch SVG files in place and keep all hard constraints:
 - free design
 - light theme only
+{LANGUAGE_CONSISTENCY_RULE}
 - lock icon usage to `{DEFAULT_ICON_LIBRARY}`
 - do not use emoji in SVG
 - use only real visualization templates from `templates/charts/`
@@ -4304,7 +4319,7 @@ Notes requirements:
 - Generate one unified `notes/total.md`
 - Each page must start with `# <svg_stem>`
 - H1 headings must exactly match the slide-plan SVG stems
-- Keep the presentation language consistent with the deck content
+{LANGUAGE_CONSISTENCY_RULE}
 - Use the reviewed design spec and source markdown as the narrative source of truth
 - Write coherent transitions across the full deck; do not treat batches as separate decks
 - After writing `notes/total.md`, do not output any explanation, summary, file list, or confirmation text.
@@ -4335,6 +4350,7 @@ Keep these constraints locked:
 - Do not rewrite `design_spec.md`
 - Notes headings must exactly match these SVG stems:
   {", ".join(entry.note_heading for entry in plan)}
+{LANGUAGE_CONSISTENCY_RULE}
 - After repairing `notes/total.md`, do not output any explanation, summary, file list, or confirmation text.
 - The only allowed final assistant output is the sentinel line below.
 
@@ -4563,6 +4579,7 @@ Hard output contract:
 - Create exactly {len(plan)} H1 sections.
 - Each H1 must be exactly `# <svg_stem>` and must appear in the exact order listed below.
 - Do not create extra headings outside this list.
+{LANGUAGE_CONSISTENCY_RULE}
 - Use the source markdown and design spec as narrative context, but keep the notes concise and presentation-ready.
 - Each slide should have 2-5 short paragraphs or bullets suitable for speaker delivery.
 
@@ -4643,6 +4660,7 @@ Hard output contract:
 - Reference only real chart templates from the chart reference.
 - Do not use emoji in design_spec.md.
 - Stay faithful to source markdown and keep content density moderately high.
+{LANGUAGE_CONSISTENCY_RULE}
 
 Canvas format: {request["canvas_format"]}
 Project path: {project_path}

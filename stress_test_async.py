@@ -233,7 +233,7 @@ def main() -> int:
     parallel_batch_workers = env_int("PARALLEL_BATCH_WORKERS", 7, minimum=1)
     batch_partition = env_str("BATCH_PARTITION", "fixed")
     spec_model = env_str("SPEC_MODEL", "qwen3.6-plus")
-    notes_model = env_str("NOTES_MODEL", "qwen3.6-plus")
+    notes_model = env_str("NOTES_MODEL", "qwen3.6-flash")
     stagger_seconds = env_int("STAGGER_SECONDS", 0, minimum=0)
     response_mode = env_str("RESPONSE_MODE", "async")
     callback_mode = env_str("CALLBACK_MODE", "none")
