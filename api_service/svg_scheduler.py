@@ -180,8 +180,8 @@ def compute_scheduler_grants(
 
     def priority(job_id: str) -> tuple[float, int, str]:
         return (
-            job_oldest_pending_at.get(job_id, math.inf),
             historical_grants.get(job_id, 0),
+            job_oldest_pending_at.get(job_id, math.inf),
             job_id,
         )
 
@@ -519,8 +519,9 @@ class SvgScheduler:
         ]
         launch_candidates.sort(
             key=lambda job_id: (
-                job_oldest_pending_at.get(job_id, math.inf),
                 historical_grants.get(job_id, 0),
+                len(running_by_job.get(job_id, [])),
+                job_oldest_pending_at.get(job_id, math.inf),
                 job_id,
             )
         )
