@@ -4865,6 +4865,7 @@ def run_qwen_prompt(
 
     stage = infer_slot_stage(artifact_prefix)
     label = f"{artifact_prefix}_turn_{turn_index:02d}"
+    account_id = credential_override.get("account_id") if credential_override else None
     wait_for_local_qwen_start(stage, label=label, log_path=log_path)
     wait_for_svg_start_jitter(stage, label=f"{runner_dir.name}:{label}", log_path=log_path)
     safe_command = redact_sensitive_command_parts(command)
