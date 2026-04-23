@@ -8,12 +8,14 @@ This API supports two response modes:
 ## Required Redis Configuration
 
 ```env
-REDIS_URL=redis://redis:6379/0
+REDIS_URL=redis://:<password>@<server-1-private-ip>:6379/0
 PPT_REDIS_KEY_PREFIX=ppt
 PPT_API_ASYNC_WORKERS=15
 ```
 
-`docker-compose.yml` includes a Redis service and wires `REDIS_URL` into `ppt-master-api`.
+For multi-server deployment, start the shared Redis separately from `deploy/redis/` and point every
+`ppt-master-api` container at the same `REDIS_URL`. The repository `docker-compose.yml` starts only
+the API container and reads `REDIS_URL` from `.env.api`.
 
 ## Async Request Example
 

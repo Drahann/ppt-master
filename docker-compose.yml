@@ -1,19 +1,9 @@
 services:
-  redis:
-    image: redis:7-alpine
-    container_name: ppt-master-redis
-    command: ["redis-server", "--appendonly", "yes"]
-    volumes:
-      - redis-data:/data
-    restart: unless-stopped
-
   ppt-master-api:
     build: .
     container_name: ppt-master-api
-    depends_on:
-      - redis
     ports:
-      - "3001:3000"
+      - "${PPT_API_HOST_PORT:-3001}:3000"
     env_file:
       - .env.api
     environment:
@@ -26,6 +16,3 @@ services:
       - ./tmp:/app/tmp
       - ./secrets:/app/secrets:ro
     restart: unless-stopped
-
-volumes:
-  redis-data:
