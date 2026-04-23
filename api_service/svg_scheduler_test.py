@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import time
@@ -284,8 +285,31 @@ class RedisAccountPoolTests(unittest.TestCase):
         snapshot = pool.snapshot()
 
         self.assertEqual(result, "success")
-        self.assertEqual(snapshot["accounts"][0]["live_tpm_60s"], 123)
+        self.assertEqual(snapshot["accounts"][0]["live_tpm_60s"], 0)
         self.assertEqual(snapshot["accounts"][0]["active_leases"], 0)
+
+    def test_release_can_record_usage_when_legacy_release_accounting_is_enabled(self) -> None:
+        previous = os.environ.get("PPT_API_QWEN_ACCOUNT_POOL_RECORD_RELEASE_USAGE")
+        os.environ["PPT_API_QWEN_ACCOUNT_POOL_RECORD_RELEASE_USAGE"] = "1"
+        try:
+            client = FakeRedis()
+            pool = RedisAccountPool(
+                client,
+                [AccountPoolEntry("account-a", "key-a", tpm_limit=1000)],
+                key_prefix="test",
+            )
+            lease = pool.acquire(label="batch-1")
+            assert lease is not None
+
+            pool.release(lease, usage={"total_tokens": 123})
+            snapshot = pool.snapshot()
+
+            self.assertEqual(snapshot["accounts"][0]["live_tpm_60s"], 123)
+        finally:
+            if previous is None:
+                os.environ.pop("PPT_API_QWEN_ACCOUNT_POOL_RECORD_RELEASE_USAGE", None)
+            else:
+                os.environ["PPT_API_QWEN_ACCOUNT_POOL_RECORD_RELEASE_USAGE"] = previous
 
     def test_rate_limit_cooldown_and_auth_disable_account(self) -> None:
         client = FakeRedis()

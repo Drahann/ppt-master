@@ -1959,6 +1959,10 @@ def redis_live_stage_key(stage: str) -> str:
     return redis_key(f"llm:live:{stage}:tokens")
 
 
+def redis_account_live_key(account_id: str) -> str:
+    return redis_key(f"qwen_account_pool:account:{sanitize_token(account_id)}:live_tokens")
+
+
 def record_live_stage_usage(
     stage: str,
     summary: TurnUsageSummary,
@@ -1966,6 +1970,7 @@ def record_live_stage_usage(
     event_epoch: float,
     session_id: str,
     label: str,
+    account_id: str | None = None,
     log_path: Path | None = None,
 ) -> None:
     if summary.total_tokens <= 0:
@@ -1979,6 +1984,11 @@ def record_live_stage_usage(
         client.zremrangebyscore(redis_live_stage_key(stage), "-inf", f"{event_epoch - window_seconds:.6f}")
         client.zadd(redis_live_stage_key(stage), {member: event_epoch})
         client.expire(redis_live_stage_key(stage), window_seconds * 4)
+        if account_id:
+            account_key = redis_account_live_key(account_id)
+            client.zremrangebyscore(account_key, "-inf", f"{event_epoch - window_seconds:.6f}")
+            client.zadd(account_key, {member: event_epoch})
+            client.expire(account_key, window_seconds * 4)
     except Exception as exc:
         if log_path is not None:
             append_log(log_path, f"Failed to record Redis live {stage} usage: {exc}")
@@ -2761,6 +2771,7 @@ def monitor_qwen_live_usage(
     turn_index: int,
     initial_chat_path: Path | None,
     initial_line_count: int,
+    account_id: str | None = None,
     log_path: Path | None = None,
 ) -> None:
     if not live_usage_enabled(stage):
@@ -2802,6 +2813,7 @@ def monitor_qwen_live_usage(
                         event_epoch=event_epoch,
                         session_id=session_id,
                         label=label,
+                        account_id=account_id,
                         log_path=log_path,
                     )
                 while rolling_events and rolling_events[0][0] < now - window_seconds:
@@ -4326,6 +4338,7 @@ def call_openai_compatible_chat(
     )
     stage = infer_slot_stage(artifact_prefix)
     label = f"{artifact_prefix}_turn_{turn_index:02d}"
+    account_id = credential_override.get("account_id") if credential_override else None
     wait_for_local_qwen_start(stage, label=label, log_path=log_path)
     with acquire_resource_slot(
         stage,
@@ -4901,6 +4914,7 @@ def run_qwen_prompt(
                         "turn_index": turn_index,
                         "initial_chat_path": existing_chat_path,
                         "initial_line_count": existing_chat_line_count,
+                        "account_id": account_id,
                         "log_path": log_path,
                     },
                     name=f"qwen-live-usage-{sanitize_token(label)}",

@@ -334,7 +334,7 @@ class RedisAccountPool:
         result = classify_account_error(error)
         if account is not None:
             total_tokens = _usage_total_tokens(usage)
-            if total_tokens > 0:
+            if total_tokens > 0 and _env_bool("PPT_API_QWEN_ACCOUNT_POOL_RECORD_RELEASE_USAGE", False):
                 self.record_usage(account.account_id, total_tokens, lease_id=lease.lease_id)
             self.report_result(account.account_id, result=result, error=error)
             self.client.zrem(self._leases_key(account), lease.lease_id)
@@ -552,6 +552,10 @@ def _safe_bool(value: Any, default: bool) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    return _safe_bool(os.getenv(name), default)
 
 
 def _usage_total_tokens(usage: dict[str, Any] | None) -> int:
