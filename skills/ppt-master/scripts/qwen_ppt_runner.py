@@ -29,7 +29,10 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from threading import Lock, Thread
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from api_service.svg_scheduler import RedisSvgSchedulerStore as RedisSvgSchedulerStoreType
 
 try:
     from config import REPO_ROOT, PROJECTS_DIR
@@ -967,7 +970,7 @@ def centralized_svg_scheduler_enabled(log_path: Path | None = None) -> bool:
     return get_runner_redis_client(log_path) is not None
 
 
-def get_svg_scheduler_store(log_path: Path | None = None) -> RedisSvgSchedulerStore | None:
+def get_svg_scheduler_store(log_path: Path | None = None) -> RedisSvgSchedulerStoreType | None:
     if RedisSvgSchedulerStore is None:
         return None
     client = get_runner_redis_client(log_path)
@@ -5724,7 +5727,7 @@ def execute_parallel_svg_generation_centralized(
 
 def wait_for_centralized_svg_tasks(
     *,
-    store: RedisSvgSchedulerStore,
+    store: RedisSvgSchedulerStoreType,
     task_ids: list[str],
     task_id_to_batch_index: dict[str, int],
     owner_job_id: str,
