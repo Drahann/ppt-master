@@ -253,10 +253,13 @@ class RedisAccountPool:
         owner_task_id: str | None = None,
         worker_request_path: str | None = None,
         estimated_tokens: int = 0,
+        reserved_tpm: int | None = None,
+        stage: str | None = None,
     ) -> AccountLease | None:
         if not self.accounts:
             return None
 
+        startup_reserve_tpm = max(0, int(reserved_tpm if reserved_tpm is not None else estimated_tokens))
         with self._pool_lock() as locked:
             if not locked:
                 self.client.hincrby(self.global_stats_key, "denied", 1)
@@ -267,10 +270,15 @@ class RedisAccountPool:
             denied_accounts: list[AccountPoolEntry] = []
             for account in self.accounts:
                 runtime = self._runtime(account, now=now)
-                if self._is_runtime_available(account, runtime, now=now, estimated_tokens=estimated_tokens):
+                if self._is_runtime_available(
+                    account,
+                    runtime,
+                    now=now,
+                    startup_reserve_tpm=startup_reserve_tpm,
+                ):
                     candidates.append(
                         (
-                            int(runtime["live_tpm_60s"]),
+                            int(runtime["accounted_tpm"]),
                             int(runtime["active_leases"]),
                             float(runtime["last_used_at"]),
                             account.account_id,
@@ -295,11 +303,13 @@ class RedisAccountPool:
                     "lease_id": lease_id,
                     "account_id": account.account_id,
                     "label": label,
+                    "stage": stage or "",
                     "owner_task_id": owner_task_id or "",
                     "worker_request_path": worker_request_path or "",
                     "created_at": f"{now:.6f}",
                     "expires_at": f"{expires_at:.6f}",
                     "estimated_tokens": str(max(0, int(estimated_tokens))),
+                    "reserved_tpm": str(startup_reserve_tpm),
                 },
             )
             self.client.expire(self._lease_key(lease_id), self.lease_ttl_seconds)
@@ -385,6 +395,9 @@ class RedisAccountPool:
                     "model": account.model,
                     "base_url": account.base_url,
                     "live_tpm_60s": runtime["live_tpm_60s"],
+                    "active_reserved_tpm": runtime["active_reserved_tpm"],
+                    "accounted_tpm": runtime["accounted_tpm"],
+                    "available_tpm": max(0, account.tpm_budget - int(runtime["accounted_tpm"])),
                     "active_leases": runtime["active_leases"],
                     "cooldown_until": runtime["cooldown_until"],
                     "enabled": runtime["enabled"],
@@ -410,13 +423,18 @@ class RedisAccountPool:
     def _runtime(self, account: AccountPoolEntry, *, now: float) -> dict[str, Any]:
         self._cleanup_expired_leases(account, now)
         live_tpm = self._live_tpm(account, now)
-        active_leases = len(self.client.zrangebyscore(self._leases_key(account), now, "+inf"))
+        active_lease_ids = [str(item) for item in self.client.zrangebyscore(self._leases_key(account), now, "+inf")]
+        active_leases = len(active_lease_ids)
+        active_reserved_tpm = self._active_reserved_tpm(active_lease_ids)
         state = self.client.hgetall(self._state_key(account)) or {}
         disabled = _safe_bool(state.get("disabled"), False)
         config_enabled = _safe_bool(state.get("enabled_config"), account.enabled)
         cooldown_until = _safe_float(state.get("cooldown_until"), 0.0)
+        accounted_tpm = live_tpm + active_reserved_tpm
         return {
             "live_tpm_60s": live_tpm,
+            "active_reserved_tpm": active_reserved_tpm,
+            "accounted_tpm": accounted_tpm,
             "active_leases": active_leases,
             "cooldown_until": cooldown_until if cooldown_until > now else None,
             "enabled": account.enabled and config_enabled and not disabled,
@@ -432,7 +450,7 @@ class RedisAccountPool:
         runtime: dict[str, Any],
         *,
         now: float,
-        estimated_tokens: int,
+        startup_reserve_tpm: int,
     ) -> bool:
         if not runtime["enabled"]:
             return False
@@ -441,9 +459,20 @@ class RedisAccountPool:
             return False
         if int(runtime["active_leases"]) >= account.max_parallel_turns:
             return False
-        if int(runtime["live_tpm_60s"]) + max(0, int(estimated_tokens)) >= account.tpm_budget:
+        accounted_tpm = int(runtime["live_tpm_60s"]) + int(runtime["active_reserved_tpm"])
+        if accounted_tpm + max(0, int(startup_reserve_tpm)) > account.tpm_budget:
             return False
         return True
+
+    def _active_reserved_tpm(self, lease_ids: list[str]) -> int:
+        total = 0
+        for lease_id in lease_ids:
+            payload = self.client.hgetall(self._lease_key(lease_id)) or {}
+            reserve = _safe_int(payload.get("reserved_tpm"), 0)
+            if reserve <= 0:
+                reserve = _safe_int(payload.get("estimated_tokens"), 0)
+            total += max(0, reserve)
+        return total
 
     def _live_tpm(self, account: AccountPoolEntry, now: float) -> int:
         self._cleanup_live_tokens(account, now)

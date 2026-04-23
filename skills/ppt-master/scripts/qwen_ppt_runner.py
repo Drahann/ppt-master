@@ -61,6 +61,13 @@ except Exception:  # pragma: no cover - fallback when api_service import is unav
     SVG_TASK_SUCCEEDED = "succeeded"
     SVG_TASK_FAILED = "failed"
 
+try:
+    from api_service.account_pool import AccountLease, RedisAccountPool, load_account_pool_entries
+except Exception:  # pragma: no cover - runner can operate without the API package import
+    AccountLease = None  # type: ignore[assignment]
+    RedisAccountPool = None  # type: ignore[assignment]
+    load_account_pool_entries = None  # type: ignore[assignment]
+
 
 COMPLETION_SENTINEL_PREFIX = "PPT_RUN_COMPLETE:"
 SPEC_COMPLETION_SENTINEL_PREFIX = "PPT_SPEC_COMPLETE:"
@@ -134,6 +141,8 @@ LLM_SLOT_WAIT_TIMEOUT_SECONDS = 2 * 60 * 60
 SVG_FAIR_SHARE_DELAY_SECONDS = 8
 REDIS_CLIENT = None
 REDIS_CLIENT_LOCK = Lock()
+RUNNER_ACCOUNT_POOL = None
+RUNNER_ACCOUNT_POOL_LOCK = Lock()
 QWEN_TURN_START_LOCK = Lock()
 QWEN_TURN_LAST_START: dict[str, float] = {}
 BATCH_PARTITION_REPEAT_SENTINEL = "+"
@@ -962,6 +971,29 @@ def get_svg_scheduler_store(log_path: Path | None = None) -> RedisSvgSchedulerSt
     return RedisSvgSchedulerStore(client, key_prefix=redis_key_prefix())
 
 
+def get_runner_account_pool(log_path: Path | None = None):
+    global RUNNER_ACCOUNT_POOL
+    if RedisAccountPool is None or load_account_pool_entries is None:
+        return None
+    client = get_runner_redis_client(log_path)
+    if client is None:
+        return None
+    try:
+        accounts = load_account_pool_entries()
+    except Exception as exc:
+        if log_path is not None:
+            append_log(log_path, f"Qwen account pool unavailable in runner: {exc}")
+        return None
+    if not accounts:
+        return None
+    with RUNNER_ACCOUNT_POOL_LOCK:
+        if RUNNER_ACCOUNT_POOL is None:
+            RUNNER_ACCOUNT_POOL = RedisAccountPool(client, accounts, key_prefix=redis_key_prefix())
+        else:
+            RUNNER_ACCOUNT_POOL.sync_accounts()
+        return RUNNER_ACCOUNT_POOL
+
+
 def redis_dynamic_svg_limit(default_limit: int) -> int:
     budget_tpm = env_int("PPT_API_LLM_BUDGET_TPM", 0, minimum=0)
     if budget_tpm <= 0:
@@ -1045,6 +1077,74 @@ def redis_stage_token_estimate(stage: str, client=None, *, window_seconds: int =
     if observed <= 0:
         return max(1, math.ceil(default_tokens * safety_factor))
     return max(1, math.ceil(observed * safety_factor))
+
+
+def qwen_account_pool_stage_reserve_tpm(stage: str, client=None) -> int:
+    normalized = stage if stage in {"svg", "spec", "notes"} else "generic"
+    stage_key = normalized.upper()
+    stage_override = env_int(f"PPT_API_QWEN_ACCOUNT_POOL_{stage_key}_STARTUP_RESERVE_TPM", 0, minimum=0)
+    if stage_override > 0:
+        return stage_override
+    global_override = env_int("PPT_API_QWEN_ACCOUNT_POOL_STARTUP_RESERVE_TPM", 0, minimum=0)
+    if global_override > 0:
+        return global_override
+    client = client or get_runner_redis_client()
+    if normalized == "svg":
+        reserve_seconds = env_float(
+            "PPT_API_QWEN_ACCOUNT_POOL_SVG_STARTUP_RESERVE_SECONDS",
+            env_float("PPT_API_SVG_LIVE_TPM_STARTUP_RESERVE_SECONDS", 15.0, minimum=1.0, maximum=60.0),
+            minimum=1.0,
+            maximum=60.0,
+        )
+        return max(1, math.ceil(redis_svg_worker_tpm_estimate(client) * (reserve_seconds / 60.0)))
+    return redis_stage_token_estimate(normalized, client, window_seconds=live_tpm_window_seconds())
+
+
+def acquire_runner_account_lease(
+    *,
+    stage: str,
+    label: str,
+    runner_dir: Path,
+    log_path: Path | None = None,
+) -> tuple[Any | None, Any | None]:
+    pool = get_runner_account_pool(log_path)
+    if pool is None or not getattr(pool, "configured", False):
+        return None, None
+
+    client = get_runner_redis_client(log_path)
+    reserve_tpm = qwen_account_pool_stage_reserve_tpm(stage, client)
+    wait_timeout = env_int("PPT_API_QWEN_ACCOUNT_POOL_WAIT_TIMEOUT_SECONDS", LLM_SLOT_WAIT_TIMEOUT_SECONDS, minimum=60)
+    retry_seconds = env_float("PPT_API_QWEN_ACCOUNT_POOL_RETRY_SECONDS", 2.0, minimum=0.2, maximum=30.0)
+    started = time.time()
+    last_wait_log = 0.0
+
+    while True:
+        lease = pool.acquire(
+            label=f"{stage}:{label}",
+            owner_task_id=label,
+            worker_request_path=str(runner_dir),
+            estimated_tokens=reserve_tpm,
+            reserved_tpm=reserve_tpm,
+            stage=stage,
+        )
+        if lease is not None:
+            if log_path is not None:
+                append_log(
+                    log_path,
+                    f"Acquired Qwen account lease for {stage}: account_id={lease.account_id} "
+                    f"reserve_tpm={reserve_tpm} label={label}",
+                )
+            return pool, lease
+
+        if time.time() - started > wait_timeout:
+            raise RunnerError(f"Timed out waiting for Qwen account pool after {wait_timeout}s: stage={stage} label={label}")
+        if log_path is not None and time.time() - last_wait_log >= 30:
+            append_log(
+                log_path,
+                f"Waiting for Qwen account pool: stage={stage} reserve_tpm={reserve_tpm} label={label}",
+            )
+            last_wait_log = time.time()
+        time.sleep(retry_seconds)
 
 
 def wait_for_redis_tpm_budget(client, stage: str, *, label: str, log_path: Path | None = None) -> None:
@@ -1490,6 +1590,22 @@ def wait_for_local_qwen_start(stage: str, *, label: str, log_path: Path | None =
                 )
             time.sleep(wait_seconds)
         QWEN_TURN_LAST_START[key] = time.time()
+
+
+def wait_for_qwen_repair_turn_backoff(stage: str, *, label: str, turn_index: int, log_path: Path | None = None) -> None:
+    if turn_index <= 1:
+        return
+    stage_key = stage.upper()
+    delay_seconds = env_float(
+        f"PPT_API_{stage_key}_QWEN_REPAIR_TURN_BACKOFF_SECONDS",
+        env_float("PPT_API_QWEN_REPAIR_TURN_BACKOFF_SECONDS", 0.0, minimum=0.0),
+        minimum=0.0,
+    )
+    if delay_seconds <= 0:
+        return
+    if log_path is not None:
+        append_log(log_path, f"Qwen repair turn backoff for {stage}: waiting {delay_seconds:.1f}s label={label}")
+    time.sleep(delay_seconds)
 
 
 def stable_delay_seconds(label: str, max_seconds: int) -> int:
@@ -4311,71 +4427,112 @@ def call_openai_compatible_chat(
     timeout_seconds: int = DIRECT_NOTES_TIMEOUT_SECONDS,
     credential_override: dict[str, str] | None = None,
 ) -> tuple[str, TurnUsageSummary, dict[str, Any]]:
-    endpoint = resolve_openai_compatible_endpoint(credential_override)
-    if endpoint is None:
-        raise RunnerError("Direct API requires PPT_API_QWEN_API_KEY and PPT_API_QWEN_BASE_URL")
-    api_key, url = endpoint
-
-    request_payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0.2,
-        "max_tokens": max_tokens,
-    }
-    request_path = runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.request.json"
-    safe_payload = dict(request_payload)
-    request_path.write_text(json.dumps(safe_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-    encoded = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
-    request = urllib.request.Request(
-        url,
-        data=encoded,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
     stage = infer_slot_stage(artifact_prefix)
     label = f"{artifact_prefix}_turn_{turn_index:02d}"
-    account_id = credential_override.get("account_id") if credential_override else None
-    wait_for_local_qwen_start(stage, label=label, log_path=log_path)
-    with acquire_resource_slot(
-        stage,
-        label=label,
-        runner_dir=runner_dir,
-        log_path=log_path,
-    ):
-        request_started = time.time()
-        try:
-            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-                response_text = response.read().decode("utf-8", errors="replace")
-        except urllib.error.HTTPError as exc:
-            error_text = exc.read().decode("utf-8", errors="replace")
-            raise RunnerError(f"Direct API HTTP {exc.code}: {error_text}") from exc
-        except urllib.error.URLError as exc:
-            raise RunnerError(f"Direct API request failed: {exc}") from exc
-        elapsed_seconds = time.time() - request_started
+    managed_pool = None
+    managed_lease = None
+    effective_credential_override = credential_override
+    usage: TurnUsageSummary | None = None
+    release_error: str | None = None
 
-    response_path = runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.response.json"
-    response_path.write_text(response_text, encoding="utf-8")
     try:
-        payload = json.loads(response_text)
-    except json.JSONDecodeError as exc:
-        raise RunnerError(f"Direct API returned invalid JSON: {exc}") from exc
+        if effective_credential_override is None:
+            managed_pool, managed_lease = acquire_runner_account_lease(
+                stage=stage,
+                label=label,
+                runner_dir=runner_dir,
+                log_path=log_path,
+            )
+            if managed_lease is not None:
+                effective_credential_override = managed_lease.worker_payload()
 
-    choices = payload.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise RunnerError("Direct API returned no choices")
-    message = choices[0].get("message") if isinstance(choices[0], dict) else None
-    content = message.get("content") if isinstance(message, dict) else None
-    if not isinstance(content, str) or not content.strip():
-        raise RunnerError("Direct API returned empty content")
+        endpoint = resolve_openai_compatible_endpoint(effective_credential_override)
+        if endpoint is None:
+            raise RunnerError("Direct API requires PPT_API_QWEN_API_KEY and PPT_API_QWEN_BASE_URL")
+        api_key, url = endpoint
+        effective_model = (effective_credential_override or {}).get("model") or model
 
-    usage = notes_usage_from_response(payload, model)
-    record_llm_observation(stage=stage, model=model, usage=usage, elapsed_seconds=elapsed_seconds, log_path=log_path)
-    (runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.assistant.txt").write_text(content, encoding="utf-8")
-    return content, usage, payload
+        request_payload = {
+            "model": effective_model,
+            "messages": messages,
+            "temperature": 0.2,
+            "max_tokens": max_tokens,
+        }
+        request_path = runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.request.json"
+        safe_payload = dict(request_payload)
+        request_path.write_text(json.dumps(safe_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        encoded = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(
+            url,
+            data=encoded,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        account_id = (effective_credential_override or {}).get("account_id")
+        wait_for_qwen_repair_turn_backoff(stage, label=label, turn_index=turn_index, log_path=log_path)
+        wait_for_local_qwen_start(stage, label=label, log_path=log_path)
+        with acquire_resource_slot(
+            stage,
+            label=label,
+            runner_dir=runner_dir,
+            log_path=log_path,
+        ):
+            request_started = time.time()
+            try:
+                with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+                    response_text = response.read().decode("utf-8", errors="replace")
+            except urllib.error.HTTPError as exc:
+                error_text = exc.read().decode("utf-8", errors="replace")
+                raise RunnerError(f"Direct API HTTP {exc.code}: {error_text}") from exc
+            except urllib.error.URLError as exc:
+                raise RunnerError(f"Direct API request failed: {exc}") from exc
+            elapsed_seconds = time.time() - request_started
+
+        response_path = runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.response.json"
+        response_path.write_text(response_text, encoding="utf-8")
+        try:
+            payload = json.loads(response_text)
+        except json.JSONDecodeError as exc:
+            raise RunnerError(f"Direct API returned invalid JSON: {exc}") from exc
+
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise RunnerError("Direct API returned no choices")
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            raise RunnerError("Direct API returned empty content")
+
+        usage = notes_usage_from_response(payload, effective_model)
+        record_llm_observation(stage=stage, model=effective_model, usage=usage, elapsed_seconds=elapsed_seconds, log_path=log_path)
+        record_live_stage_usage(
+            stage,
+            usage,
+            event_epoch=time.time(),
+            session_id=f"direct_{uuid.uuid4().hex}",
+            label=label,
+            account_id=account_id,
+            log_path=log_path,
+        )
+        (runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.assistant.txt").write_text(content, encoding="utf-8")
+        return content, usage, payload
+    except Exception as exc:
+        release_error = str(exc)
+        raise
+    finally:
+        if managed_pool is not None and managed_lease is not None:
+            try:
+                managed_pool.release(
+                    managed_lease,
+                    usage=usage.to_json() if usage is not None else None,
+                    error=release_error,
+                )
+            except Exception:
+                pass
 
 
 def build_direct_notes_messages(
@@ -4849,124 +5006,156 @@ def run_qwen_prompt(
     artifact_prefix: str = "qwen",
     credential_override: dict[str, str] | None = None,
 ) -> QwenCallResult:
-    command = resolve_qwen_launcher()
-    command.extend(resolve_qwen_cli_auth_args(credential_override))
-    existing_chat_path = find_chat_recording_path(session_id)
-    existing_chat_line_count = count_file_lines(existing_chat_path)
-    if resume:
-        command.extend(["--resume", session_id])
-    else:
-        command.extend(["--session-id", session_id])
-    command.extend(["--prompt", "", "--chat-recording", "--approval-mode", "yolo"])
-    for tool_name in QWEN_ALLOWED_TOOLS:
-        command.extend(["--allowed-tools", tool_name])
-    if model:
-        command.extend(["--model", model])
-
     stage = infer_slot_stage(artifact_prefix)
     label = f"{artifact_prefix}_turn_{turn_index:02d}"
-    account_id = credential_override.get("account_id") if credential_override else None
-    wait_for_local_qwen_start(stage, label=label, log_path=log_path)
-    wait_for_svg_start_jitter(stage, label=f"{runner_dir.name}:{label}", log_path=log_path)
-    safe_command = redact_sensitive_command_parts(command)
-    account_note = ""
-    if credential_override and credential_override.get("account_id"):
-        account_note = f" account_id={credential_override['account_id']}"
-    append_log(log_path, f"Starting qwen turn {turn_index}:{account_note} {' '.join(safe_command)} (prompt via stdin, {len(prompt)} chars)")
+    managed_pool = None
+    managed_lease = None
+    effective_credential_override = credential_override
+    usage_summary: TurnUsageSummary | None = None
+    usage_payload: dict[str, Any] | None = None
+    release_error: str | None = None
     completed_stdout = ""
     completed_stderr = ""
     completed_returncode = 0
     elapsed_seconds = 0.0
-    with acquire_svg_budget_lease(
-        stage,
-        label=f"{runner_dir.name}:{label}",
-        runner_dir=runner_dir,
-        log_path=log_path,
-    ) as svg_budget_lease:
-        with acquire_resource_slot(
+
+    try:
+        if effective_credential_override is None:
+            managed_pool, managed_lease = acquire_runner_account_lease(
+                stage=stage,
+                label=label,
+                runner_dir=runner_dir,
+                log_path=log_path,
+            )
+            if managed_lease is not None:
+                effective_credential_override = managed_lease.worker_payload()
+
+        effective_model = (effective_credential_override or {}).get("model") or model
+        command = resolve_qwen_launcher()
+        command.extend(resolve_qwen_cli_auth_args(effective_credential_override))
+        existing_chat_path = find_chat_recording_path(session_id)
+        existing_chat_line_count = count_file_lines(existing_chat_path)
+        if resume:
+            command.extend(["--resume", session_id])
+        else:
+            command.extend(["--session-id", session_id])
+        command.extend(["--prompt", "", "--chat-recording", "--approval-mode", "yolo"])
+        for tool_name in QWEN_ALLOWED_TOOLS:
+            command.extend(["--allowed-tools", tool_name])
+        if effective_model:
+            command.extend(["--model", effective_model])
+
+        account_id = (effective_credential_override or {}).get("account_id")
+        wait_for_qwen_repair_turn_backoff(stage, label=label, turn_index=turn_index, log_path=log_path)
+        wait_for_local_qwen_start(stage, label=label, log_path=log_path)
+        wait_for_svg_start_jitter(stage, label=f"{runner_dir.name}:{label}", log_path=log_path)
+        safe_command = redact_sensitive_command_parts(command)
+        account_note = ""
+        if account_id:
+            account_note = f" account_id={account_id}"
+        append_log(log_path, f"Starting qwen turn {turn_index}:{account_note} {' '.join(safe_command)} (prompt via stdin, {len(prompt)} chars)")
+
+        with acquire_svg_budget_lease(
             stage,
-            label=label,
+            label=f"{runner_dir.name}:{label}",
             runner_dir=runner_dir,
             log_path=log_path,
-            skip_tpm_pacing=svg_budget_lease is not None,
-        ):
-            run_started = time.time()
-            process = subprocess.Popen(
-                command,
-                cwd=repo_root,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
-            monitor_thread: Thread | None = None
-            if live_usage_enabled(stage):
-                monitor_thread = Thread(
-                    target=monitor_qwen_live_usage,
-                    kwargs={
-                        "process": process,
-                        "session_id": session_id,
-                        "stage": stage,
-                        "label": label,
-                        "runner_dir": runner_dir,
-                        "artifact_prefix": artifact_prefix,
-                        "turn_index": turn_index,
-                        "initial_chat_path": existing_chat_path,
-                        "initial_line_count": existing_chat_line_count,
-                        "account_id": account_id,
-                        "log_path": log_path,
-                    },
-                    name=f"qwen-live-usage-{sanitize_token(label)}",
-                    daemon=True,
+        ) as svg_budget_lease:
+            with acquire_resource_slot(
+                stage,
+                label=label,
+                runner_dir=runner_dir,
+                log_path=log_path,
+                skip_tpm_pacing=svg_budget_lease is not None,
+            ):
+                run_started = time.time()
+                process = subprocess.Popen(
+                    command,
+                    cwd=repo_root,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
                 )
-                monitor_thread.start()
-            try:
-                stdout_text, stderr_text = process.communicate(input=prompt, timeout=QWEN_CALL_TIMEOUT_SECONDS)
-            except subprocess.TimeoutExpired as exc:
-                process.kill()
-                stdout_text, stderr_text = process.communicate()
+                monitor_thread: Thread | None = None
+                if live_usage_enabled(stage):
+                    monitor_thread = Thread(
+                        target=monitor_qwen_live_usage,
+                        kwargs={
+                            "process": process,
+                            "session_id": session_id,
+                            "stage": stage,
+                            "label": label,
+                            "runner_dir": runner_dir,
+                            "artifact_prefix": artifact_prefix,
+                            "turn_index": turn_index,
+                            "initial_chat_path": existing_chat_path,
+                            "initial_line_count": existing_chat_line_count,
+                            "account_id": account_id,
+                            "log_path": log_path,
+                        },
+                        name=f"qwen-live-usage-{sanitize_token(label)}",
+                        daemon=True,
+                    )
+                    monitor_thread.start()
+                try:
+                    stdout_text, stderr_text = process.communicate(input=prompt, timeout=QWEN_CALL_TIMEOUT_SECONDS)
+                except subprocess.TimeoutExpired as exc:
+                    process.kill()
+                    stdout_text, stderr_text = process.communicate()
+                    if monitor_thread is not None:
+                        monitor_thread.join(timeout=max(2.0, live_usage_poll_seconds() * 3))
+                    raise RunnerError(f"Qwen turn timed out after {QWEN_CALL_TIMEOUT_SECONDS}s: {label}") from exc
+                elapsed_seconds = time.time() - run_started
+                completed_stdout = stdout_text
+                completed_stderr = stderr_text
+                completed_returncode = safe_int(process.returncode)
                 if monitor_thread is not None:
                     monitor_thread.join(timeout=max(2.0, live_usage_poll_seconds() * 3))
-                raise RunnerError(f"Qwen turn timed out after {QWEN_CALL_TIMEOUT_SECONDS}s: {label}") from exc
-            elapsed_seconds = time.time() - run_started
-            completed_stdout = stdout_text
-            completed_stderr = stderr_text
-            completed_returncode = safe_int(process.returncode)
-            if monitor_thread is not None:
-                monitor_thread.join(timeout=max(2.0, live_usage_poll_seconds() * 3))
 
-    (runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.stdout.txt").write_text(
-        completed_stdout,
-        encoding="utf-8",
-    )
-    (runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.stderr.txt").write_text(
-        completed_stderr,
-        encoding="utf-8",
-    )
-    chat_path = wait_for_chat_recording_path(session_id)
-    usage_summary = summarize_usage_from_records(
-        session_id,
-        read_chat_records_after_line(chat_path, existing_chat_line_count),
-    )
-    record_llm_observation(stage=stage, model=model, usage=usage_summary, elapsed_seconds=elapsed_seconds, log_path=log_path)
-    usage_payload = usage_summary.to_json() if usage_summary else None
-    if usage_payload is not None:
-        write_json(
-            runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.usage.json",
-            usage_payload,
+        (runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.stdout.txt").write_text(
+            completed_stdout,
+            encoding="utf-8",
         )
-    append_log(
-        log_path,
-        f"Finished qwen turn {turn_index} with rc={completed_returncode}; stdout={len(completed_stdout)} chars stderr={len(completed_stderr)} chars; {format_usage_summary(usage_summary)}",
-    )
-    return QwenCallResult(
-        returncode=completed_returncode,
-        stdout=completed_stdout,
-        stderr=completed_stderr,
-        usage=usage_payload,
-    )
+        (runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.stderr.txt").write_text(
+            completed_stderr,
+            encoding="utf-8",
+        )
+        chat_path = wait_for_chat_recording_path(session_id)
+        usage_summary = summarize_usage_from_records(
+            session_id,
+            read_chat_records_after_line(chat_path, existing_chat_line_count),
+        )
+        record_llm_observation(stage=stage, model=effective_model, usage=usage_summary, elapsed_seconds=elapsed_seconds, log_path=log_path)
+        usage_payload = usage_summary.to_json() if usage_summary else None
+        if usage_payload is not None:
+            write_json(
+                runner_dir / f"{artifact_prefix}_turn_{turn_index:02d}.usage.json",
+                usage_payload,
+            )
+        if completed_returncode != 0:
+            release_error = completed_stderr.strip() or completed_stdout.strip() or f"qwen exited with rc={completed_returncode}"
+        append_log(
+            log_path,
+            f"Finished qwen turn {turn_index} with rc={completed_returncode}; stdout={len(completed_stdout)} chars stderr={len(completed_stderr)} chars; {format_usage_summary(usage_summary)}",
+        )
+        return QwenCallResult(
+            returncode=completed_returncode,
+            stdout=completed_stdout,
+            stderr=completed_stderr,
+            usage=usage_payload,
+        )
+    except Exception as exc:
+        release_error = str(exc)
+        raise
+    finally:
+        if managed_pool is not None and managed_lease is not None:
+            try:
+                managed_pool.release(managed_lease, usage=usage_payload, error=release_error)
+            except Exception:
+                pass
 
 
 def run_python_tool(args: list[str], cwd: Path, log_path: Path) -> None:

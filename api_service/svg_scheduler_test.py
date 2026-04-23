@@ -311,6 +311,28 @@ class RedisAccountPoolTests(unittest.TestCase):
             else:
                 os.environ["PPT_API_QWEN_ACCOUNT_POOL_RECORD_RELEASE_USAGE"] = previous
 
+    def test_active_reserved_tpm_participates_in_admission(self) -> None:
+        client = FakeRedis()
+        pool = RedisAccountPool(
+            client,
+            [
+                AccountPoolEntry("account-a", "key-a", tpm_limit=100, target_utilization=0.9),
+                AccountPoolEntry("account-b", "key-b", tpm_limit=100, target_utilization=0.9),
+            ],
+            key_prefix="test",
+        )
+        first = pool.acquire(label="batch-1", reserved_tpm=50)
+        assert first is not None
+
+        second = pool.acquire(label="batch-2", reserved_tpm=50)
+
+        self.assertIsNotNone(second)
+        assert second is not None
+        self.assertEqual(second.account_id, "account-b")
+        snapshot = pool.snapshot()["accounts"]
+        reserved_by_account = {item["account_id"]: item["active_reserved_tpm"] for item in snapshot}
+        self.assertEqual(reserved_by_account["account-a"], 50)
+
     def test_rate_limit_cooldown_and_auth_disable_account(self) -> None:
         client = FakeRedis()
         pool = RedisAccountPool(
@@ -384,6 +406,25 @@ class AnchorEvenBatchingTests(unittest.TestCase):
         batches = split_plan_into_batches(plan, 5, "anchor_even")
 
         self.assertEqual([len(batch) for batch in batches], [2, 6, 6, 6, 6, 6])
+        self.assertEqual(batches[0][0].filename, "slide_01.svg")
+        self.assertEqual(batches[-1][-1].filename, "slide_32.svg")
+
+    def test_fixed_batch_size_8_splits_32_pages_into_one_wave_for_40_slots(self) -> None:
+        plan = [
+            SlidePlanEntry(
+                index=index + 1,
+                filename=f"slide_{index + 1:02d}.svg",
+                heading=f"slide-{index + 1}",
+                kind="content",
+                source_h2=None,
+                source_h3=None,
+            )
+            for index in range(32)
+        ]
+
+        batches = split_plan_into_batches(plan, 8, "fixed")
+
+        self.assertEqual([len(batch) for batch in batches], [8, 8, 8, 8])
         self.assertEqual(batches[0][0].filename, "slide_01.svg")
         self.assertEqual(batches[-1][-1].filename, "slide_32.svg")
 

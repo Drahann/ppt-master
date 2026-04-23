@@ -650,10 +650,14 @@ class SvgScheduler:
     def _prepare_account_lease(self, task: SvgBatchTask) -> tuple[bool, AccountLease | None]:
         if self.account_pool is None or not self.account_pool.configured:
             return True, None
+        startup_reserve_tpm = self._account_pool_svg_startup_reserve_tpm()
         lease = self.account_pool.acquire(
             label=f"{task.owner_job_id}:batch_{task.batch_index + 1}",
             owner_task_id=task.task_id,
             worker_request_path=task.worker_request_path,
+            estimated_tokens=startup_reserve_tpm,
+            reserved_tpm=startup_reserve_tpm,
+            stage="svg",
         )
         if lease is None:
             return False, None
@@ -663,6 +667,24 @@ class SvgScheduler:
             self.account_pool.release(lease, error="failed to write account credentials to worker request")
             raise
         return True, lease
+
+    def _account_pool_svg_startup_reserve_tpm(self) -> int:
+        override = _env_int("PPT_API_QWEN_ACCOUNT_POOL_SVG_STARTUP_RESERVE_TPM", 0)
+        if override > 0:
+            return override
+        worker_tpm = _env_int("PPT_API_LLM_DEFAULT_SVG_WORKER_TPM", 125000)
+        try:
+            observed_raw = self.account_pool.client.get(f"{self.store.key_prefix}:llm:ewma:svg:tpm") if self.account_pool else None
+            observed = float(observed_raw) if observed_raw else 0.0
+            if observed > 0:
+                worker_tpm = max(1, math.ceil(observed))
+        except Exception:
+            pass
+        reserve_seconds = _env_float(
+            "PPT_API_QWEN_ACCOUNT_POOL_SVG_STARTUP_RESERVE_SECONDS",
+            _env_float("PPT_API_SVG_LIVE_TPM_STARTUP_RESERVE_SECONDS", 15.0),
+        )
+        return max(1, math.ceil(worker_tpm * (reserve_seconds / 60.0)))
 
     def _account_id_counts(self, running_tasks: list[SvgBatchTask]) -> dict[str, int]:
         counts: dict[str, int] = {}
@@ -754,6 +776,16 @@ def _env_int(name: str, default: int) -> int:
         return default
     try:
         return int(raw)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
     except ValueError:
         return default
 

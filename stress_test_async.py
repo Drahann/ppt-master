@@ -171,7 +171,9 @@ def compact_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
         "completed_jobs": jobs.get("total_completed"),
         "failed_jobs": jobs.get("total_failed"),
         "active_avg_elapsed_seconds": jobs.get("active_avg_elapsed_seconds"),
+        "live_spec_tpm_60s": llm_budget.get("live_spec_tpm_60s"),
         "live_svg_tpm_60s": llm_budget.get("live_svg_tpm_60s"),
+        "live_notes_tpm_60s": llm_budget.get("live_notes_tpm_60s"),
         "live_svg_events_60s": llm_budget.get("live_svg_events_60s"),
         "svg_dynamic_limit": llm_budget.get("dynamic_svg_limit"),
         "svg_slot_active": svg_slots.get("active"),
@@ -227,11 +229,11 @@ def main() -> int:
     args = parser.parse_args()
 
     batch_mode = env_str("BATCH_MODE", "parallel")
-    batch_size = env_int("BATCH_SIZE", 5, minimum=1)
+    batch_size = env_int("BATCH_SIZE", 8, minimum=1)
     parallel_batch_workers = env_int("PARALLEL_BATCH_WORKERS", 7, minimum=1)
-    batch_partition = env_str("BATCH_PARTITION", "anchor_even")
-    spec_model = env_str("SPEC_MODEL", "qwen3.6-flash")
-    notes_model = env_str("NOTES_MODEL", "qwen3.6-flash")
+    batch_partition = env_str("BATCH_PARTITION", "fixed")
+    spec_model = env_str("SPEC_MODEL", "qwen3.6-plus")
+    notes_model = env_str("NOTES_MODEL", "qwen3.6-plus")
     stagger_seconds = env_int("STAGGER_SECONDS", 0, minimum=0)
     response_mode = env_str("RESPONSE_MODE", "async")
     callback_mode = env_str("CALLBACK_MODE", "none")
@@ -278,7 +280,9 @@ def main() -> int:
                     print_flush(
                         f"[metrics {snapshot.get('captured_at')}] "
                         f"active_jobs={snapshot.get('active_jobs')} "
+                        f"live_spec_tpm_60s={snapshot.get('live_spec_tpm_60s')} "
                         f"live_svg_tpm_60s={snapshot.get('live_svg_tpm_60s')} "
+                        f"live_notes_tpm_60s={snapshot.get('live_notes_tpm_60s')} "
                         f"svg_active_leases={snapshot.get('svg_active_leases')} "
                         f"svg_denied_starts={snapshot.get('svg_denied_starts')}"
                     )

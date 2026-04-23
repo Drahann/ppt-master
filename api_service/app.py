@@ -516,7 +516,9 @@ def _llm_budget_snapshot() -> dict[str, object]:
         live_window_seconds = int((os.getenv("PPT_API_LIVE_TPM_WINDOW_SECONDS") or str(pacing_window_seconds)).strip() or str(pacing_window_seconds))
     except ValueError:
         live_window_seconds = pacing_window_seconds
+    live_spec_snapshot = _redis_live_stage_snapshot("spec", live_window_seconds)
     live_svg_snapshot = _redis_live_stage_snapshot("svg", live_window_seconds)
+    live_notes_snapshot = _redis_live_stage_snapshot("notes", live_window_seconds)
     return {
         "configured_budget_tpm": configured_budget_tpm,
         "target_utilization": target_utilization,
@@ -527,8 +529,17 @@ def _llm_budget_snapshot() -> dict[str, object]:
         "tpm_pacing_enabled": (os.getenv("PPT_API_LLM_TPM_PACING_ENABLED", "1").strip().lower() not in {"0", "false", "no"}),
         "pacing_window_seconds": pacing_window_seconds,
         "live_window_seconds": live_window_seconds,
+        "live_spec_tpm_60s": (live_spec_snapshot or {}).get("tokens"),
+        "live_spec_events_60s": (live_spec_snapshot or {}).get("events"),
         "live_svg_tpm_60s": (live_svg_snapshot or {}).get("tokens"),
         "live_svg_events_60s": (live_svg_snapshot or {}).get("events"),
+        "live_notes_tpm_60s": (live_notes_snapshot or {}).get("tokens"),
+        "live_notes_events_60s": (live_notes_snapshot or {}).get("events"),
+        "live_stage_tpm_60s": {
+            "spec": (live_spec_snapshot or {}).get("tokens"),
+            "svg": (live_svg_snapshot or {}).get("tokens"),
+            "notes": (live_notes_snapshot or {}).get("tokens"),
+        },
         "backend": "redis",
     }
 
