@@ -1398,14 +1398,83 @@ def qwen_turn_start_stagger_seconds(stage: str) -> float:
     if stage == "svg":
         fallback = env_float("PPT_API_QWEN_START_STAGGER_SECONDS", 0.0, minimum=0.0)
         return env_float("PPT_API_SVG_QWEN_START_STAGGER_SECONDS", fallback, minimum=0.0)
+    if stage == "spec":
+        fallback = env_float("PPT_API_QWEN_START_STAGGER_SECONDS", 0.0, minimum=0.0)
+        return env_float("PPT_API_SPEC_QWEN_START_STAGGER_SECONDS", fallback, minimum=0.0)
+    if stage == "notes":
+        fallback = env_float("PPT_API_QWEN_START_STAGGER_SECONDS", 0.0, minimum=0.0)
+        return env_float("PPT_API_NOTES_QWEN_START_STAGGER_SECONDS", fallback, minimum=0.0)
     if env_bool("PPT_API_QWEN_START_STAGGER_ALL_STAGES", False):
         return env_float("PPT_API_QWEN_START_STAGGER_SECONDS", 0.0, minimum=0.0)
     return 0.0
 
 
+def redis_start_stagger_enabled(stage: str) -> bool:
+    if not env_bool("PPT_API_QWEN_GLOBAL_START_STAGGER_ENABLED", True):
+        return False
+    if stage == "svg":
+        return True
+    return env_bool("PPT_API_QWEN_GLOBAL_START_STAGGER_ALL_STAGES", True)
+
+
+def wait_for_redis_qwen_start(stage: str, *, label: str, delay_seconds: float, log_path: Path | None = None) -> bool:
+    client = get_runner_redis_client(log_path)
+    if client is None:
+        return False
+    key_stage = stage if env_bool("PPT_API_QWEN_START_STAGGER_PER_STAGE", True) else "global"
+    last_key = redis_key(f"llm:start_stagger:{key_stage}:next_at")
+    lock_key = redis_key(f"llm:start_stagger:{key_stage}:lock")
+    token = f"{os.getpid()}:{uuid.uuid4().hex}"
+    timeout_seconds = env_float("PPT_API_QWEN_START_STAGGER_LOCK_TIMEOUT_SECONDS", 10.0, minimum=1.0, maximum=60.0)
+    started = time.time()
+    scheduled_start = 0.0
+
+    while time.time() - started <= timeout_seconds:
+        try:
+            if client.set(lock_key, token, nx=True, ex=5):
+                try:
+                    now = time.time()
+                    last_start = float(client.get(last_key) or 0.0)
+                    scheduled_start = max(now, last_start + delay_seconds)
+                    client.set(last_key, f"{scheduled_start:.6f}", ex=max(60, int(delay_seconds * 120)))
+                    break
+                finally:
+                    try:
+                        if client.get(lock_key) == token:
+                            client.delete(lock_key)
+                    except Exception:
+                        pass
+        except Exception as exc:
+            if log_path is not None:
+                append_log(log_path, f"Redis qwen start stagger unavailable for {stage}; falling back to local stagger: {exc}")
+            return False
+        time.sleep(0.05)
+
+    if scheduled_start <= 0:
+        return False
+
+    wait_seconds = max(0.0, scheduled_start - time.time())
+    if wait_seconds > 0:
+        if log_path is not None:
+            append_log(
+                log_path,
+                f"Redis qwen start stagger for {stage}: waiting {wait_seconds:.1f}s "
+                f"(delay={delay_seconds:.1f}s label={label})",
+            )
+        time.sleep(wait_seconds)
+    return True
+
+
 def wait_for_local_qwen_start(stage: str, *, label: str, log_path: Path | None = None) -> None:
     delay_seconds = qwen_turn_start_stagger_seconds(stage)
     if delay_seconds <= 0:
+        return
+    if redis_start_stagger_enabled(stage) and wait_for_redis_qwen_start(
+        stage,
+        label=label,
+        delay_seconds=delay_seconds,
+        log_path=log_path,
+    ):
         return
     key = stage if env_bool("PPT_API_QWEN_START_STAGGER_PER_STAGE", True) else "global"
     with QWEN_TURN_START_LOCK:
@@ -4256,9 +4325,11 @@ def call_openai_compatible_chat(
         method="POST",
     )
     stage = infer_slot_stage(artifact_prefix)
+    label = f"{artifact_prefix}_turn_{turn_index:02d}"
+    wait_for_local_qwen_start(stage, label=label, log_path=log_path)
     with acquire_resource_slot(
         stage,
-        label=f"{artifact_prefix}_turn_{turn_index:02d}",
+        label=label,
         runner_dir=runner_dir,
         log_path=log_path,
     ):

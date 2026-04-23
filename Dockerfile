@@ -8,8 +8,9 @@ ENV PIP_NO_CACHE_DIR=1
 ENV PPT_API_HOST=0.0.0.0
 ENV PPT_API_PORT=3000
 
-ARG APT_MIRROR=deb.debian.org
-ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG APT_MIRROR=mirrors.tuna.tsinghua.edu.cn
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 
 RUN if [ -f /etc/apt/sources.list ]; then \
       sed -i "s|http://deb.debian.org/debian|https://${APT_MIRROR}/debian|g; s|http://security.debian.org/debian-security|https://${APT_MIRROR}/debian-security|g" /etc/apt/sources.list; \
@@ -31,7 +32,7 @@ RUN if [ -f /etc/apt/sources.list ]; then \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./requirements.txt
-RUN pip install -i ${PIP_INDEX_URL} -r requirements.txt
+RUN pip install -i ${PIP_INDEX_URL} --trusted-host ${PIP_TRUSTED_HOST} -r requirements.txt
 RUN npm install -g @qwen-code/qwen-code@0.14.5
 
 COPY . .
