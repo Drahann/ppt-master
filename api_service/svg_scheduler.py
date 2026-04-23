@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from .account_pool import AccountLease, RedisAccountPool, account_result_retryable
+
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,9 @@ class SvgBatchTask:
     session_id: str | None = None
     error: str | None = None
     worker_name: str | None = None
+    account_id: str | None = None
+    account_lease_id: str | None = None
+    account_retry_count: int = 0
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "SvgBatchTask":
@@ -68,6 +73,9 @@ class SvgBatchTask:
             session_id=_safe_str(payload.get("session_id")),
             error=_safe_str(payload.get("error")),
             worker_name=_safe_str(payload.get("worker_name")),
+            account_id=_safe_str(payload.get("account_id")),
+            account_lease_id=_safe_str(payload.get("account_lease_id")),
+            account_retry_count=_safe_int(payload.get("account_retry_count")),
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -87,6 +95,9 @@ class SvgBatchTask:
             "session_id": self.session_id,
             "error": self.error,
             "worker_name": self.worker_name,
+            "account_id": self.account_id,
+            "account_lease_id": self.account_lease_id,
+            "account_retry_count": self.account_retry_count,
         }
 
 
@@ -244,7 +255,14 @@ class RedisSvgSchedulerStore:
         task_ids = [str(item) for item in self.client.lrange(self.recent_key, 0, max(0, limit - 1))]
         return self._load_tasks(task_ids)
 
-    def mark_running(self, task_id: str, *, worker_name: str | None = None) -> SvgBatchTask | None:
+    def mark_running(
+        self,
+        task_id: str,
+        *,
+        worker_name: str | None = None,
+        account_id: str | None = None,
+        account_lease_id: str | None = None,
+    ) -> SvgBatchTask | None:
         task = self.get_task(task_id)
         if task is None:
             return None
@@ -255,6 +273,8 @@ class RedisSvgSchedulerStore:
                 "status": SVG_TASK_RUNNING,
                 "started_at": now,
                 "worker_name": worker_name,
+                "account_id": account_id,
+                "account_lease_id": account_lease_id,
             }
         )
         self._write_task(updated)
@@ -295,6 +315,30 @@ class RedisSvgSchedulerStore:
             }
         )
         self._finalize_task(updated)
+        return updated
+
+    def requeue_task(self, task_id: str, error: str) -> SvgBatchTask | None:
+        task = self.get_task(task_id)
+        if task is None:
+            return None
+        now = time.time()
+        updated = SvgBatchTask(
+            **{
+                **task.to_payload(),
+                "status": SVG_TASK_PENDING,
+                "started_at": None,
+                "finished_at": None,
+                "session_id": None,
+                "error": error,
+                "worker_name": None,
+                "account_id": None,
+                "account_lease_id": None,
+                "account_retry_count": task.account_retry_count + 1,
+            }
+        )
+        self._write_task(updated)
+        self.client.zrem(self.running_key, task.task_id)
+        self.client.zadd(self.pending_key, {task.task_id: now})
         return updated
 
     def anchor_completed(self, owner_job_id: str) -> bool:
@@ -350,19 +394,21 @@ class SvgScheduler:
         store: RedisSvgSchedulerStore,
         runner_script: Path,
         slot_limit_resolver: Callable[[], int],
+        account_pool: RedisAccountPool | None = None,
         poll_seconds: float = 1.0,
         max_workers: int = 32,
     ) -> None:
         self.store = store
         self.runner_script = runner_script
         self.slot_limit_resolver = slot_limit_resolver
+        self.account_pool = account_pool
         self.poll_seconds = max(0.2, poll_seconds)
         self.max_workers = max(1, max_workers)
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._executor: ThreadPoolExecutor | None = None
         self._lock = threading.Lock()
-        self._futures: dict[Future[dict[str, Any]], str] = {}
+        self._futures: dict[Future[dict[str, Any]], tuple[str, AccountLease | None]] = {}
         self._last_snapshot: dict[str, Any] = {
             "enabled": True,
             "running": False,
@@ -376,6 +422,8 @@ class SvgScheduler:
             "queue_wait_p95": 0.0,
             "underutilized_slots": 0,
             "total_slots": 0,
+            "account_id_counts": {},
+            "account_pool_waiting_batches": 0,
         }
 
     def start(self) -> None:
@@ -481,6 +529,7 @@ class SvgScheduler:
         if executor is None:
             return
 
+        account_pool_waiting_batches = 0
         while available_slots > 0 and launch_candidates:
             progressed = False
             for job_id in list(launch_candidates):
@@ -492,14 +541,34 @@ class SvgScheduler:
                 if current_running >= target or not pending_for_job:
                     launch_candidates.remove(job_id)
                     continue
-                task = pending_for_job.pop(0)
-                running_task = self.store.mark_running(task.task_id, worker_name="svg-scheduler")
-                if running_task is None:
+                task = pending_for_job[0]
+                try:
+                    account_ready, account_lease = self._prepare_account_lease(task)
+                except Exception as exc:
+                    pending_for_job.pop(0)
+                    self.store.mark_failed(task.task_id, f"Failed to prepare account lease: {exc}")
+                    logger.exception("Failed to prepare account lease for svg task %s: %s", task.task_id, exc)
                     continue
+                if not account_ready:
+                    account_pool_waiting_batches += len(pending_tasks)
+                    launch_candidates.clear()
+                    break
+
+                running_task = self.store.mark_running(
+                    task.task_id,
+                    worker_name="svg-scheduler",
+                    account_id=account_lease.account_id if account_lease else None,
+                    account_lease_id=account_lease.lease_id if account_lease else None,
+                )
+                if running_task is None:
+                    if account_lease is not None and self.account_pool is not None:
+                        self.account_pool.release(account_lease, error="task disappeared before worker launch")
+                    continue
+                pending_for_job.pop(0)
                 self.store.increment_job_grants(task.owner_job_id)
                 future = executor.submit(_run_svg_batch_worker, self.runner_script, Path(running_task.worker_request_path))
                 with self._lock:
-                    self._futures[future] = task.task_id
+                    self._futures[future] = (task.task_id, account_lease)
                 running_by_job.setdefault(job_id, []).append(running_task)
                 current_running += 1
                 available_slots -= 1
@@ -526,26 +595,81 @@ class SvgScheduler:
                 "queue_wait_p95": round(queue_wait_p95, 1),
                 "underutilized_slots": max(0, total_slots - len(current_running)),
                 "total_slots": total_slots,
+                "account_id_counts": self._account_id_counts(current_running),
+                "account_pool_waiting_batches": account_pool_waiting_batches,
             }
 
     def _collect_finished_futures(self) -> None:
-        completed: list[tuple[Future[dict[str, Any]], str]] = []
+        completed: list[tuple[Future[dict[str, Any]], str, AccountLease | None]] = []
         with self._lock:
-            for future, task_id in list(self._futures.items()):
+            for future, (task_id, account_lease) in list(self._futures.items()):
                 if future.done():
-                    completed.append((future, task_id))
+                    completed.append((future, task_id, account_lease))
                     del self._futures[future]
-        for future, task_id in completed:
+        for future, task_id, account_lease in completed:
+            account_result = None
             try:
                 payload = future.result()
             except Exception as exc:  # pragma: no cover - defensive logging
-                self.store.mark_failed(task_id, str(exc))
+                error = str(exc)
+                if account_lease is not None and self.account_pool is not None:
+                    account_result = self.account_pool.release(account_lease, error=error)
+                self.store.mark_failed(task_id, error)
                 continue
             status = str(payload.get("status") or "")
+            error = str(payload.get("error") or "")
+            if account_lease is not None and self.account_pool is not None:
+                account_result = self.account_pool.release(
+                    account_lease,
+                    usage=payload.get("usage") if isinstance(payload.get("usage"), dict) else None,
+                    error=None if status == SVG_TASK_SUCCEEDED else error,
+                )
             if status == SVG_TASK_SUCCEEDED:
                 self.store.mark_completed(task_id, session_id=_safe_str(payload.get("session_id")))
             else:
-                self.store.mark_failed(task_id, str(payload.get("error") or "svg batch worker failed"))
+                retry_limit = max(0, _env_int("PPT_API_QWEN_ACCOUNT_POOL_MAX_RETRIES", 2))
+                current_task = self.store.get_task(task_id)
+                retry_count = current_task.account_retry_count if current_task is not None else 0
+                if (
+                    account_result is not None
+                    and account_result_retryable(account_result)
+                    and retry_count < retry_limit
+                ):
+                    self.store.requeue_task(task_id, error or "svg batch worker failed with retryable account error")
+                    logger.warning(
+                        "Requeued svg task %s after retryable account error (%s), retry=%s/%s",
+                        task_id,
+                        account_result,
+                        retry_count + 1,
+                        retry_limit,
+                    )
+                else:
+                    self.store.mark_failed(task_id, error or "svg batch worker failed")
+
+    def _prepare_account_lease(self, task: SvgBatchTask) -> tuple[bool, AccountLease | None]:
+        if self.account_pool is None or not self.account_pool.configured:
+            return True, None
+        lease = self.account_pool.acquire(
+            label=f"{task.owner_job_id}:batch_{task.batch_index + 1}",
+            owner_task_id=task.task_id,
+            worker_request_path=task.worker_request_path,
+        )
+        if lease is None:
+            return False, None
+        try:
+            _merge_worker_request_credentials(Path(task.worker_request_path), lease)
+        except Exception:
+            self.account_pool.release(lease, error="failed to write account credentials to worker request")
+            raise
+        return True, lease
+
+    def _account_id_counts(self, running_tasks: list[SvgBatchTask]) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for task in [*running_tasks, *self.store.list_recent_tasks(limit=500)]:
+            if not task.account_id:
+                continue
+            counts[task.account_id] = counts.get(task.account_id, 0) + 1
+        return dict(sorted(counts.items()))
 
 
 def _run_svg_batch_worker(runner_script: Path, worker_request_path: Path) -> dict[str, Any]:
@@ -565,11 +689,19 @@ def _run_svg_batch_worker(runner_script: Path, worker_request_path: Path) -> dic
     )
     payload = _load_worker_payload(completed.stdout, completed.stderr)
     if completed.returncode != 0:
-        return {
-            "status": SVG_TASK_FAILED,
-            "error": payload.get("error") or completed.stderr.strip() or completed.stdout.strip(),
-        }
+        failure_payload = dict(payload)
+        failure_payload["status"] = SVG_TASK_FAILED
+        failure_payload["error"] = payload.get("error") or completed.stderr.strip() or completed.stdout.strip()
+        return failure_payload
     return payload
+
+
+def _merge_worker_request_credentials(worker_request_path: Path, lease: AccountLease) -> None:
+    payload = json.loads(worker_request_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"worker request is not an object: {worker_request_path}")
+    payload.update(lease.worker_payload())
+    worker_request_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def _load_worker_payload(stdout: str, stderr: str) -> dict[str, Any]:
@@ -613,6 +745,16 @@ def _safe_int(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
 
 
 def _safe_float(value: Any) -> float | None:

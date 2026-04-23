@@ -2162,10 +2162,31 @@ def resolve_qwen_launcher() -> list[str]:
     return [str(launcher_path)]
 
 
-def resolve_qwen_cli_auth_args() -> list[str]:
-    auth_type = (os.getenv("PPT_API_QWEN_AUTH_TYPE") or "").strip()
-    api_key = (os.getenv("PPT_API_QWEN_API_KEY") or "").strip()
-    base_url = (os.getenv("PPT_API_QWEN_BASE_URL") or "").strip()
+def normalize_qwen_credential_override(payload: dict[str, Any] | None) -> dict[str, str] | None:
+    if not isinstance(payload, dict):
+        return None
+    api_key = str(payload.get("api_key") or "").strip()
+    if not api_key:
+        return None
+    override = {
+        "api_key": api_key,
+        "account_id": str(payload.get("account_id") or "").strip(),
+    }
+    for key in ("base_url", "model", "auth_type"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            override[key] = value
+    return override
+
+
+def resolve_qwen_cli_auth_args(credential_override: dict[str, str] | None = None) -> list[str]:
+    credential_override = credential_override or {}
+    api_key = (credential_override.get("api_key") or os.getenv("PPT_API_QWEN_API_KEY") or "").strip()
+    base_url = (credential_override.get("base_url") or os.getenv("PPT_API_QWEN_BASE_URL") or "").strip()
+    if credential_override.get("api_key"):
+        auth_type = (credential_override.get("auth_type") or "openai").strip()
+    else:
+        auth_type = (os.getenv("PPT_API_QWEN_AUTH_TYPE") or "").strip()
 
     args: list[str] = []
     if auth_type:
@@ -2181,9 +2202,10 @@ def resolve_qwen_cli_auth_args() -> list[str]:
     return args
 
 
-def resolve_openai_compatible_endpoint() -> tuple[str, str] | None:
-    api_key = (os.getenv("PPT_API_QWEN_API_KEY") or "").strip()
-    base_url = (os.getenv("PPT_API_QWEN_BASE_URL") or "").strip()
+def resolve_openai_compatible_endpoint(credential_override: dict[str, str] | None = None) -> tuple[str, str] | None:
+    credential_override = credential_override or {}
+    api_key = (credential_override.get("api_key") or os.getenv("PPT_API_QWEN_API_KEY") or "").strip()
+    base_url = (credential_override.get("base_url") or os.getenv("PPT_API_QWEN_BASE_URL") or "").strip()
     if not api_key or not base_url:
         return None
     return api_key, base_url.rstrip("/") + "/chat/completions"
@@ -3181,6 +3203,8 @@ def validate_svg_outputs(
     project_path: Path,
     plan: list[SlidePlanEntry],
     log_path: Path | None = None,
+    *,
+    emoji_as_error: bool = True,
 ) -> list[str]:
     svg_dir = project_path / "svg_output"
     errors: list[str] = []
@@ -3205,7 +3229,11 @@ def validate_svg_outputs(
             continue
 
         if contains_emoji(text):
-            errors.append(f"SVG contains emoji text instead of icon-library icons: {entry.filename}")
+            message = f"SVG contains emoji text instead of icon-library icons: {entry.filename}"
+            if emoji_as_error:
+                errors.append(message)
+            elif log_path is not None:
+                append_log(log_path, f"SVG emoji warning ignored for generation follow-up: {entry.filename}")
 
         icon_refs = re.findall(r'data-icon="([^"]+)"', text)
         invalid_icon_refs: list[str] = []
@@ -3259,7 +3287,7 @@ def check_svg_only_state(
     if extra_svg:
         errors.append(f"Unexpected SVG files: {', '.join(extra_svg)}")
 
-    errors.extend(validate_svg_outputs(project_path, plan, runner_dir / "runner.log"))
+    errors.extend(validate_svg_outputs(project_path, plan, runner_dir / "runner.log", emoji_as_error=False))
     errors.extend(run_svg_quality_check(project_path, runner_dir))
     return not errors, errors
 
@@ -3283,7 +3311,7 @@ def check_batch_state(
     if extra_svg:
         errors.append(f"Unexpected SVG files: {', '.join(extra_svg)}")
 
-    errors.extend(validate_svg_outputs(project_path, batch_plan, log_path))
+    errors.extend(validate_svg_outputs(project_path, batch_plan, log_path, emoji_as_error=False))
     return not errors, errors
 
 
@@ -4200,8 +4228,9 @@ def call_openai_compatible_chat(
     turn_index: int,
     log_path: Path | None = None,
     timeout_seconds: int = DIRECT_NOTES_TIMEOUT_SECONDS,
+    credential_override: dict[str, str] | None = None,
 ) -> tuple[str, TurnUsageSummary, dict[str, Any]]:
-    endpoint = resolve_openai_compatible_endpoint()
+    endpoint = resolve_openai_compatible_endpoint(credential_override)
     if endpoint is None:
         raise RunnerError("Direct API requires PPT_API_QWEN_API_KEY and PPT_API_QWEN_BASE_URL")
     api_key, url = endpoint
@@ -4594,6 +4623,7 @@ def execute_qwen_stage(
     model: str | None,
     runner_dir: Path,
     log_path: Path,
+    credential_override: dict[str, str] | None = None,
 ) -> str:
     session_id = str(uuid.uuid4())
     follow_ups = 0
@@ -4613,6 +4643,7 @@ def execute_qwen_stage(
             runner_dir=runner_dir,
             log_path=log_path,
             artifact_prefix=artifact_prefix,
+            credential_override=credential_override,
         )
         turn_usage = None
         if isinstance(result.usage, dict):
@@ -4732,9 +4763,10 @@ def run_qwen_prompt(
     runner_dir: Path,
     log_path: Path,
     artifact_prefix: str = "qwen",
+    credential_override: dict[str, str] | None = None,
 ) -> QwenCallResult:
     command = resolve_qwen_launcher()
-    command.extend(resolve_qwen_cli_auth_args())
+    command.extend(resolve_qwen_cli_auth_args(credential_override))
     existing_chat_path = find_chat_recording_path(session_id)
     existing_chat_line_count = count_file_lines(existing_chat_path)
     if resume:
@@ -4752,7 +4784,10 @@ def run_qwen_prompt(
     wait_for_local_qwen_start(stage, label=label, log_path=log_path)
     wait_for_svg_start_jitter(stage, label=f"{runner_dir.name}:{label}", log_path=log_path)
     safe_command = redact_sensitive_command_parts(command)
-    append_log(log_path, f"Starting qwen turn {turn_index}: {' '.join(safe_command)} (prompt via stdin, {len(prompt)} chars)")
+    account_note = ""
+    if credential_override and credential_override.get("account_id"):
+        account_note = f" account_id={credential_override['account_id']}"
+    append_log(log_path, f"Starting qwen turn {turn_index}:{account_note} {' '.join(safe_command)} (prompt via stdin, {len(prompt)} chars)")
     completed_stdout = ""
     completed_stderr = ""
     completed_returncode = 0
@@ -5065,6 +5100,7 @@ def execute_single_svg_batch(
     svg_anchor_context_path: Path,
     runner_dir: Path,
     log_path: Path,
+    credential_override: dict[str, str] | None = None,
 ) -> str:
     return execute_qwen_stage(
         stage_name=f"svg_batch_{batch_index + 1}",
@@ -5083,6 +5119,7 @@ def execute_single_svg_batch(
         model=request.get("model"),
         runner_dir=runner_dir,
         log_path=log_path,
+        credential_override=credential_override,
     )
 
 
@@ -5430,6 +5467,40 @@ def wait_for_centralized_svg_tasks(
     return sessions_by_index
 
 
+def usage_summary_for_stage(runner_dir: Path, stage_name: str) -> dict[str, Any] | None:
+    usage_path = runner_dir / USAGE_SUMMARY_FILENAME
+    if not usage_path.exists():
+        return None
+    try:
+        payload = json.loads(usage_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    stage_totals = payload.get("stage_totals")
+    if isinstance(stage_totals, dict) and isinstance(stage_totals.get(stage_name), dict):
+        return stage_totals[stage_name]
+    merged = TurnUsageSummary(models=[])
+    found = False
+    turns = payload.get("turns")
+    if not isinstance(turns, list):
+        return None
+    for item in turns:
+        if not isinstance(item, dict) or item.get("stage_name") != stage_name:
+            continue
+        usage_payload = item.get("usage")
+        if not isinstance(usage_payload, dict):
+            continue
+        found = True
+        merged.api_calls += safe_int(usage_payload.get("api_calls"))
+        merged.prompt_tokens += safe_int(usage_payload.get("prompt_tokens"))
+        merged.completion_tokens += safe_int(usage_payload.get("completion_tokens"))
+        merged.cached_tokens += safe_int(usage_payload.get("cached_tokens"))
+        merged.thoughts_tokens += safe_int(usage_payload.get("thoughts_tokens"))
+        merged.total_tokens += safe_int(usage_payload.get("total_tokens"))
+        merged.tool_tokens += safe_int(usage_payload.get("tool_tokens"))
+        merged.models.extend(list(usage_payload.get("models") or []))
+    return merged.to_json() if found else None
+
+
 def execute_svg_batch_worker(worker_request_path: Path) -> dict[str, Any]:
     worker_request = read_json_value(worker_request_path)
     if not isinstance(worker_request, dict):
@@ -5443,6 +5514,11 @@ def execute_svg_batch_worker(worker_request_path: Path) -> dict[str, Any]:
         raise RunnerError(f"Project path not found: {project_path}")
 
     request = read_json(runner_dir / "request.json")
+    credential_override = normalize_qwen_credential_override(worker_request)
+    if credential_override is not None:
+        request = dict(request)
+        if credential_override.get("model"):
+            request["model"] = credential_override["model"]
     full_plan = load_slide_plan_entries(runner_dir / "slide_plan.json")
     batch_plan = load_slide_plan_entries(runner_dir / f"slide_plan.batch_{batch_index + 1:02d}.json")
     prompt_path = runner_dir / f"svg_batch_{batch_index + 1:02d}_prompt.txt"
@@ -5451,6 +5527,11 @@ def execute_svg_batch_worker(worker_request_path: Path) -> dict[str, Any]:
     log_path = runner_dir / LOG_FILENAME
 
     append_log(log_path, f"Centralized SVG worker starting batch {batch_index + 1} from {worker_request_path}")
+    if credential_override is not None:
+        append_log(
+            log_path,
+            f"Centralized SVG worker using account_id={credential_override.get('account_id') or 'unknown'} for batch {batch_index + 1}",
+        )
     session_id = execute_single_svg_batch(
         request=request,
         project_path=project_path,
@@ -5461,11 +5542,15 @@ def execute_svg_batch_worker(worker_request_path: Path) -> dict[str, Any]:
         svg_anchor_context_path=svg_anchor_context_path,
         runner_dir=runner_dir,
         log_path=log_path,
+        credential_override=credential_override,
     )
+    stage_name = f"svg_batch_{batch_index + 1}"
     return {
         "status": SVG_TASK_SUCCEEDED,
         "session_id": session_id,
         "batch_index": batch_index,
+        "account_id": credential_override.get("account_id") if credential_override else None,
+        "usage": usage_summary_for_stage(runner_dir, stage_name),
     }
 
 

@@ -148,8 +148,10 @@ yarn.lock
 # Environment variables
 .env
 .env.api
+.env.api.server-*
 .env.local
 .env.*.local
+/secrets/
 
 # Database files
 *.db

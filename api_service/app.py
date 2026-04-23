@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from .account_pool import AccountPoolConfigError, RedisAccountPool, load_account_pool_entries
 from .config import load_settings
 from .job_store import RedisJobStore, RedisJobStoreError
 from .markdown_assets import process_markdown_images
@@ -37,6 +38,9 @@ execution_semaphore = threading.BoundedSemaphore(settings.max_concurrent_jobs)
 worker_stop_event = threading.Event()
 worker_threads: list[threading.Thread] = []
 svg_scheduler: SvgScheduler | None = None
+account_pool: RedisAccountPool | None = None
+account_pool_error: str | None = None
+account_pool_initialized = False
 metrics_export_stop_event = threading.Event()
 metrics_export_thread: threading.Thread | None = None
 job_store_error: str | None = None
@@ -84,8 +88,30 @@ def _llm_slot_snapshot() -> dict[str, dict[str, int | str]]:
     return snapshot
 
 
+def _ensure_account_pool() -> RedisAccountPool | None:
+    global account_pool, account_pool_error, account_pool_initialized
+    if account_pool_initialized:
+        return account_pool
+    account_pool_initialized = True
+    if job_store is None:
+        return None
+    try:
+        accounts = load_account_pool_entries()
+        if accounts:
+            account_pool = RedisAccountPool(job_store.client, accounts, key_prefix=settings.redis_key_prefix)
+            logger.info("Configured Qwen account pool with %s accounts", len(accounts))
+    except AccountPoolConfigError as exc:
+        account_pool_error = str(exc)
+        logger.error("Invalid Qwen account pool configuration: %s", exc)
+    except Exception as exc:
+        account_pool_error = str(exc)
+        logger.exception("Failed to initialize Qwen account pool: %s", exc)
+    return account_pool
+
+
 @app.get("/healthz")
 def healthz() -> dict[str, object]:
+    pool = _ensure_account_pool()
     return {
         "ok": True,
         "cosEnabled": settings.cos_enabled,
@@ -109,6 +135,11 @@ def healthz() -> dict[str, object]:
         "svgScheduler": {
             "enabled": settings.svg_scheduler_enabled,
             "running": bool(svg_scheduler is not None),
+        },
+        "apiKeyPool": {
+            "configured": bool(pool is not None),
+            "enabled": bool(pool is not None),
+            "error": account_pool_error,
         },
         "metricsExport": {
             "enabled": settings.metrics_export_enabled,
@@ -153,6 +184,7 @@ def start_async_workers() -> None:
             global job_store_error
             job_store_error = str(exc)
 
+        pool = _ensure_account_pool()
         for index in range(settings.async_worker_count):
             thread = threading.Thread(
                 target=_async_worker_loop,
@@ -167,6 +199,7 @@ def start_async_workers() -> None:
                 store=RedisSvgSchedulerStore(job_store.client, key_prefix=settings.redis_key_prefix),
                 runner_script=settings.repo_root / "skills" / "ppt-master" / "scripts" / "qwen_ppt_runner.py",
                 slot_limit_resolver=_effective_svg_limit,
+                account_pool=pool,
                 max_workers=_svg_scheduler_max_workers(),
             )
             svg_scheduler.start()
@@ -588,6 +621,24 @@ def _redis_svg_budget_snapshot() -> dict[str, object]:
         return {"enabled": True, "backend": "redis", "error": str(exc)}
 
 
+def _api_key_pool_snapshot() -> dict[str, object]:
+    pool = _ensure_account_pool()
+    if pool is None:
+        return {
+            "enabled": False,
+            "configured": False,
+            "error": account_pool_error,
+        }
+    try:
+        return pool.snapshot()
+    except Exception as exc:
+        return {
+            "enabled": True,
+            "configured": True,
+            "error": str(exc),
+        }
+
+
 def _redis_slot_active(stage: str, limit: int) -> tuple[int, int] | None:
     if job_store is None:
         return None
@@ -625,6 +676,7 @@ def _build_metrics_payload() -> dict:
     payload["redisJobs"] = _redis_job_snapshot()
     payload["llmBudget"] = _llm_budget_snapshot()
     payload["svgBudget"] = _redis_svg_budget_snapshot()
+    payload["apiKeyPool"] = _api_key_pool_snapshot()
     payload["svgScheduler"] = (
         svg_scheduler.snapshot()
         if svg_scheduler is not None

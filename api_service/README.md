@@ -132,3 +132,54 @@ TPM pacing is separate from slot concurrency. Before a new SVG turn starts, the 
 When live usage observation is enabled, running CLI turns also stream actual usage events into Redis from chat-recording telemetry. Metrics expose the current rolling SVG TPM, and SVG admission can prefer that live rolling window plus a bounded startup reserve over the older completion-bucket-only estimate.
 
 Local start staggering is an additional per-runner guard. It spaces out qwen CLI process starts inside one PPT job, so one runner cannot launch several SVG qwen turns in the same few seconds even if global slots are available.
+
+## Global Qwen Account Pool
+
+The centralized SVG scheduler can lease Qwen credentials from a Redis-backed global pool. Use this when multiple API servers share one Redis and should draw from the same accounts dynamically instead of pinning accounts per server.
+
+If no account pool is configured, behavior is unchanged: SVG/spec/notes stages use `PPT_API_QWEN_API_KEY` and `PPT_API_QWEN_BASE_URL`.
+
+Recommended 3-server shape:
+
+```env
+PPT_API_MAX_CONCURRENT_JOBS=20
+PPT_API_ASYNC_WORKERS=20
+PPT_API_SVG_SCHEDULER_ENABLED=1
+PPT_SERVER_ID=server-1
+REDIS_URL=redis://shared-redis:6379/0
+PPT_API_QWEN_ACCOUNT_POOL_FILE=/app/secrets/qwen_account_pool.json
+```
+
+Account pool file format:
+
+```json
+{
+  "accounts": [
+    {
+      "account_id": "qwen-01",
+      "api_key": "sk-...",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "model": "qwen3.6-plus",
+      "tpm_limit": 5000000,
+      "target_utilization": 0.9,
+      "max_parallel_turns": 10,
+      "enabled": true
+    }
+  ]
+}
+```
+
+The scheduler writes only `account_id` and non-secret state to metrics/logs. Full API keys are copied into per-worker request files only for the worker process that owns the lease.
+
+Metrics expose:
+
+```text
+/metrics.apiKeyPool.accounts[*].live_tpm_60s
+/metrics.apiKeyPool.accounts[*].active_leases
+/metrics.apiKeyPool.accounts[*].cooldown_until
+/metrics.apiKeyPool.accounts[*].enabled
+/metrics.apiKeyPool.accounts[*].granted
+/metrics.apiKeyPool.accounts[*].denied
+/metrics.apiKeyPool.accounts[*].last_error
+/metrics.svgScheduler.account_id_counts
+```
