@@ -18,6 +18,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
@@ -101,6 +102,7 @@ USAGE_SUMMARY_FILENAME = "usage_summary.json"
 LIVE_USAGE_FILENAME_SUFFIX = ".live_usage.json"
 SVG_QUALITY_REPORT_FILENAME = "svg_quality_report.txt"
 SVG_ANCHOR_CONTEXT_FILENAME = "svg_anchor_context.json"
+SOURCE_IMAGE_REFERENCE_FILENAME = "source_image_reference.json"
 QWEN_PROJECT_GUIDE_PATH = REPO_ROOT / "QWEN.md"
 QWEN_SKILL_ROOT = REPO_ROOT / ".qwen" / "skills" / "ppt-master"
 QWEN_SKILL_WRAPPER_PATH = QWEN_SKILL_ROOT / "SKILL.md"
@@ -2650,7 +2652,190 @@ def build_icon_candidate_reference(
     return reference
 
 
-def build_slide_content_digest(plan: list[SlidePlanEntry], sections: list[MarkdownH2]) -> list[dict[str, Any]]:
+MARKDOWN_IMAGE_RE = re.compile(
+    r"!\[(?P<alt>[^\]]*)\]\((?P<target><[^>]+>|[^)\s]+)(?:\s+['\"][^'\"]*['\"])?\)"
+)
+HTML_IMAGE_RE = re.compile(r"<img\b[^>]*\bsrc=['\"](?P<src>[^'\"]+)['\"][^>]*>", re.IGNORECASE)
+
+
+def clean_markdown_image_target(raw_target: str) -> str:
+    target = raw_target.strip()
+    if target.startswith("<") and target.endswith(">"):
+        target = target[1:-1].strip()
+    return target
+
+
+def strip_url_suffix(target: str) -> str:
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", target):
+        return target
+    return target.split("#", 1)[0].split("?", 1)[0]
+
+
+def find_image_refs_in_line(line: str) -> list[dict[str, str]]:
+    refs: list[dict[str, str]] = []
+    for match in MARKDOWN_IMAGE_RE.finditer(line):
+        refs.append(
+            {
+                "alt": match.group("alt").strip(),
+                "target": clean_markdown_image_target(match.group("target")),
+                "syntax": "markdown",
+            }
+        )
+    for match in HTML_IMAGE_RE.finditer(line):
+        refs.append(
+            {
+                "alt": "",
+                "target": clean_markdown_image_target(match.group("src")),
+                "syntax": "html",
+            }
+        )
+    return refs
+
+
+def path_relative_to_project(path: Path, project_path: Path) -> str:
+    try:
+        return path.relative_to(project_path).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def resolve_source_image_paths(
+    *,
+    markdown_path: Path,
+    project_path: Path,
+    target: str,
+) -> dict[str, Any]:
+    cleaned = strip_url_suffix(target)
+    parsed = urllib.parse.urlparse(cleaned)
+    if parsed.scheme and parsed.scheme not in {"file"}:
+        return {
+            "source": target,
+            "source_path": None,
+            "project_image": None,
+            "svg_href": None,
+            "exists": False,
+            "remote": True,
+        }
+
+    local_target = urllib.parse.unquote(parsed.path if parsed.scheme == "file" else cleaned)
+    source_path = (markdown_path.parent / local_target).resolve()
+    image_name = source_path.name
+    project_image_path = project_path / "images" / image_name
+    return {
+        "source": target,
+        "source_path": path_relative_to_project(source_path, project_path),
+        "project_image": f"images/{image_name}",
+        "svg_href": f"../images/{image_name}",
+        "exists": project_image_path.exists(),
+        "remote": False,
+    }
+
+
+def find_slide_for_source_image(
+    plan: list[SlidePlanEntry],
+    source_h2: str,
+    source_h3: str | None,
+) -> SlidePlanEntry | None:
+    if source_h3:
+        for entry in plan:
+            if entry.kind == "content" and entry.source_h2 == source_h2 and entry.source_h3 == source_h3:
+                return entry
+        for entry in plan:
+            if entry.kind == "content" and entry.source_h2 == source_h2 and entry.source_h3 is None:
+                return entry
+        return None
+
+    for entry in plan:
+        if entry.kind == "content" and entry.source_h2 == source_h2 and entry.source_h3 is None:
+            return entry
+    for entry in plan:
+        if entry.kind == "content" and entry.source_h2 == source_h2 and entry.absorb_parent_intro:
+            return entry
+    return None
+
+
+def build_source_image_reference(
+    *,
+    imported_markdown_path: Path,
+    project_path: Path,
+    plan: list[SlidePlanEntry],
+    sections: list[MarkdownH2],
+) -> list[dict[str, Any]]:
+    reference: list[dict[str, Any]] = []
+
+    def add_refs(source_h2: str, source_h3: str | None, lines: list[str]) -> None:
+        assigned_slide = find_slide_for_source_image(plan, source_h2, source_h3)
+        for index, line in enumerate(lines):
+            refs = find_image_refs_in_line(line)
+            if not refs:
+                continue
+            context_window = lines[max(0, index - 2):index] + lines[index + 1:index + 3]
+            context = collect_salient_lines(context_window, limit=3)
+            for ref in refs:
+                paths = resolve_source_image_paths(
+                    markdown_path=imported_markdown_path,
+                    project_path=project_path,
+                    target=ref["target"],
+                )
+                payload: dict[str, Any] = {
+                    "slide": assigned_slide.filename if assigned_slide else None,
+                    "slide_index": assigned_slide.index if assigned_slide else None,
+                    "heading": assigned_slide.heading if assigned_slide else None,
+                    "source_h2": source_h2,
+                    "source_h3": source_h3,
+                    "alt": ref["alt"],
+                    "markdown_target": ref["target"],
+                    "syntax": ref["syntax"],
+                    "context": context,
+                    "required": assigned_slide is not None,
+                    "layout_instruction": (
+                        "Use an image-aware layout on this assigned slide and reference the exact project image. "
+                        "Do not move this image to a different chapter."
+                    ),
+                }
+                payload.update(paths)
+                reference.append(payload)
+
+    for section in sections:
+        add_refs(section.title, None, section.intro_lines)
+        for child in section.children:
+            add_refs(section.title, child.title, child.body_lines)
+
+    return reference
+
+
+def attach_source_images_to_digest(
+    digest: list[dict[str, Any]],
+    source_image_reference: list[dict[str, Any]],
+) -> None:
+    images_by_slide: dict[str, list[dict[str, Any]]] = {}
+    for item in source_image_reference:
+        slide = item.get("slide")
+        if not isinstance(slide, str) or not slide:
+            continue
+        images_by_slide.setdefault(slide, []).append(
+            {
+                "project_image": item.get("project_image"),
+                "svg_href": item.get("svg_href"),
+                "markdown_target": item.get("markdown_target"),
+                "source_h2": item.get("source_h2"),
+                "source_h3": item.get("source_h3"),
+                "context": item.get("context", []),
+                "layout_instruction": item.get("layout_instruction"),
+            }
+        )
+
+    for item in digest:
+        slide = item.get("slide")
+        if isinstance(slide, str) and slide in images_by_slide:
+            item["source_images"] = images_by_slide[slide]
+
+
+def build_slide_content_digest(
+    plan: list[SlidePlanEntry],
+    sections: list[MarkdownH2],
+    source_image_reference: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     section_lookup = build_section_lookup(sections)
     digest: list[dict[str, Any]] = []
     for entry in plan:
@@ -2706,6 +2891,8 @@ def build_slide_content_digest(plan: list[SlidePlanEntry], sections: list[Markdo
                 "key_points": points[:8],
             }
         )
+    if source_image_reference:
+        attach_source_images_to_digest(digest, source_image_reference)
     return digest
 
 
@@ -3348,6 +3535,37 @@ def repair_design_spec(
     return report
 
 
+def load_source_image_reference(project_path: Path) -> list[dict[str, Any]]:
+    path = project_path / RUNNER_DIRNAME / SOURCE_IMAGE_REFERENCE_FILENAME
+    if not path.exists():
+        return []
+    try:
+        payload = read_json_any(path)
+    except RunnerError:
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [item for item in payload if isinstance(item, dict)]
+
+
+def validate_source_images_in_design_spec(project_path: Path, design_spec_text: str) -> list[str]:
+    errors: list[str] = []
+    for item in load_source_image_reference(project_path):
+        if not item.get("required"):
+            continue
+        project_image = item.get("project_image")
+        if not isinstance(project_image, str) or not project_image:
+            continue
+        image_name = Path(project_image).name
+        if project_image not in design_spec_text and image_name not in design_spec_text:
+            slide_note = item.get("slide") or item.get("heading") or "assigned slide"
+            errors.append(
+                "design_spec.md is missing required source image "
+                f"{project_image} for {slide_note}; add it to Section VIII and the slide layout"
+            )
+    return errors
+
+
 def validate_design_spec(
     project_path: Path,
     plan: list[SlidePlanEntry],
@@ -3392,6 +3610,8 @@ def validate_design_spec(
             "design_spec.md references unknown visualization templates: "
             + ", ".join(unknown_chart_refs)
         )
+
+    errors.extend(validate_source_images_in_design_spec(project_path, content))
 
     if strict_icons:
         invalid_icon_refs = find_invalid_icon_refs(content, load_available_icons())
@@ -3808,6 +4028,7 @@ def build_spec_bootstrap_prompt(
     slide_digest_path: Path,
     chart_reference_path: Path,
     icon_reference_path: Path,
+    source_image_reference_path: Path,
     plan: list[SlidePlanEntry],
 ) -> str:
     total_pages = len(plan)
@@ -3819,7 +4040,8 @@ Read these files before doing anything else:
 3. {slide_digest_path}
 4. {chart_reference_path}
 5. {icon_reference_path}
-6. {imported_markdown_path}
+6. {source_image_reference_path}
+7. {imported_markdown_path}
 
 Project boundaries:
 - Project path: {project_path}
@@ -3836,6 +4058,10 @@ Hard constraints:
 - Free design does NOT mean inventing arbitrary asset names. Visualization templates must come only from `{chart_reference_path}` and `templates/charts/`.
 - Lock the icon library to `{DEFAULT_ICON_LIBRARY}`. Do not mix icon libraries.
 - Use the icon candidates in `{icon_reference_path}` as the default icon source.
+- Treat `{source_image_reference_path.name}` as the authoritative list of real source-document images. Each image is bound to the source chapter and assigned slide shown in that file.
+- Every required source image must appear in Section VIII. Image Resource List with its exact `project_image` path, assigned slide, and purpose. Do not replace a real source image with an invented pending/placeholder image.
+- Every slide listed in `{source_image_reference_path.name}` must choose an image-aware or mixed-media layout in Section IX and mention the exact source image path for that slide.
+- Keep source images in their originating chapter/slide; do not move them to unrelated slides.
 - Do not use emoji as visual bullets, markers, or pseudo-icons. Use only the locked icon library and normal SVG shapes.
 - Use only icon names that actually exist in `{DEFAULT_ICON_LIBRARY}`.
 - Content pages must include 1-3 semantic `data-icon="{DEFAULT_ICON_LIBRARY}/..."` placeholders by default. Only skip icons on a content page if that page is dominated by one primary chart or image.
@@ -4018,6 +4244,7 @@ def build_svg_bootstrap_prompt(
     imported_markdown_path: Path,
     slide_plan_path: Path,
     icon_reference_path: Path,
+    source_image_reference_path: Path,
     svg_anchor_context_path: Path,
     executor_style_path: Path,
     executor_skill_pack_path: Path,
@@ -4032,8 +4259,9 @@ Read these files before doing anything else:
 2. {project_path / "design_spec.md"}
 3. {slide_plan_path}
 4. {icon_reference_path}
-5. {svg_anchor_context_path}
-6. {imported_markdown_path}
+5. {source_image_reference_path}
+6. {svg_anchor_context_path}
+7. {imported_markdown_path}
 
 Project boundaries:
 - Project path: {project_path}
@@ -4053,6 +4281,7 @@ Executor constraints:
 - Treat `{svg_anchor_context_path.name}` as the immutable execution anchor for geometry, defs, icon placement, footer position, and filename consistency
 - Treat `{executor_style_path.name}` as the style-specific visual execution guide for this deck
 - Use only real `templates/charts/<name>.svg` references from the design spec
+- Treat `{source_image_reference_path.name}` as the authoritative map from source-document images to assigned slides. When a slide is listed there, use the exact `svg_href` from that file and an image-aware layout unless the reviewed spec explicitly says the image is intentionally omitted.
 - Lock icon usage to `{DEFAULT_ICON_LIBRARY}`
 - Do not use emoji in SVG
 - Emoji are forbidden everywhere in SVG output: title text, labels, badges, bullets, annotations, and decorative marks
@@ -4091,6 +4320,7 @@ def build_batch_svg_prompt(
     batch_slide_plan_path: Path,
     batch_digest_path: Path,
     batch_icon_reference_path: Path,
+    batch_source_image_reference_path: Path,
     svg_anchor_context_path: Path,
     executor_style_path: Path,
     executor_skill_pack_path: Path,
@@ -4120,7 +4350,8 @@ Read these files before doing anything else:
 4. {batch_slide_plan_path}
 5. {batch_digest_path}
 6. {batch_icon_reference_path}
-7. {svg_anchor_context_path}
+7. {batch_source_image_reference_path}
+8. {svg_anchor_context_path}
 
 Project boundaries:
 - Project path: {project_path}
@@ -4137,6 +4368,7 @@ Executor constraints:
 - Use the full cookbook copy embedded in `{executor_skill_pack_path.name}`; do not separately read generic workflow docs such as `AGENTS.md`, `QWEN.md`, `SKILL.md`, or `repo_skill.md` during SVG generation
 - Treat `{svg_anchor_context_path.name}` as the immutable execution anchor
 - Use only real `templates/charts/<name>.svg` references from the design spec
+- Treat `{batch_source_image_reference_path.name}` as the source-bound image contract for this batch. For every listed slide, use the exact `svg_href` from that file and an image-aware layout unless the reviewed spec explicitly says the image is intentionally omitted.
 - Lock icon usage to `{DEFAULT_ICON_LIBRARY}`
 - Do not use emoji in SVG
 - Emoji are forbidden everywhere in SVG output: title text, labels, badges, bullets, annotations, and decorative marks
@@ -4636,6 +4868,7 @@ def build_direct_spec_messages(
     slide_digest_path: Path,
     chart_reference_path: Path,
     icon_reference_path: Path,
+    source_image_reference_path: Path,
     plan: list[SlidePlanEntry],
     generation_errors: list[str] | None = None,
     current_spec: str | None = None,
@@ -4661,6 +4894,8 @@ Hard output contract:
 - Lock icons to `{DEFAULT_ICON_LIBRARY}/...`; use only real icon names from the icon candidates.
 - In section VI Recommended Icon List, write icon table cells as raw backticked paths like `{DEFAULT_ICON_LIBRARY}/video-camera`; do not use `{{{{icon:{DEFAULT_ICON_LIBRARY}/video-camera}}}}`.
 - Reference only real chart templates from the chart reference.
+- Treat source image references as mandatory source-bound assets: each required image must be listed in Section VIII with exact `project_image`, assigned slide, and purpose, and the matching slide in Section IX must use an image-aware or mixed-media layout that references that exact image path.
+- Do not replace real source images with invented pending/placeholder image names, and do not move source images away from their originating chapter/slide.
 - Do not use emoji in design_spec.md.
 - Stay faithful to source markdown and keep content density moderately high.
 {LANGUAGE_CONSISTENCY_RULE}
@@ -4695,6 +4930,11 @@ Icon candidates:
 {icon_reference_path.read_text(encoding="utf-8", errors="replace")}
 ```
 
+Source image reference:
+```json
+{source_image_reference_path.read_text(encoding="utf-8", errors="replace")}
+```
+
 Source markdown:
 ```markdown
 {imported_markdown_path.read_text(encoding="utf-8", errors="replace")}
@@ -4720,6 +4960,7 @@ def execute_direct_spec_stage(
     slide_digest_path: Path,
     chart_reference_path: Path,
     icon_reference_path: Path,
+    source_image_reference_path: Path,
     plan: list[SlidePlanEntry],
     valid_chart_keys: set[str],
     model: str,
@@ -4743,6 +4984,7 @@ def execute_direct_spec_stage(
             slide_digest_path=slide_digest_path,
             chart_reference_path=chart_reference_path,
             icon_reference_path=icon_reference_path,
+            source_image_reference_path=source_image_reference_path,
             plan=plan,
             generation_errors=generation_errors,
             current_spec=spec_path.read_text(encoding="utf-8", errors="replace") if spec_path.exists() else None,
@@ -5295,18 +5537,26 @@ def populate_images(project_path: Path, log_path: Path) -> int:
 
 def build_runner_reference_files(
     imported_markdown_path: Path,
+    project_path: Path,
     plan: list[SlidePlanEntry],
     runner_dir: Path,
-) -> tuple[Path, Path, Path, Path, set[str]]:
+) -> tuple[Path, Path, Path, Path, Path, set[str]]:
     sections = parse_markdown_structure(imported_markdown_path)
     chart_reference = build_chart_template_reference()
     available_icons = load_available_icons()
     icon_reference = build_icon_candidate_reference(plan, available_icons)
-    slide_digest = build_slide_content_digest(plan, sections)
+    source_image_reference = build_source_image_reference(
+        imported_markdown_path=imported_markdown_path,
+        project_path=project_path,
+        plan=plan,
+        sections=sections,
+    )
+    slide_digest = build_slide_content_digest(plan, sections, source_image_reference)
 
     chart_reference_path = runner_dir / "available_chart_templates.json"
     icon_reference_path = runner_dir / "available_icon_candidates.json"
     icon_inventory_path = runner_dir / "available_icon_inventory.json"
+    source_image_reference_path = runner_dir / SOURCE_IMAGE_REFERENCE_FILENAME
     slide_digest_path = runner_dir / "slide_content_digest.json"
 
     write_json(chart_reference_path, chart_reference)
@@ -5315,10 +5565,18 @@ def build_runner_reference_files(
         icon_inventory_path,
         [f"{DEFAULT_ICON_LIBRARY}/{name}" for name in sorted(available_icons)],
     )
+    write_json(source_image_reference_path, source_image_reference)
     write_json(slide_digest_path, slide_digest)
 
     valid_chart_keys = {item["key"] for item in chart_reference if isinstance(item, dict) and "key" in item}
-    return slide_digest_path, chart_reference_path, icon_reference_path, icon_inventory_path, valid_chart_keys
+    return (
+        slide_digest_path,
+        chart_reference_path,
+        icon_reference_path,
+        icon_inventory_path,
+        source_image_reference_path,
+        valid_chart_keys,
+    )
 
 
 def prepare_svg_batch_artifacts(
@@ -5327,6 +5585,7 @@ def prepare_svg_batch_artifacts(
     slide_plan_path: Path,
     slide_digest_path: Path,
     icon_reference_path: Path,
+    source_image_reference_path: Path,
     svg_anchor_context_path: Path,
     executor_style_path: Path,
     executor_skill_pack_path: Path,
@@ -5354,6 +5613,9 @@ def prepare_svg_batch_artifacts(
         batch_icon_reference_path = runner_dir / f"available_icon_candidates.batch_{batch_index + 1:02d}.json"
         write_batch_reference_file(icon_reference_path, batch_icon_reference_path, batch_plan)
 
+        batch_source_image_reference_path = runner_dir / f"source_image_reference.batch_{batch_index + 1:02d}.json"
+        write_batch_reference_file(source_image_reference_path, batch_source_image_reference_path, batch_plan)
+
         batch_prompt = build_batch_svg_prompt(
             request=request,
             project_path=project_path,
@@ -5361,6 +5623,7 @@ def prepare_svg_batch_artifacts(
             batch_slide_plan_path=batch_slide_plan_path,
             batch_digest_path=batch_digest_path,
             batch_icon_reference_path=batch_icon_reference_path,
+            batch_source_image_reference_path=batch_source_image_reference_path,
             svg_anchor_context_path=svg_anchor_context_path,
             executor_style_path=executor_style_path,
             executor_skill_pack_path=executor_skill_pack_path,
@@ -5425,6 +5688,7 @@ def execute_batched_svg_generation(
     slide_plan_path: Path,
     slide_digest_path: Path,
     icon_reference_path: Path,
+    source_image_reference_path: Path,
     svg_anchor_context_path: Path,
     executor_style_path: Path,
     executor_skill_pack_path: Path,
@@ -5438,6 +5702,7 @@ def execute_batched_svg_generation(
         slide_plan_path=slide_plan_path,
         slide_digest_path=slide_digest_path,
         icon_reference_path=icon_reference_path,
+        source_image_reference_path=source_image_reference_path,
         svg_anchor_context_path=svg_anchor_context_path,
         executor_style_path=executor_style_path,
         executor_skill_pack_path=executor_skill_pack_path,
@@ -5469,6 +5734,7 @@ def execute_parallel_svg_generation(
     slide_plan_path: Path,
     slide_digest_path: Path,
     icon_reference_path: Path,
+    source_image_reference_path: Path,
     svg_anchor_context_path: Path,
     executor_style_path: Path,
     executor_skill_pack_path: Path,
@@ -5484,6 +5750,7 @@ def execute_parallel_svg_generation(
             slide_plan_path=slide_plan_path,
             slide_digest_path=slide_digest_path,
             icon_reference_path=icon_reference_path,
+            source_image_reference_path=source_image_reference_path,
             svg_anchor_context_path=svg_anchor_context_path,
             executor_style_path=executor_style_path,
             executor_skill_pack_path=executor_skill_pack_path,
@@ -5511,6 +5778,7 @@ def execute_parallel_svg_generation(
             slide_plan_path=slide_plan_path,
             slide_digest_path=slide_digest_path,
             icon_reference_path=icon_reference_path,
+            source_image_reference_path=source_image_reference_path,
             svg_anchor_context_path=svg_anchor_context_path,
             executor_style_path=executor_style_path,
             executor_skill_pack_path=executor_skill_pack_path,
@@ -5526,6 +5794,7 @@ def _execute_parallel_svg_generation_registered(
     slide_plan_path: Path,
     slide_digest_path: Path,
     icon_reference_path: Path,
+    source_image_reference_path: Path,
     svg_anchor_context_path: Path,
     executor_style_path: Path,
     executor_skill_pack_path: Path,
@@ -5539,6 +5808,7 @@ def _execute_parallel_svg_generation_registered(
         slide_plan_path=slide_plan_path,
         slide_digest_path=slide_digest_path,
         icon_reference_path=icon_reference_path,
+        source_image_reference_path=source_image_reference_path,
         svg_anchor_context_path=svg_anchor_context_path,
         executor_style_path=executor_style_path,
         executor_skill_pack_path=executor_skill_pack_path,
@@ -5628,6 +5898,7 @@ def execute_parallel_svg_generation_centralized(
     slide_plan_path: Path,
     slide_digest_path: Path,
     icon_reference_path: Path,
+    source_image_reference_path: Path,
     svg_anchor_context_path: Path,
     executor_style_path: Path,
     executor_skill_pack_path: Path,
@@ -5656,6 +5927,7 @@ def execute_parallel_svg_generation_centralized(
                 slide_plan_path=slide_plan_path,
                 slide_digest_path=slide_digest_path,
                 icon_reference_path=icon_reference_path,
+                source_image_reference_path=source_image_reference_path,
                 svg_anchor_context_path=svg_anchor_context_path,
                 executor_style_path=executor_style_path,
                 executor_skill_pack_path=executor_skill_pack_path,
@@ -5670,6 +5942,7 @@ def execute_parallel_svg_generation_centralized(
         slide_plan_path=slide_plan_path,
         slide_digest_path=slide_digest_path,
         icon_reference_path=icon_reference_path,
+        source_image_reference_path=source_image_reference_path,
         svg_anchor_context_path=svg_anchor_context_path,
         executor_style_path=executor_style_path,
         executor_skill_pack_path=executor_skill_pack_path,
@@ -5947,9 +6220,11 @@ def execute_generation(
         chart_reference_path,
         icon_reference_path,
         icon_inventory_path,
+        source_image_reference_path,
         valid_chart_keys,
     ) = build_runner_reference_files(
         imported_markdown_path,
+        project_path,
         plan,
         runner_dir,
     )
@@ -5997,6 +6272,7 @@ def execute_generation(
         slide_digest_path,
         chart_reference_path,
         icon_reference_path,
+        source_image_reference_path,
         plan,
     )
     (runner_dir / "spec_prompt.txt").write_text(spec_prompt, encoding="utf-8")
@@ -6011,6 +6287,7 @@ def execute_generation(
         slide_digest_path=slide_digest_path,
         chart_reference_path=chart_reference_path,
         icon_reference_path=icon_reference_path,
+        source_image_reference_path=source_image_reference_path,
         plan=plan,
         valid_chart_keys=valid_chart_keys,
         model=spec_model,
@@ -6094,6 +6371,7 @@ def execute_generation(
         imported_markdown_path,
         slide_plan_path,
         icon_reference_path,
+        source_image_reference_path,
         svg_anchor_context_path,
         executor_style_path,
         executor_skill_pack_path,
@@ -6124,6 +6402,7 @@ def execute_generation(
             slide_plan_path=slide_plan_path,
             slide_digest_path=slide_digest_path,
             icon_reference_path=icon_reference_path,
+            source_image_reference_path=source_image_reference_path,
             svg_anchor_context_path=svg_anchor_context_path,
             executor_style_path=executor_style_path,
             executor_skill_pack_path=executor_skill_pack_path,
@@ -6143,6 +6422,7 @@ def execute_generation(
             slide_plan_path=slide_plan_path,
             slide_digest_path=slide_digest_path,
             icon_reference_path=icon_reference_path,
+            source_image_reference_path=source_image_reference_path,
             svg_anchor_context_path=svg_anchor_context_path,
             executor_style_path=executor_style_path,
             executor_skill_pack_path=executor_skill_pack_path,
