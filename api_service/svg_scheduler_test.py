@@ -502,6 +502,31 @@ class SvgSchedulerStaleCleanupTests(unittest.TestCase):
             else:
                 os.environ["PPT_API_SVG_SCHEDULER_RUNNING_STALE_SECONDS"] = previous
 
+    def test_scheduler_only_launches_tasks_owned_by_current_server(self) -> None:
+        previous = os.environ.get("PPT_SERVER_ID")
+        os.environ["PPT_SERVER_ID"] = "server-a"
+        try:
+            client = FakeRedis()
+            store = RedisSvgSchedulerStore(client, key_prefix="test")
+            scheduler = SvgScheduler(
+                store=store,
+                runner_script=Path("runner.py"),
+                slot_limit_resolver=lambda: 1,
+            )
+            local_task = self._task_with_owner("server-a")
+            foreign_task = self._task_with_owner("server-b")
+            legacy_task = self._task_with_owner(None)
+
+            self.assertTrue(scheduler._can_launch_task(local_task))
+            self.assertFalse(scheduler._can_launch_task(foreign_task))
+            self.assertTrue(scheduler._can_launch_task(legacy_task))
+            self.assertEqual(SvgBatchTask.from_payload(local_task.to_payload()).scheduler_owner, "server-a")
+        finally:
+            if previous is None:
+                os.environ.pop("PPT_SERVER_ID", None)
+            else:
+                os.environ["PPT_SERVER_ID"] = previous
+
     def _running_task(
         self,
         client: FakeRedis,
@@ -534,6 +559,19 @@ class SvgSchedulerStaleCleanupTests(unittest.TestCase):
         payload["started_at"] = time.time() - started_offset_seconds
         client.set("test:svg_scheduler:task:job_1_batch_02_deadbeef", json.dumps(payload, ensure_ascii=False))
         return SvgBatchTask.from_payload(payload)
+
+    def _task_with_owner(self, owner: str | None) -> SvgBatchTask:
+        return SvgBatchTask(
+            task_id=f"task_{owner or 'legacy'}",
+            owner_job_id="job_1",
+            report_id="report_1",
+            batch_index=0,
+            total_batches=1,
+            requested_workers=1,
+            worker_request_path="worker.json",
+            enqueued_at=time.time(),
+            scheduler_owner=owner,
+        )
 
 
 class AnchorEvenBatchingTests(unittest.TestCase):

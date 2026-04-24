@@ -57,6 +57,7 @@ class SvgBatchTask:
     account_id: str | None = None
     account_lease_id: str | None = None
     account_retry_count: int = 0
+    scheduler_owner: str | None = None
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "SvgBatchTask":
@@ -79,6 +80,7 @@ class SvgBatchTask:
             account_id=_safe_str(payload.get("account_id")),
             account_lease_id=_safe_str(payload.get("account_lease_id")),
             account_retry_count=_safe_int(payload.get("account_retry_count")),
+            scheduler_owner=_safe_str(payload.get("scheduler_owner")),
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -101,6 +103,7 @@ class SvgBatchTask:
             "account_id": self.account_id,
             "account_lease_id": self.account_lease_id,
             "account_retry_count": self.account_retry_count,
+            "scheduler_owner": self.scheduler_owner,
         }
 
 
@@ -123,6 +126,12 @@ def scheduler_enabled_from_env() -> bool:
     if raw is None:
         return False
     return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def svg_scheduler_owner_from_env() -> str:
+    raw = os.getenv("PPT_API_SVG_SCHEDULER_OWNER") or os.getenv("PPT_SERVER_ID")
+    owner = (raw or "").strip()
+    return owner or socket.gethostname()
 
 
 def scheduler_key(key_prefix: str, suffix: str) -> str:
@@ -463,7 +472,8 @@ class SvgScheduler:
         self.account_pool = account_pool
         self.poll_seconds = max(0.2, poll_seconds)
         self.max_workers = max(1, max_workers)
-        self.worker_id = f"{os.getenv('PPT_SERVER_ID') or socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+        self.owner_key = svg_scheduler_owner_from_env()
+        self.worker_id = f"{self.owner_key}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
         self.heartbeat_seconds = max(10, _env_int("PPT_API_SVG_SCHEDULER_HEARTBEAT_SECONDS", 120))
         self.running_stale_seconds = max(
             self.heartbeat_seconds * 2,
@@ -490,6 +500,7 @@ class SvgScheduler:
             "total_slots": 0,
             "account_id_counts": {},
             "account_pool_waiting_batches": 0,
+            "owner_key": self.owner_key,
             "heartbeat_seconds": self.heartbeat_seconds,
             "running_stale_seconds": self.running_stale_seconds,
             "stale_reaped_batches": 0,
@@ -535,10 +546,10 @@ class SvgScheduler:
         self._collect_finished_futures()
         self._refresh_owned_heartbeats()
 
-        pending_tasks = self.store.list_pending_tasks()
+        pending_tasks = self._owned_pending_tasks()
         running_tasks = self.store.list_running_tasks()
         if self._reap_stale_running_tasks(running_tasks):
-            pending_tasks = self.store.list_pending_tasks()
+            pending_tasks = self._owned_pending_tasks()
             running_tasks = self.store.list_running_tasks()
         total_slots = max(1, int(self.slot_limit_resolver()))
         running_total = len(running_tasks)
@@ -680,6 +691,7 @@ class SvgScheduler:
                 "total_slots": total_slots,
                 "account_id_counts": self._account_id_counts(current_running),
                 "account_pool_waiting_batches": account_pool_waiting_batches,
+                "owner_key": self.owner_key,
                 "heartbeat_seconds": self.heartbeat_seconds,
                 "running_stale_seconds": self.running_stale_seconds,
                 "stale_reaped_batches": self._stale_reaped_batches_total,
@@ -744,6 +756,12 @@ class SvgScheduler:
     def _owned_running_task_ids(self) -> set[str]:
         with self._lock:
             return {task_id for _future, (task_id, _lease) in self._futures.items()}
+
+    def _can_launch_task(self, task: SvgBatchTask) -> bool:
+        return task.scheduler_owner is None or task.scheduler_owner == self.owner_key
+
+    def _owned_pending_tasks(self) -> list[SvgBatchTask]:
+        return [task for task in self.store.list_pending_tasks() if self._can_launch_task(task)]
 
     def _reap_stale_running_tasks(self, running_tasks: list[SvgBatchTask]) -> int:
         now = time.time()

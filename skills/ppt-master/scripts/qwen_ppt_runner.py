@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -57,12 +58,14 @@ try:
         SvgBatchTask,
         build_svg_scheduler_task_id,
         scheduler_enabled_from_env,
+        svg_scheduler_owner_from_env,
     )
 except Exception:  # pragma: no cover - fallback when api_service import is unavailable
     RedisSvgSchedulerStore = None  # type: ignore[assignment]
     SvgBatchTask = None  # type: ignore[assignment]
     build_svg_scheduler_task_id = None  # type: ignore[assignment]
     scheduler_enabled_from_env = None  # type: ignore[assignment]
+    svg_scheduler_owner_from_env = None  # type: ignore[assignment]
     SVG_TASK_SUCCEEDED = "succeeded"
     SVG_TASK_FAILED = "failed"
 
@@ -974,6 +977,13 @@ def redis_key_prefix() -> str:
 
 def redis_key(suffix: str) -> str:
     return f"{redis_key_prefix()}:{suffix}"
+
+
+def scheduler_owner_key() -> str:
+    if svg_scheduler_owner_from_env is not None:
+        return str(svg_scheduler_owner_from_env())
+    raw = os.getenv("PPT_API_SVG_SCHEDULER_OWNER") or os.getenv("PPT_SERVER_ID")
+    return (raw or "").strip() or socket.gethostname()
 
 
 def get_runner_redis_client(log_path: Path | None = None):
@@ -6005,10 +6015,12 @@ def execute_parallel_svg_generation_centralized(
         runner_dir=runner_dir,
     )
     owner_job_id = str(request.get("job_id") or project_path.name)
+    scheduler_owner = scheduler_owner_key()
     requested_workers = int(request.get("parallel_batch_workers", DEFAULT_PARALLEL_BATCH_WORKERS))
     append_log(
         log_path,
-        f"Enqueueing centralized SVG batches: total_batches={len(prepared_batches)} requested_workers={requested_workers}",
+        f"Enqueueing centralized SVG batches: total_batches={len(prepared_batches)} "
+        f"requested_workers={requested_workers} scheduler_owner={scheduler_owner}",
     )
     task_ids: list[str] = []
     task_id_to_batch_index: dict[str, int] = {}
@@ -6034,6 +6046,7 @@ def execute_parallel_svg_generation_centralized(
             worker_request_path=str(worker_request_path),
             enqueued_at=time.time() + (prepared.batch_index * 0.001),
             requires_anchor=prepared.requires_anchor,
+            scheduler_owner=scheduler_owner,
         )
         store.enqueue_task(task)
         task_ids.append(task_id)
