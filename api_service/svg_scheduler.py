@@ -4,6 +4,8 @@ import json
 import logging
 import math
 import os
+import signal
+import socket
 import statistics
 import subprocess
 import sys
@@ -26,6 +28,7 @@ SVG_SCHEDULER_RECENT_KEY_SUFFIX = "svg_scheduler:recent"
 SVG_SCHEDULER_JOB_GRANTS_KEY_SUFFIX = "svg_scheduler:job_grants"
 SVG_SCHEDULER_TASK_KEY_PREFIX = "svg_scheduler:task:"
 SVG_SCHEDULER_ANCHOR_KEY_PREFIX = "svg_scheduler:anchor_done:"
+SVG_SCHEDULER_HEARTBEAT_KEY_PREFIX = "svg_scheduler:heartbeat:"
 
 SVG_TASK_PENDING = "pending"
 SVG_TASK_RUNNING = "running"
@@ -133,6 +136,10 @@ def svg_scheduler_task_key(key_prefix: str, task_id: str) -> str:
 
 def svg_scheduler_anchor_key(key_prefix: str, owner_job_id: str) -> str:
     return scheduler_key(key_prefix, f"{SVG_SCHEDULER_ANCHOR_KEY_PREFIX}{owner_job_id}")
+
+
+def svg_scheduler_heartbeat_key(key_prefix: str, task_id: str) -> str:
+    return scheduler_key(key_prefix, f"{SVG_SCHEDULER_HEARTBEAT_KEY_PREFIX}{task_id}")
 
 
 def build_svg_scheduler_task_id(owner_job_id: str, batch_index: int) -> str:
@@ -360,6 +367,57 @@ class RedisSvgSchedulerStore:
         self.client.delete(svg_scheduler_anchor_key(self.key_prefix, owner_job_id))
         self.client.hdel(self.job_grants_key, owner_job_id)
 
+    def write_task_heartbeat(self, task_id: str, owner: str, ttl_seconds: int) -> None:
+        self.client.set(svg_scheduler_heartbeat_key(self.key_prefix, task_id), owner, ex=max(1, int(ttl_seconds)))
+
+    def task_heartbeat_alive(self, task_id: str) -> bool:
+        return bool(self.client.exists(svg_scheduler_heartbeat_key(self.key_prefix, task_id)))
+
+    def delete_task_heartbeat(self, task_id: str) -> None:
+        self.client.delete(svg_scheduler_heartbeat_key(self.key_prefix, task_id))
+
+    def clear_svg_budget_leases_for_task(self, task: SvgBatchTask) -> int:
+        runner_dir = _read_worker_request_runner_dir(task.worker_request_path)
+        if not runner_dir:
+            return 0
+        label_prefix = f"{Path(runner_dir).name}:svg_batch_{task.batch_index + 1:02d}_turn_"
+        leases_key = scheduler_key(self.key_prefix, "svg:budget:leases")
+        removed = 0
+        for lease_id in [str(item) for item in self.client.zrange(leases_key, 0, -1)]:
+            lease_key = scheduler_key(self.key_prefix, f"svg:budget:lease:{lease_id}")
+            payload = self.client.hgetall(lease_key) or {}
+            if str(payload.get("runner_dir") or "") != runner_dir:
+                continue
+            if not str(payload.get("label") or "").startswith(label_prefix):
+                continue
+            self.client.zrem(leases_key, lease_id)
+            self.client.delete(lease_key)
+            removed += 1
+        return removed
+
+    def clear_llm_slots_for_task(self, task: SvgBatchTask, *, stage: str, max_slots: int) -> int:
+        runner_dir = _read_worker_request_runner_dir(task.worker_request_path)
+        if not runner_dir:
+            return 0
+        label_prefix = f"svg_batch_{task.batch_index + 1:02d}_turn_"
+        removed = 0
+        for index in range(1, max(1, int(max_slots)) + 1):
+            slot_key = scheduler_key(self.key_prefix, f"llm:slot:{stage}:{index:03d}")
+            meta_key = scheduler_key(self.key_prefix, f"llm:slotmeta:{stage}:{index:03d}")
+            payload = _load_slotmeta_payload(self.client.get(meta_key))
+            if not payload:
+                continue
+            if str(payload.get("runner_dir") or "") != runner_dir:
+                continue
+            if not str(payload.get("label") or "").startswith(label_prefix):
+                continue
+            token = str(payload.get("token") or "")
+            if not token or self.client.get(slot_key) == token:
+                self.client.delete(slot_key)
+            self.client.delete(meta_key)
+            removed += 1
+        return removed
+
     def fail_pending_tasks_for_job(self, owner_job_id: str, error: str) -> None:
         for task in self.list_pending_tasks():
             if task.owner_job_id != owner_job_id:
@@ -370,6 +428,7 @@ class RedisSvgSchedulerStore:
         self._write_task(task)
         self.client.zrem(self.pending_key, task.task_id)
         self.client.zrem(self.running_key, task.task_id)
+        self.delete_task_heartbeat(task.task_id)
         self.client.lpush(self.recent_key, task.task_id)
         self.client.ltrim(self.recent_key, 0, 499)
 
@@ -404,6 +463,13 @@ class SvgScheduler:
         self.account_pool = account_pool
         self.poll_seconds = max(0.2, poll_seconds)
         self.max_workers = max(1, max_workers)
+        self.worker_id = f"{os.getenv('PPT_SERVER_ID') or socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+        self.heartbeat_seconds = max(10, _env_int("PPT_API_SVG_SCHEDULER_HEARTBEAT_SECONDS", 120))
+        self.running_stale_seconds = max(
+            self.heartbeat_seconds * 2,
+            _env_int("PPT_API_SVG_SCHEDULER_RUNNING_STALE_SECONDS", 30 * 60),
+        )
+        self._stale_reaped_batches_total = 0
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._executor: ThreadPoolExecutor | None = None
@@ -424,6 +490,9 @@ class SvgScheduler:
             "total_slots": 0,
             "account_id_counts": {},
             "account_pool_waiting_batches": 0,
+            "heartbeat_seconds": self.heartbeat_seconds,
+            "running_stale_seconds": self.running_stale_seconds,
+            "stale_reaped_batches": 0,
         }
 
     def start(self) -> None:
@@ -464,9 +533,13 @@ class SvgScheduler:
 
     def _tick(self) -> None:
         self._collect_finished_futures()
+        self._refresh_owned_heartbeats()
 
         pending_tasks = self.store.list_pending_tasks()
         running_tasks = self.store.list_running_tasks()
+        if self._reap_stale_running_tasks(running_tasks):
+            pending_tasks = self.store.list_pending_tasks()
+            running_tasks = self.store.list_running_tasks()
         total_slots = max(1, int(self.slot_limit_resolver()))
         running_total = len(running_tasks)
 
@@ -567,7 +640,16 @@ class SvgScheduler:
                     continue
                 pending_for_job.pop(0)
                 self.store.increment_job_grants(task.owner_job_id)
-                future = executor.submit(_run_svg_batch_worker, self.runner_script, Path(running_task.worker_request_path))
+                self.store.write_task_heartbeat(running_task.task_id, self.worker_id, self.heartbeat_seconds)
+                try:
+                    future = executor.submit(_run_svg_batch_worker, self.runner_script, Path(running_task.worker_request_path))
+                except Exception as exc:
+                    self.store.delete_task_heartbeat(running_task.task_id)
+                    if account_lease is not None and self.account_pool is not None:
+                        self.account_pool.release(account_lease, error=f"failed to submit svg worker: {exc}")
+                    self.store.mark_failed(running_task.task_id, f"Failed to submit svg worker: {exc}")
+                    logger.exception("Failed to submit svg worker for task %s: %s", running_task.task_id, exc)
+                    continue
                 with self._lock:
                     self._futures[future] = (task.task_id, account_lease)
                 running_by_job.setdefault(job_id, []).append(running_task)
@@ -598,6 +680,9 @@ class SvgScheduler:
                 "total_slots": total_slots,
                 "account_id_counts": self._account_id_counts(current_running),
                 "account_pool_waiting_batches": account_pool_waiting_batches,
+                "heartbeat_seconds": self.heartbeat_seconds,
+                "running_stale_seconds": self.running_stale_seconds,
+                "stale_reaped_batches": self._stale_reaped_batches_total,
             }
 
     def _collect_finished_futures(self) -> None:
@@ -646,6 +731,74 @@ class SvgScheduler:
                     )
                 else:
                     self.store.mark_failed(task_id, error or "svg batch worker failed")
+
+    def _refresh_owned_heartbeats(self) -> None:
+        with self._lock:
+            task_ids = [task_id for _future, (task_id, _lease) in self._futures.items()]
+        for task_id in task_ids:
+            try:
+                self.store.write_task_heartbeat(task_id, self.worker_id, self.heartbeat_seconds)
+            except Exception as exc:  # pragma: no cover - Redis fault tolerance
+                logger.warning("Failed to refresh svg task heartbeat task_id=%s: %s", task_id, exc)
+
+    def _owned_running_task_ids(self) -> set[str]:
+        with self._lock:
+            return {task_id for _future, (task_id, _lease) in self._futures.items()}
+
+    def _reap_stale_running_tasks(self, running_tasks: list[SvgBatchTask]) -> int:
+        now = time.time()
+        owned_task_ids = self._owned_running_task_ids()
+        reaped = 0
+        for task in running_tasks:
+            if task.task_id in owned_task_ids:
+                continue
+            if self.store.task_heartbeat_alive(task.task_id):
+                continue
+            started_at = task.started_at or task.enqueued_at or now
+            elapsed = now - started_at
+            if elapsed < self.running_stale_seconds:
+                continue
+            error = (
+                "Stale centralized SVG scheduler task reaped after "
+                f"{elapsed:.0f}s without an active heartbeat"
+            )
+            self._release_stale_account_lease(task, error)
+            removed_llm_slots = self.store.clear_llm_slots_for_task(
+                task,
+                stage="svg",
+                max_slots=max(self.slot_limit_resolver(), _env_int("PPT_API_LLM_SVG_SLOTS", 10)),
+            )
+            removed_budget_leases = self.store.clear_svg_budget_leases_for_task(task)
+            self.store.mark_failed(task.task_id, error)
+            reaped += 1
+            logger.warning(
+                "Reaped stale svg task task_id=%s owner_job_id=%s batch=%s elapsed=%.1fs llm_slots=%s budget_leases=%s",
+                task.task_id,
+                task.owner_job_id,
+                task.batch_index + 1,
+                elapsed,
+                removed_llm_slots,
+                removed_budget_leases,
+            )
+        if reaped:
+            self._stale_reaped_batches_total += reaped
+        return reaped
+
+    def _release_stale_account_lease(self, task: SvgBatchTask, error: str) -> None:
+        if self.account_pool is None or not task.account_id or not task.account_lease_id:
+            return
+        try:
+            lease = AccountLease(
+                lease_id=task.account_lease_id,
+                account_id=task.account_id,
+                api_key="",
+                base_url=None,
+                model=None,
+                expires_at=time.time(),
+            )
+            self.account_pool.release(lease, error=error)
+        except Exception as exc:  # pragma: no cover - Redis fault tolerance
+            logger.warning("Failed to release stale account lease task_id=%s lease_id=%s: %s", task.task_id, task.account_lease_id, exc)
 
     def _prepare_account_lease(self, task: SvgBatchTask) -> tuple[bool, AccountLease | None]:
         if self.account_pool is None or not self.account_pool.configured:
@@ -702,21 +855,75 @@ def _run_svg_batch_worker(runner_script: Path, worker_request_path: Path) -> dic
         "--svg-batch-worker",
         str(worker_request_path),
     ]
-    completed = subprocess.run(
+    timeout_seconds = _svg_batch_worker_timeout_seconds()
+    process = subprocess.Popen(
         command,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         errors="replace",
-        check=False,
+        start_new_session=(os.name != "nt"),
     )
-    payload = _load_worker_payload(completed.stdout, completed.stderr)
-    if completed.returncode != 0:
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        _kill_process_tree(process)
+        stdout, stderr = process.communicate()
+        return {
+            "status": SVG_TASK_FAILED,
+            "error": f"SVG batch worker timed out after {timeout_seconds}s",
+            "stdout_tail": (stdout or "")[-4000:],
+            "stderr_tail": (stderr or "")[-4000:],
+        }
+    completed_returncode = process.returncode
+    payload = _load_worker_payload(stdout or "", stderr or "")
+    if completed_returncode != 0:
         failure_payload = dict(payload)
         failure_payload["status"] = SVG_TASK_FAILED
-        failure_payload["error"] = payload.get("error") or completed.stderr.strip() or completed.stdout.strip()
+        failure_payload["error"] = payload.get("error") or (stderr or "").strip() or (stdout or "").strip()
         return failure_payload
     return payload
+
+
+def _kill_process_tree(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        if os.name != "nt":
+            os.killpg(process.pid, signal.SIGKILL)
+        else:
+            process.kill()
+    except ProcessLookupError:
+        return
+    except Exception:
+        process.kill()
+
+
+def _svg_batch_worker_timeout_seconds() -> int:
+    default = _env_int("PPT_API_RUNNER_TIMEOUT_SECONDS", 2 * 60 * 60)
+    return max(60, _env_int("PPT_API_SVG_BATCH_WORKER_TIMEOUT_SECONDS", default))
+
+
+def _read_worker_request_runner_dir(worker_request_path: str) -> str | None:
+    try:
+        payload = json.loads(Path(worker_request_path).read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    runner_dir = str(payload.get("runner_dir") or "").strip()
+    return runner_dir or None
+
+
+def _load_slotmeta_payload(raw: Any) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    try:
+        payload = json.loads(str(raw))
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _merge_worker_request_credentials(worker_request_path: Path, lease: AccountLease) -> None:

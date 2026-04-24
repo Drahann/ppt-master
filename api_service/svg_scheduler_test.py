@@ -14,7 +14,7 @@ from api_service.account_pool import (
     RedisAccountPool,
     classify_account_error,
 )
-from api_service.svg_scheduler import compute_scheduler_grants
+from api_service.svg_scheduler import RedisSvgSchedulerStore, SvgBatchTask, SvgScheduler, compute_scheduler_grants
 from api_service.svg_scheduler import _merge_worker_request_credentials
 
 
@@ -31,6 +31,7 @@ class FakeRedis:
         self.values: dict[str, str] = {}
         self.hashes: dict[str, dict[str, str]] = {}
         self.zsets: dict[str, dict[str, float]] = {}
+        self.lists: dict[str, list[str]] = {}
 
     def set(self, key, value, nx=False, ex=None):
         if nx and key in self.values:
@@ -47,10 +48,11 @@ class FakeRedis:
             removed += 1 if self.values.pop(key, None) is not None else 0
             removed += 1 if self.hashes.pop(key, None) is not None else 0
             removed += 1 if self.zsets.pop(key, None) is not None else 0
+            removed += 1 if self.lists.pop(key, None) is not None else 0
         return removed
 
     def exists(self, key):
-        return key in self.values or key in self.hashes or key in self.zsets
+        return key in self.values or key in self.hashes or key in self.zsets or key in self.lists
 
     def expire(self, key, seconds):
         return True
@@ -125,6 +127,23 @@ class FakeRedis:
         high = self._score(max_score, float("inf"))
         members = [member for member, score in self.zsets.get(name, {}).items() if low <= score <= high]
         return self.zrem(name, *members)
+
+    def lpush(self, name, *values):
+        bucket = self.lists.setdefault(name, [])
+        for value in values:
+            bucket.insert(0, str(value))
+        return len(bucket)
+
+    def lrange(self, name, start, end):
+        bucket = self.lists.get(name, [])
+        if end == -1:
+            return bucket[start:]
+        return bucket[start : end + 1]
+
+    def ltrim(self, name, start, end):
+        bucket = self.lists.setdefault(name, [])
+        self.lists[name] = bucket[start:] if end == -1 else bucket[start : end + 1]
+        return True
 
     @staticmethod
     def _score(value, fallback):
@@ -387,6 +406,134 @@ class SvgSchedulerAccountLeaseTests(unittest.TestCase):
             self.assertEqual(payload["api_key"], "secret-key")
             self.assertEqual(payload["base_url"], "https://example.test/v1")
             self.assertEqual(payload["model"], "qwen-test")
+
+
+class SvgSchedulerStaleCleanupTests(unittest.TestCase):
+    def test_reaps_stale_running_task_without_heartbeat_and_releases_lease(self) -> None:
+        previous = os.environ.get("PPT_API_SVG_SCHEDULER_RUNNING_STALE_SECONDS")
+        os.environ["PPT_API_SVG_SCHEDULER_RUNNING_STALE_SECONDS"] = "60"
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                client = FakeRedis()
+                store = RedisSvgSchedulerStore(client, key_prefix="test")
+                pool = RedisAccountPool(
+                    client,
+                    [AccountPoolEntry("account-a", "key-a", tpm_limit=1000000)],
+                    key_prefix="test",
+                )
+                task = self._running_task(client, store, pool, Path(temp_dir), started_offset_seconds=3600)
+                runner_dir = Path(json.loads(Path(task.worker_request_path).read_text(encoding="utf-8"))["runner_dir"])
+                client.set("test:llm:slot:svg:001", "slot-token")
+                client.set(
+                    "test:llm:slotmeta:svg:001",
+                    json.dumps(
+                        {
+                            "runner_dir": str(runner_dir),
+                            "label": "svg_batch_02_turn_01",
+                            "token": "slot-token",
+                        }
+                    ),
+                )
+                client.zadd("test:svg:budget:leases", {"budget-lease-1": time.time() + 3600})
+                client.hset(
+                    "test:svg:budget:lease:budget-lease-1",
+                    mapping={
+                        "runner_dir": str(runner_dir),
+                        "label": "runner:svg_batch_02_turn_01",
+                    },
+                )
+                scheduler = SvgScheduler(
+                    store=store,
+                    runner_script=Path(temp_dir) / "runner.py",
+                    slot_limit_resolver=lambda: 1,
+                    account_pool=pool,
+                )
+
+                reaped = scheduler._reap_stale_running_tasks(store.list_running_tasks())
+
+                self.assertEqual(reaped, 1)
+                current = store.get_task(task.task_id)
+                self.assertIsNotNone(current)
+                assert current is not None
+                self.assertEqual(current.status, "failed")
+                self.assertEqual(store.list_running_tasks(), [])
+                self.assertEqual(pool.snapshot()["accounts"][0]["active_leases"], 0)
+                self.assertFalse(client.exists("test:llm:slot:svg:001"))
+                self.assertFalse(client.exists("test:llm:slotmeta:svg:001"))
+                self.assertFalse(client.exists("test:svg:budget:lease:budget-lease-1"))
+        finally:
+            if previous is None:
+                os.environ.pop("PPT_API_SVG_SCHEDULER_RUNNING_STALE_SECONDS", None)
+            else:
+                os.environ["PPT_API_SVG_SCHEDULER_RUNNING_STALE_SECONDS"] = previous
+
+    def test_heartbeat_prevents_stale_reap_for_other_live_scheduler(self) -> None:
+        previous = os.environ.get("PPT_API_SVG_SCHEDULER_RUNNING_STALE_SECONDS")
+        os.environ["PPT_API_SVG_SCHEDULER_RUNNING_STALE_SECONDS"] = "60"
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                client = FakeRedis()
+                store = RedisSvgSchedulerStore(client, key_prefix="test")
+                pool = RedisAccountPool(
+                    client,
+                    [AccountPoolEntry("account-a", "key-a", tpm_limit=1000000)],
+                    key_prefix="test",
+                )
+                task = self._running_task(client, store, pool, Path(temp_dir), started_offset_seconds=3600)
+                store.write_task_heartbeat(task.task_id, "other-scheduler", ttl_seconds=120)
+                scheduler = SvgScheduler(
+                    store=store,
+                    runner_script=Path(temp_dir) / "runner.py",
+                    slot_limit_resolver=lambda: 1,
+                    account_pool=pool,
+                )
+
+                reaped = scheduler._reap_stale_running_tasks(store.list_running_tasks())
+
+                self.assertEqual(reaped, 0)
+                current = store.get_task(task.task_id)
+                self.assertIsNotNone(current)
+                assert current is not None
+                self.assertEqual(current.status, "running")
+                self.assertEqual(pool.snapshot()["accounts"][0]["active_leases"], 1)
+        finally:
+            if previous is None:
+                os.environ.pop("PPT_API_SVG_SCHEDULER_RUNNING_STALE_SECONDS", None)
+            else:
+                os.environ["PPT_API_SVG_SCHEDULER_RUNNING_STALE_SECONDS"] = previous
+
+    def _running_task(
+        self,
+        client: FakeRedis,
+        store: RedisSvgSchedulerStore,
+        pool: RedisAccountPool,
+        temp_dir: Path,
+        *,
+        started_offset_seconds: float,
+    ) -> SvgBatchTask:
+        runner_dir = temp_dir / "project" / "runner"
+        runner_dir.mkdir(parents=True)
+        worker_request_path = runner_dir / "svg_batch_02.worker.json"
+        worker_request_path.write_text(json.dumps({"runner_dir": str(runner_dir)}), encoding="utf-8")
+        task = SvgBatchTask(
+            task_id="job_1_batch_02_deadbeef",
+            owner_job_id="job_1",
+            report_id="report_1",
+            batch_index=1,
+            total_batches=3,
+            requested_workers=1,
+            worker_request_path=str(worker_request_path),
+            enqueued_at=time.time() - started_offset_seconds - 1,
+        )
+        store.enqueue_task(task)
+        lease = pool.acquire(label="job_1:batch_2", owner_task_id=task.task_id, stage="svg")
+        assert lease is not None
+        running = store.mark_running(task.task_id, account_id=lease.account_id, account_lease_id=lease.lease_id)
+        assert running is not None
+        payload = running.to_payload()
+        payload["started_at"] = time.time() - started_offset_seconds
+        client.set("test:svg_scheduler:task:job_1_batch_02_deadbeef", json.dumps(payload, ensure_ascii=False))
+        return SvgBatchTask.from_payload(payload)
 
 
 class AnchorEvenBatchingTests(unittest.TestCase):
