@@ -106,12 +106,41 @@ def resolve_postppt_path(explicit: str | None) -> Path:
     raise FileNotFoundError("postppt.json not found in default locations")
 
 
-def load_content(postppt_path: Path) -> str:
+def load_postppt(postppt_path: Path) -> tuple[dict[str, Any], str]:
     payload = json.loads(postppt_path.read_text(encoding="utf-8"))
     content = str(payload.get("content") or "")
     if not content.strip():
         raise RuntimeError(f"content missing in {postppt_path}")
-    return content
+    return payload, content
+
+
+def extract_title(payload: dict[str, Any], fallback: str) -> str:
+    raw_title = payload.get("title")
+    if isinstance(raw_title, str):
+        title = raw_title.strip()
+        if title:
+            return title
+    if isinstance(raw_title, list):
+        for item in raw_title:
+            if isinstance(item, dict):
+                title = str(item.get("sub_answer") or "").strip()
+                if title:
+                    return title
+        flattened = " - ".join(str(item).strip() for item in raw_title if str(item).strip())
+        if flattened:
+            return flattened
+    elif raw_title is not None:
+        title = str(raw_title).strip()
+        if title:
+            return title
+
+    for line in str(payload.get("content") or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("# "):
+            title = stripped[2:].strip()
+            if title:
+                return title
+    return fallback
 
 
 def build_payload(
@@ -246,7 +275,8 @@ def main() -> int:
     metrics_url = f"{base_url}/metrics"
 
     postppt_path = resolve_postppt_path(args.postppt_json)
-    content = load_content(postppt_path)
+    postppt_payload, content = load_postppt(postppt_path)
+    source_title = extract_title(postppt_payload, "async stress")
 
     health_status, health_payload = http_json(f"{base_url}/healthz", timeout=10)
     if health_status != 200:
@@ -262,6 +292,7 @@ def main() -> int:
     print_flush(f"api:         {api_url}")
     print_flush(f"metrics:     {metrics_url}")
     print_flush(f"content:     {postppt_path}")
+    print_flush(f"title:       {source_title}")
     print_flush(f"batch:       {batch_mode} / size={batch_size} / workers={parallel_batch_workers} / partition={batch_partition}")
     print_flush(f"mode:        response={response_mode} / callback={callback_mode}")
     print_flush(f"log dir:     {log_dir}")
@@ -299,7 +330,7 @@ def main() -> int:
         report_id = f"async_stress_{int(time.time())}_{index}"
         payload = build_payload(
             report_id=report_id,
-            title=f"async stress task {index}",
+            title=f"{source_title} async stress task {index}",
             content=content,
             batch_mode=batch_mode,
             batch_size=batch_size,
