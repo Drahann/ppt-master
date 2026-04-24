@@ -118,7 +118,7 @@ def load_settings() -> Settings:
         qwen_review_model=(os.getenv("PPT_API_QWEN_REVIEW_MODEL") or "").strip() or None,
         qwen_notes_model=(os.getenv("PPT_API_QWEN_NOTES_MODEL") or "").strip() or None,
         batch_mode=batch_mode,
-        batch_size=max(1, _env_int("PPT_API_BATCH_SIZE", 5)),
+        batch_size=max(1, _env_int("PPT_API_BATCH_SIZE", 6)),
         parallel_batch_workers=max(1, _env_int("PPT_API_PARALLEL_BATCH_WORKERS", 3)),
         batch_partition=batch_partition,
         llm_slot_dir=Path(os.getenv("PPT_API_LLM_SLOT_DIR", str(REPO_ROOT / "tmp" / "llm-slots"))).expanduser(),

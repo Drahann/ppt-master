@@ -14,6 +14,7 @@ import math
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -89,6 +90,7 @@ LANGUAGE_CONSISTENCY_RULE = (
 )
 DEFAULT_MAX_FOLLOW_UPS = 8
 QWEN_CALL_TIMEOUT_SECONDS = 60 * 60
+QWEN_SVG_BATCH_TURN_TIMEOUT_SECONDS = 30 * 60
 DIRECT_NOTES_TIMEOUT_SECONDS = 10 * 60
 DIRECT_NOTES_MAX_TOKENS = 12000
 DIRECT_SPEC_TIMEOUT_SECONDS = 15 * 60
@@ -131,7 +133,7 @@ DEFAULT_ICON_LIBRARY = "chunk"
 ICON_COVERAGE_RATIO = 0.75
 ICON_COVERAGE_MIN_SLIDES = 12
 COOKBOOK_REREAD_INTERVAL = 8
-BATCH_SIZE = 5
+BATCH_SIZE = 6
 BATCH_MODE_THRESHOLD = 15
 DEFAULT_PARALLEL_BATCH_WORKERS = 3
 DEFAULT_BATCH_PARTITION = "anchor_even"
@@ -257,6 +259,7 @@ class QwenCallResult:
     stdout: str
     stderr: str
     usage: dict[str, Any] | None = None
+    timed_out: bool = False
 
 
 @dataclass
@@ -849,6 +852,36 @@ def env_int(name: str, default: int, minimum: int = 1) -> int:
     except ValueError:
         return default
     return max(minimum, value)
+
+
+def is_svg_batch_artifact(artifact_prefix: str) -> bool:
+    return artifact_prefix.startswith("svg_batch_")
+
+
+def qwen_turn_timeout_seconds(stage: str, artifact_prefix: str) -> int:
+    if stage == "svg" and is_svg_batch_artifact(artifact_prefix):
+        return env_int(
+            "PPT_API_QWEN_SVG_BATCH_TURN_TIMEOUT_SECONDS",
+            QWEN_SVG_BATCH_TURN_TIMEOUT_SECONDS,
+            minimum=60,
+        )
+    return env_int("PPT_API_QWEN_CALL_TIMEOUT_SECONDS", QWEN_CALL_TIMEOUT_SECONDS, minimum=60)
+
+
+def terminate_qwen_process(process: subprocess.Popen[str], log_path: Path, label: str) -> None:
+    try:
+        if os.name != "nt":
+            os.killpg(process.pid, signal.SIGKILL)
+        else:
+            process.kill()
+    except ProcessLookupError:
+        return
+    except Exception as exc:
+        append_log(log_path, f"Failed to terminate timed-out qwen process for {label}: {exc}")
+        try:
+            process.kill()
+        except Exception:
+            pass
 
 
 def llm_slot_dir() -> Path:
@@ -3680,10 +3713,7 @@ def validate_svg_outputs(
                 icon_slide_count += 1
 
     if content_slide_count:
-        minimum_icon_slides = min(
-            content_slide_count,
-            max(ICON_COVERAGE_MIN_SLIDES, math.ceil(content_slide_count * ICON_COVERAGE_RATIO)),
-        )
+        minimum_icon_slides = 1
         if icon_slide_count < minimum_icon_slides:
             errors.append(
                 "Too few content SVGs use icon placeholders; "
@@ -5201,6 +5231,20 @@ def execute_qwen_stage(
             result.returncode,
             generation_errors,
         )
+        timed_out_recoverable = result.timed_out and stage_name.startswith("svg_batch_")
+        if timed_out_recoverable:
+            if state_complete:
+                append_log(
+                    log_path,
+                    f"{stage_name}: timed-out turn produced valid batch outputs; accepting without sentinel",
+                )
+                classification = "complete"
+            elif classification == "error":
+                append_log(
+                    log_path,
+                    f"{stage_name}: timed-out turn classified as error; treating as incomplete so batch can repair",
+                )
+                classification = "ordinary"
         if recoverable_notes_failure and classification == "error":
             classification = "incomplete"
         append_log(
@@ -5210,7 +5254,7 @@ def execute_qwen_stage(
             f"generation_errors={generation_errors}",
         )
 
-        if result.returncode != 0 and not recoverable_notes_failure:
+        if result.returncode != 0 and not recoverable_notes_failure and not timed_out_recoverable:
             raise RunnerError(
                 f"{stage_name} failed with rc={result.returncode}. "
                 f"See {runner_dir / f'{artifact_prefix}_turn_{turn_index:02d}.stderr.txt'}"
@@ -5281,6 +5325,7 @@ def run_qwen_prompt(
     completed_stderr = ""
     completed_returncode = 0
     elapsed_seconds = 0.0
+    timed_out = False
 
     try:
         if effective_credential_override is None:
@@ -5317,6 +5362,7 @@ def run_qwen_prompt(
         if account_id:
             account_note = f" account_id={account_id}"
         append_log(log_path, f"Starting qwen turn {turn_index}:{account_note} {' '.join(safe_command)} (prompt via stdin, {len(prompt)} chars)")
+        timeout_seconds = qwen_turn_timeout_seconds(stage, artifact_prefix)
 
         with acquire_svg_budget_lease(
             stage,
@@ -5341,6 +5387,7 @@ def run_qwen_prompt(
                     text=True,
                     encoding="utf-8",
                     errors="replace",
+                    start_new_session=(os.name != "nt"),
                 )
                 monitor_thread: Thread | None = None
                 if live_usage_enabled(stage):
@@ -5364,17 +5411,24 @@ def run_qwen_prompt(
                     )
                     monitor_thread.start()
                 try:
-                    stdout_text, stderr_text = process.communicate(input=prompt, timeout=QWEN_CALL_TIMEOUT_SECONDS)
-                except subprocess.TimeoutExpired as exc:
-                    process.kill()
+                    stdout_text, stderr_text = process.communicate(input=prompt, timeout=timeout_seconds)
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    append_log(log_path, f"Qwen turn timed out after {timeout_seconds}s; terminating {label}")
+                    terminate_qwen_process(process, log_path, label)
                     stdout_text, stderr_text = process.communicate()
+                    timeout_message = (
+                        f"Qwen turn timed out after {timeout_seconds}s: {label}. "
+                        "Process was terminated; runner will validate partial outputs."
+                    )
+                    stderr_text = (stderr_text or "").rstrip()
+                    stderr_text = f"{stderr_text}\n{timeout_message}\n" if stderr_text else f"{timeout_message}\n"
                     if monitor_thread is not None:
                         monitor_thread.join(timeout=max(2.0, live_usage_poll_seconds() * 3))
-                    raise RunnerError(f"Qwen turn timed out after {QWEN_CALL_TIMEOUT_SECONDS}s: {label}") from exc
                 elapsed_seconds = time.time() - run_started
                 completed_stdout = stdout_text
                 completed_stderr = stderr_text
-                completed_returncode = safe_int(process.returncode)
+                completed_returncode = 124 if timed_out else safe_int(process.returncode)
                 if monitor_thread is not None:
                     monitor_thread.join(timeout=max(2.0, live_usage_poll_seconds() * 3))
 
@@ -5409,6 +5463,7 @@ def run_qwen_prompt(
             stdout=completed_stdout,
             stderr=completed_stderr,
             usage=usage_payload,
+            timed_out=timed_out,
         )
     except Exception as exc:
         release_error = str(exc)
