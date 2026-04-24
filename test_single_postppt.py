@@ -4,7 +4,7 @@
 Examples:
   python test_single_postppt.py --dry-run
   python test_single_postppt.py --base-url http://localhost:3001
-  python test_single_postppt.py --response-mode sync --callback-mode none
+  python test_single_postppt.py --response-mode async --callback-mode none
 """
 
 from __future__ import annotations
@@ -158,12 +158,18 @@ def build_request_payload(args: argparse.Namespace, source_payload: dict[str, An
     elif not str(payload.get("report_id") or "").strip():
         payload["report_id"] = f"single_postppt_{timestamp()}"
 
-    payload["responseMode"] = args.response_mode
-    payload["callbackMode"] = args.callback_mode
-    payload["batchMode"] = args.batch_mode
-    payload["batchSize"] = args.batch_size
-    payload["parallelBatchWorkers"] = args.parallel_batch_workers
-    payload["batchPartition"] = args.batch_partition
+    if args.response_mode:
+        payload["responseMode"] = args.response_mode
+    if args.callback_mode:
+        payload["callbackMode"] = args.callback_mode
+    if args.batch_mode:
+        payload["batchMode"] = args.batch_mode
+    if args.batch_size is not None:
+        payload["batchSize"] = args.batch_size
+    if args.parallel_batch_workers is not None:
+        payload["parallelBatchWorkers"] = args.parallel_batch_workers
+    if args.batch_partition:
+        payload["batchPartition"] = args.batch_partition
     if args.spec_model:
         payload["specModel"] = args.spec_model
     if args.notes_model:
@@ -188,23 +194,28 @@ def summarize_terminal(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Submit one ppt-master job using ../postppt.json")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Submit one ppt-master job using ../postppt.json. By default, request-level "
+            "PPT generation knobs are omitted so the API uses its .env.api defaults."
+        )
+    )
     parser.add_argument("--base-url", default=env_str("PPT_API_BASE_URL", DEFAULT_BASE_URL))
     parser.add_argument("--postppt-json", default=str(DEFAULT_POSTPPT_PATH))
-    parser.add_argument("--response-mode", choices=["sync", "async"], default=env_str("RESPONSE_MODE", "async"))
-    parser.add_argument("--callback-mode", choices=["auto", "defer", "none"], default=env_str("CALLBACK_MODE", "none"))
+    parser.add_argument("--response-mode", choices=["sync", "async"], default=None)
+    parser.add_argument("--callback-mode", choices=["auto", "defer", "none"], default=None)
     parser.add_argument("--report-id", default=env_str("REPORT_ID", ""))
     parser.add_argument("--preserve-report-id", action="store_true", help="reuse report_id from postppt.json")
     parser.add_argument(
         "--batch-mode",
         choices=["auto", "always", "never", "parallel"],
-        default=env_str("BATCH_MODE", "parallel"),
+        default=None,
     )
-    parser.add_argument("--batch-size", type=int, default=env_int("BATCH_SIZE", 8, minimum=1))
-    parser.add_argument("--parallel-batch-workers", type=int, default=env_int("PARALLEL_BATCH_WORKERS", 3, minimum=1))
-    parser.add_argument("--batch-partition", default=env_str("BATCH_PARTITION", "anchor_even"))
-    parser.add_argument("--spec-model", default=env_str("SPEC_MODEL", "qwen3.6-plus"))
-    parser.add_argument("--notes-model", default=env_str("NOTES_MODEL", "qwen3.6-flash"))
+    parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument("--parallel-batch-workers", type=int, default=None)
+    parser.add_argument("--batch-partition", default=None)
+    parser.add_argument("--spec-model", default=None)
+    parser.add_argument("--notes-model", default=None)
     parser.add_argument("--poll-seconds", type=int, default=env_int("POLL_SECONDS", 10, minimum=1))
     parser.add_argument("--job-timeout-seconds", type=int, default=env_int("JOB_TIMEOUT_SECONDS", 7200, minimum=60))
     parser.add_argument("--no-poll", action="store_true", help="submit async job and exit without polling")
@@ -221,6 +232,12 @@ def main() -> int:
     request_payload = build_request_payload(args, source_payload)
     log_dir = resolve_log_dir()
     write_json(log_dir / "request.json", request_payload)
+    response_mode_label = args.response_mode or "server default"
+    callback_mode_label = args.callback_mode or "server default"
+    batch_mode_label = args.batch_mode or "server default"
+    batch_size_label = args.batch_size if args.batch_size is not None else "server default"
+    workers_label = args.parallel_batch_workers if args.parallel_batch_workers is not None else "server default"
+    partition_label = args.batch_partition or "server default"
 
     print_flush("=" * 72)
     print_flush("ppt-master single postppt test")
@@ -230,10 +247,10 @@ def main() -> int:
     print_flush(f"api:        {api_url}")
     print_flush(f"report_id:  {request_payload['report_id']}")
     print_flush(f"title:      {extract_title(request_payload, request_payload['report_id'])}")
-    print_flush(f"mode:       response={args.response_mode} callback={args.callback_mode}")
+    print_flush(f"mode:       response={response_mode_label} callback={callback_mode_label}")
     print_flush(
-        f"batch:      {args.batch_mode} size={args.batch_size} "
-        f"workers={args.parallel_batch_workers} partition={args.batch_partition}"
+        f"batch:      {batch_mode_label} size={batch_size_label} "
+        f"workers={workers_label} partition={partition_label}"
     )
     print_flush(f"log dir:    {log_dir}")
     print_flush("=" * 72)
@@ -256,7 +273,9 @@ def main() -> int:
         raise RuntimeError(f"Submit failed: HTTP {status} body={body}")
     print_flush(f"[submit] HTTP {status} elapsed={submit_elapsed}s")
 
-    if args.response_mode == "sync":
+    job_id = str(body.get("job_id") or "").strip()
+    polling_url = str(body.get("pollingUrl") or "").strip()
+    if not job_id or not polling_url:
         summary = {
             "generated_at": iso_now(),
             "http_status": status,
@@ -270,11 +289,6 @@ def main() -> int:
         print_flush(f"[sync] success={summary['success']} slides={summary['slideCount']} pptUrl={summary['pptUrl']}")
         print_flush(f"artifacts: {log_dir}")
         return 0 if body.get("success") else 1
-
-    job_id = str(body.get("job_id") or "").strip()
-    polling_url = str(body.get("pollingUrl") or "").strip()
-    if not job_id or not polling_url:
-        raise RuntimeError(f"Async submit response missing job_id/pollingUrl: {body}")
 
     absolute_polling_url = urllib.parse.urljoin(base_url + "/", polling_url.lstrip("/"))
     print_flush(f"[async] job_id={job_id} polling={absolute_polling_url}")
