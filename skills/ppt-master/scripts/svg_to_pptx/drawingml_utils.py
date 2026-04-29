@@ -91,9 +91,9 @@ FONT_FALLBACK_WIN = {
 }
 
 GENERIC_FONT_MAP = {
-    'monospace': '思源黑体',
-    'sans-serif': '思源黑体',
-    'serif': '思源宋体',
+    'monospace': 'Consolas',
+    'sans-serif': 'Segoe UI',
+    'serif': 'Times New Roman',
 }
 
 # When the latin font is serif and no EA font is specified,
@@ -243,7 +243,7 @@ def parse_font_family(font_family_str: str) -> dict[str, str]:
     Windows. macOS/Linux-only fonts are mapped via FONT_FALLBACK_WIN.
     """
     if not font_family_str:
-        return {'latin': '思源黑体', 'ea': '思源黑体'}
+        return {'latin': 'Segoe UI', 'ea': 'Microsoft YaHei'}
 
     fonts = [f.strip().strip("'\"") for f in font_family_str.split(',')]
     latin_font = None
@@ -271,7 +271,7 @@ def parse_font_family(font_family_str: str) -> dict[str, str]:
 
     # EA must always be a CJK-capable font
     if not ea_font:
-        ea_font = '思源宋体' if final_latin in _SERIF_LATIN else '思源黑体'
+        ea_font = 'SimSun' if final_latin in _SERIF_LATIN else 'Microsoft YaHei'
 
     return {'latin': final_latin, 'ea': ea_font}
 

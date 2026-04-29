@@ -85,6 +85,7 @@ Behavior:
 - Runs deterministic `svg_quality_checker.py` after each completed SVG batch to route C7 pie/donut geometry issues into async Qwen review gates, then runs a final full-deck C7 sweep before notes
 - Runs deterministic `svg_auto_repair.py` after notes generation only for title icon and syntax/XML cleanup; script-based pie/donut geometry repair is disabled
 - Runs `total_md_split.py`, `finalize_svg.py`, and `svg_to_pptx.py -s final`
+- Exports the normal Microsoft YaHei/system-font PPTX, then copies `svg_final` to `svg_final_sourcehan`, rewrites SVG text font families to Source Han, and exports a second Source Han PPTX
 
 Output:
 
@@ -94,8 +95,10 @@ Output:
   "status": "succeeded",
   "project_path": "W:/.../projects/my_deck_ppt169_20260417",
   "qwen_session_id": "notes-session-uuid",
-  "native_pptx_path": "W:/.../exports/my_deck.pptx",
-  "svg_pptx_path": "W:/.../exports/my_deck_svg.pptx",
+  "native_pptx_path": "W:/.../exports/my_deck_20260429_152000_yahei.pptx",
+  "svg_pptx_path": "W:/.../exports/my_deck_20260429_152000_yahei_svg.pptx",
+  "source_han_native_pptx_path": "W:/.../exports/my_deck_20260429_152000_sourcehan.pptx",
+  "source_han_svg_pptx_path": "W:/.../exports/my_deck_20260429_152000_sourcehan_svg.pptx",
   "log_path": "W:/.../runner/runner.log",
   "error": null
 }

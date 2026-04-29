@@ -47,12 +47,12 @@
     <rect width="1280" height="720" fill="#FFFFFF"/>
 
     <!-- 标题 -->
-    <text x="60" y="80" font-family="思源黑体, Source Han Sans SC"
+    <text x="60" y="80" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
           font-size="32" font-weight="bold" fill="#2C3E50">
         <tspan>营收与利润趋势</tspan>
     </text>
 
-    <text x="60" y="115" font-family="思源黑体, Source Han Sans SC"
+    <text x="60" y="115" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
           font-size="18" fill="#7F8C8D">
         <tspan>2024年 1月 - 12月 · 单位：百万元</tspan>
     </text>
@@ -68,27 +68,27 @@
         <line x1="140" y1="150" x2="1160" y2="150" stroke="#E0E0E0" stroke-width="1" stroke-dasharray="4,4"/>
 
         <!-- Y轴刻度标签 -->
-        <text x="125" y="555" font-family="思源黑体, Source Han Sans SC"
+        <text x="125" y="555" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="end">
             <tspan>0</tspan>
         </text>
-        <text x="125" y="475" font-family="思源黑体, Source Han Sans SC"
+        <text x="125" y="475" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="end">
             <tspan>20</tspan>
         </text>
-        <text x="125" y="395" font-family="思源黑体, Source Han Sans SC"
+        <text x="125" y="395" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="end">
             <tspan>40</tspan>
         </text>
-        <text x="125" y="315" font-family="思源黑体, Source Han Sans SC"
+        <text x="125" y="315" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="end">
             <tspan>60</tspan>
         </text>
-        <text x="125" y="235" font-family="思源黑体, Source Han Sans SC"
+        <text x="125" y="235" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="end">
             <tspan>80</tspan>
         </text>
-        <text x="125" y="155" font-family="思源黑体, Source Han Sans SC"
+        <text x="125" y="155" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="end">
             <tspan>100</tspan>
         </text>
@@ -98,51 +98,51 @@
         <line x1="140" y1="550" x2="1160" y2="550" stroke="#95A5A6" stroke-width="2"/>
 
         <!-- X轴月份标签 (12个月, 间距85px) -->
-        <text x="225" y="580" font-family="思源黑体, Source Han Sans SC"
+        <text x="225" y="580" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle">
             <tspan>1月</tspan>
         </text>
-        <text x="310" y="580" font-family="思源黑体, Source Han Sans SC"
+        <text x="310" y="580" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle">
             <tspan>2月</tspan>
         </text>
-        <text x="395" y="580" font-family="思源黑体, Source Han Sans SC"
+        <text x="395" y="580" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle">
             <tspan>3月</tspan>
         </text>
-        <text x="480" y="580" font-family="思源黑体, Source Han Sans SC"
+        <text x="480" y="580" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle">
             <tspan>4月</tspan>
         </text>
-        <text x="565" y="580" font-family="思源黑体, Source Han Sans SC"
+        <text x="565" y="580" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle">
             <tspan>5月</tspan>
         </text>
-        <text x="650" y="580" font-family="思源黑体, Source Han Sans SC"
+        <text x="650" y="580" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle">
             <tspan>6月</tspan>
         </text>
-        <text x="735" y="580" font-family="思源黑体, Source Han Sans SC"
+        <text x="735" y="580" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle">
             <tspan>7月</tspan>
         </text>
-        <text x="820" y="580" font-family="思源黑体, Source Han Sans SC"
+        <text x="820" y="580" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle">
             <tspan>8月</tspan>
         </text>
-        <text x="905" y="580" font-family="思源黑体, Source Han Sans SC"
+        <text x="905" y="580" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle">
             <tspan>9月</tspan>
         </text>
-        <text x="990" y="580" font-family="思源黑体, Source Han Sans SC"
+        <text x="990" y="580" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle">
             <tspan>10月</tspan>
         </text>
-        <text x="1075" y="580" font-family="思源黑体, Source Han Sans SC"
+        <text x="1075" y="580" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle">
             <tspan>11月</tspan>
         </text>
-        <text x="1160" y="580" font-family="思源黑体, Source Han Sans SC"
+        <text x="1160" y="580" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle">
             <tspan>12月</tspan>
         </text>
@@ -196,21 +196,21 @@
     <g id="legend">
         <line x1="920" y1="630" x2="950" y2="630" stroke="#2196F3" stroke-width="3"/>
         <circle cx="935" cy="630" r="5" fill="#2196F3"/>
-        <text x="960" y="635" font-family="思源黑体, Source Han Sans SC"
+        <text x="960" y="635" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="15" fill="#5D6D7E">
             <tspan>营收</tspan>
         </text>
 
         <line x1="1040" y1="630" x2="1070" y2="630" stroke="#4CAF50" stroke-width="3"/>
         <circle cx="1055" cy="630" r="5" fill="#4CAF50"/>
-        <text x="1080" y="635" font-family="思源黑体, Source Han Sans SC"
+        <text x="1080" y="635" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="15" fill="#5D6D7E">
             <tspan>净利润</tspan>
         </text>
     </g>
 
     <!-- 数据来源 -->
-    <text x="60" y="695" font-family="思源黑体, Source Han Sans SC"
+    <text x="60" y="695" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
           font-size="14" fill="#95A5A6">
         <tspan>数据来源: 财务部门月度报告</tspan>
     </text>

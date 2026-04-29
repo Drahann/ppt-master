@@ -135,18 +135,15 @@ Built-in library contains 6700+ icons across three libraries:
 
 ### g. Typography Plan Confirmation (Font + Size)
 
-#### Locked Font Preset
-
-Use the SourceHan-Locked preset for every deck. The automated workflow intentionally uses only two font families:
-
-- Title text: 思源宋体 / Source Han Serif SC
-- Body, code, emphasis, labels, annotations, footers, and chart text: 思源黑体 / Source Han Sans SC
-
-Do not substitute Microsoft YaHei, SimHei, SimSun, Arial, Calibri, Consolas, Monaco, or generic fallback families in Section IV.
+#### Font Presets
 
 | Scenario | Preset | Title | Body | Emphasis |
 |----------|--------|-------|------|----------|
-| All automated decks | SourceHan-Locked | 思源宋体 / Source Han Serif SC | 思源黑体 / Source Han Sans SC | 思源黑体 / Source Han Sans SC |
+| Modern business, tech | P1 | Microsoft YaHei / Arial | Microsoft YaHei / Calibri | SimHei |
+| Government documents, reports | P2 | SimHei | SimSun / Times | SimSun |
+| Culture, arts, humanities | P3 | KaiTi / Georgia | Microsoft YaHei | SimHei |
+| Traditional, conservative | P4 | SimSun | Microsoft YaHei / Arial | SimSun |
+| English-primary | P5 | Arial / Impact | Calibri / Georgia | Arial Black |
 
 #### Font Size Baseline (all sizes in px)
 

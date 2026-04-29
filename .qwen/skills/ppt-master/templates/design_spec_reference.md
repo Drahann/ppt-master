@@ -78,18 +78,19 @@
 
 ### Font Plan
 
-> Font choice is locked for the automated workflow. Do not substitute Microsoft YaHei, SimHei, SimSun, Arial, Calibri, Consolas, Monaco, or generic fallback families.
+> Strategist should select a font preset based on content characteristics, or customize the font combination
+> Preset descriptions: P1=Modern business/tech | P2=Government docs | P3=Culture/arts | P4=Traditional/conservative | P5=English-primary
 
-**Recommended preset**: SourceHan-Locked
+**Recommended preset**: [Fill in preset code]
 
 | Role | Chinese | English | Fallback |
 | ---- | ------- | ------- | -------- |
-| **Title** | 思源宋体 | Source Han Serif SC | 思源宋体 |
-| **Body** | 思源黑体 | Source Han Sans SC | 思源黑体 |
-| **Code** | 思源黑体 | Source Han Sans SC | 思源黑体 |
-| **Emphasis** | 思源黑体 | Source Han Sans SC | 思源黑体 |
+| **Title** | [font name] | [font name] | [font name] |
+| **Body** | [font name] | [font name] | [font name] |
+| **Code** | - | Consolas | Monaco |
+| **Emphasis** | [font name] | [font name] | [font name] |
 
-**Font stack**: `Title: "思源宋体", "Source Han Serif SC"; Body/Code/Emphasis: "思源黑体", "Source Han Sans SC"`
+**Font stack**: `[Fill in CSS font-family string]`
 
 ### Font Size Hierarchy
 

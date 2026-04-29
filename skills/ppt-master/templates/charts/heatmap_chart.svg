@@ -21,12 +21,12 @@
     <rect width="1280" height="720" fill="#FFFFFF"/>
 
     <!-- 标题 -->
-    <text x="60" y="55" font-family="思源黑体, Source Han Sans SC"
+    <text x="60" y="55" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
           font-size="32" font-weight="bold" fill="#2C3E50">
         <tspan>用户活跃度热力图</tspan>
     </text>
 
-    <text x="60" y="90" font-family="思源黑体, Source Han Sans SC"
+    <text x="60" y="90" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
           font-size="18" fill="#7F8C8D">
         <tspan>按星期和时段统计 · 数值代表平均在线用户数（千人）</tspan>
     </text>
@@ -41,37 +41,37 @@
         -->
 
         <!-- 列标题（星期） -->
-        <text x="40" y="-15" font-family="思源黑体, Source Han Sans SC"
+        <text x="40" y="-15" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="14" font-weight="600" fill="#5D6D7E" text-anchor="middle"><tspan>周一</tspan></text>
-        <text x="120" y="-15" font-family="思源黑体, Source Han Sans SC"
+        <text x="120" y="-15" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="14" font-weight="600" fill="#5D6D7E" text-anchor="middle"><tspan>周二</tspan></text>
-        <text x="200" y="-15" font-family="思源黑体, Source Han Sans SC"
+        <text x="200" y="-15" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="14" font-weight="600" fill="#5D6D7E" text-anchor="middle"><tspan>周三</tspan></text>
-        <text x="280" y="-15" font-family="思源黑体, Source Han Sans SC"
+        <text x="280" y="-15" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="14" font-weight="600" fill="#5D6D7E" text-anchor="middle"><tspan>周四</tspan></text>
-        <text x="360" y="-15" font-family="思源黑体, Source Han Sans SC"
+        <text x="360" y="-15" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="14" font-weight="600" fill="#5D6D7E" text-anchor="middle"><tspan>周五</tspan></text>
-        <text x="440" y="-15" font-family="思源黑体, Source Han Sans SC"
+        <text x="440" y="-15" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="14" font-weight="600" fill="#E91E63" text-anchor="middle"><tspan>周六</tspan></text>
-        <text x="520" y="-15" font-family="思源黑体, Source Han Sans SC"
+        <text x="520" y="-15" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="14" font-weight="600" fill="#E91E63" text-anchor="middle"><tspan>周日</tspan></text>
 
         <!-- 行标题（时段） -->
-        <text x="-15" y="35" font-family="思源黑体, Source Han Sans SC"
+        <text x="-15" y="35" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="13" fill="#7F8C8D" text-anchor="end"><tspan>6-9时</tspan></text>
-        <text x="-15" y="95" font-family="思源黑体, Source Han Sans SC"
+        <text x="-15" y="95" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="13" fill="#7F8C8D" text-anchor="end"><tspan>9-12时</tspan></text>
-        <text x="-15" y="155" font-family="思源黑体, Source Han Sans SC"
+        <text x="-15" y="155" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="13" fill="#7F8C8D" text-anchor="end"><tspan>12-14时</tspan></text>
-        <text x="-15" y="215" font-family="思源黑体, Source Han Sans SC"
+        <text x="-15" y="215" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="13" fill="#7F8C8D" text-anchor="end"><tspan>14-17时</tspan></text>
-        <text x="-15" y="275" font-family="思源黑体, Source Han Sans SC"
+        <text x="-15" y="275" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="13" fill="#7F8C8D" text-anchor="end"><tspan>17-19时</tspan></text>
-        <text x="-15" y="335" font-family="思源黑体, Source Han Sans SC"
+        <text x="-15" y="335" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="13" fill="#7F8C8D" text-anchor="end"><tspan>19-21时</tspan></text>
-        <text x="-15" y="395" font-family="思源黑体, Source Han Sans SC"
+        <text x="-15" y="395" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="13" fill="#7F8C8D" text-anchor="end"><tspan>21-23时</tspan></text>
-        <text x="-15" y="455" font-family="思源黑体, Source Han Sans SC"
+        <text x="-15" y="455" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="13" fill="#7F8C8D" text-anchor="end"><tspan>23-6时</tspan></text>
 
         <!-- 热力图格子 -->
@@ -150,16 +150,16 @@
 
     <!-- 色阶图例 -->
     <g id="colorLegend" transform="translate(780, 150)">
-        <text x="0" y="0" font-family="思源黑体, Source Han Sans SC"
+        <text x="0" y="0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="14" font-weight="600" fill="#2C3E50"><tspan>活跃度色阶</tspan></text>
 
         <rect x="0" y="15" width="200" height="20" rx="4" fill="url(#heatGradient)"/>
 
-        <text x="0" y="52" font-family="思源黑体, Source Han Sans SC"
+        <text x="0" y="52" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#7F8C8D"><tspan>低 (0)</tspan></text>
-        <text x="90" y="52" font-family="思源黑体, Source Han Sans SC"
+        <text x="90" y="52" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#7F8C8D" text-anchor="middle"><tspan>中 (50)</tspan></text>
-        <text x="200" y="52" font-family="思源黑体, Source Han Sans SC"
+        <text x="200" y="52" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#7F8C8D" text-anchor="end"><tspan>高 (100)</tspan></text>
     </g>
 
@@ -167,24 +167,24 @@
     <g id="statsPanel" transform="translate(780, 240)">
         <rect x="0" y="0" width="200" height="180" rx="8" fill="#F8F9FA" stroke="#E0E0E0" stroke-width="1"/>
 
-        <text x="100" y="28" font-family="思源黑体, Source Han Sans SC"
+        <text x="100" y="28" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="14" font-weight="600" fill="#2C3E50" text-anchor="middle"><tspan>统计摘要</tspan></text>
 
         <line x1="15" y1="42" x2="185" y2="42" stroke="#E0E0E0" stroke-width="1"/>
 
-        <text x="20" y="68" font-family="思源黑体, Source Han Sans SC"
+        <text x="20" y="68" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="13" fill="#5D6D7E"><tspan>🔥 峰值时段</tspan></text>
-        <text x="20" y="88" font-family="思源黑体, Source Han Sans SC"
+        <text x="20" y="88" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#D32F2F"><tspan>周日 19-21时 (98K)</tspan></text>
 
-        <text x="20" y="115" font-family="思源黑体, Source Han Sans SC"
+        <text x="20" y="115" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="13" fill="#5D6D7E"><tspan>❄️ 低谷时段</tspan></text>
-        <text x="20" y="135" font-family="思源黑体, Source Han Sans SC"
+        <text x="20" y="135" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#1565C0"><tspan>周日 6-9时 (10K)</tspan></text>
 
-        <text x="20" y="162" font-family="思源黑体, Source Han Sans SC"
+        <text x="20" y="162" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="13" fill="#5D6D7E"><tspan>📊 日均在线</tspan></text>
-        <text x="130" y="162" font-family="思源黑体, Source Han Sans SC"
+        <text x="130" y="162" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" font-weight="bold" fill="#2C3E50"><tspan>54.2K</tspan></text>
     </g>
 
@@ -192,21 +192,21 @@
     <g id="insightCard" transform="translate(780, 440)">
         <rect x="0" y="0" width="200" height="120" rx="8" fill="#E8F5E9" stroke="#4CAF50" stroke-width="1"/>
 
-        <text x="20" y="28" font-family="思源黑体, Source Han Sans SC"
+        <text x="20" y="28" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="14" font-weight="600" fill="#2E7D32"><tspan>💡 关键洞察</tspan></text>
 
-        <text x="20" y="55" font-family="思源黑体, Source Han Sans SC"
+        <text x="20" y="55" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="12" fill="#5D6D7E"><tspan>• 周末晚间活跃度最高</tspan></text>
-        <text x="20" y="75" font-family="思源黑体, Source Han Sans SC"
+        <text x="20" y="75" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="12" fill="#5D6D7E"><tspan>• 工作日午间有小高峰</tspan></text>
-        <text x="20" y="95" font-family="思源黑体, Source Han Sans SC"
+        <text x="20" y="95" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="12" fill="#5D6D7E"><tspan>• 凌晨时段流量最低</tspan></text>
-        <text x="20" y="115" font-family="思源黑体, Source Han Sans SC"
+        <text x="20" y="115" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="11" fill="#7F8C8D"><tspan>建议: 周末晚间增加服务器</tspan></text>
     </g>
 
     <!-- 数据来源 -->
-    <text x="60" y="695" font-family="思源黑体, Source Han Sans SC"
+    <text x="60" y="695" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
           font-size="14" fill="#95A5A6">
         <tspan>数据来源: 用户行为分析平台</tspan>
     </text>

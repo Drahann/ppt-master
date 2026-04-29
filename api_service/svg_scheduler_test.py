@@ -25,12 +25,12 @@ if str(RUNNER_SCRIPTS_DIR) not in sys.path:
 
 from qwen_ppt_runner import (  # type: ignore  # noqa: E402
     SlidePlanEntry,
+    build_source_han_svg_export_variant,
     check_pie_chart_review_state,
     collect_pie_chart_review_issues,
     is_chart_geometry_issue,
+    rewrite_svg_text_fonts_to_source_han,
     split_plan_into_batches,
-    validate_locked_typography_in_design_spec,
-    validate_svg_locked_fonts,
 )
 from svg_auto_repair import repair_svg_file  # type: ignore  # noqa: E402
 from svg_to_pptx.drawingml_utils import parse_font_family  # type: ignore  # noqa: E402
@@ -704,54 +704,55 @@ class PieChartReviewIssueTests(unittest.TestCase):
             self.assertFalse(report["modified"])
 
 
-class LockedTypographyTests(unittest.TestCase):
-    GOOD_TYPOGRAPHY_SPEC = """## IV. Typography System
+class FontExportTests(unittest.TestCase):
+    def test_source_han_variant_is_built_from_svg_final_without_mutating_original(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_path = Path(temp_dir) / "deck"
+            svg_final = project_path / "svg_final"
+            svg_final.mkdir(parents=True)
+            source_svg = svg_final / "slide_01.svg"
+            source_svg.write_text(
+                """<svg xmlns="http://www.w3.org/2000/svg">
+  <text x="60" y="80" font-family="Microsoft YaHei, Arial, sans-serif" font-size="36" font-weight="bold">页面标题</text>
+  <text x="60" y="180" font-family="Microsoft YaHei, Arial, sans-serif" font-size="18">正文内容</text>
+</svg>""",
+                encoding="utf-8",
+            )
+            log_path = project_path / "runner.log"
 
-### Font Plan
+            variant_dir = build_source_han_svg_export_variant(project_path, log_path)
 
-| Role | Chinese | English | Fallback |
-| ---- | ------- | ------- | -------- |
-| **Title** | 思源宋体 | Source Han Serif SC | 思源宋体 |
-| **Body** | 思源黑体 | Source Han Sans SC | 思源黑体 |
-| **Code** | 思源黑体 | Source Han Sans SC | 思源黑体 |
-| **Emphasis** | 思源黑体 | Source Han Sans SC | 思源黑体 |
+            self.assertEqual(variant_dir.name, "svg_final_sourcehan")
+            self.assertIn("Microsoft YaHei", source_svg.read_text(encoding="utf-8"))
+            variant_svg = (variant_dir / "slide_01.svg").read_text(encoding="utf-8")
+            self.assertIn('font-family="思源宋体, Source Han Serif SC"', variant_svg)
+            self.assertIn('font-family="思源黑体, Source Han Sans SC"', variant_svg)
 
-**Font stack**: `Title: "思源宋体", "Source Han Serif SC"; Body/Code/Emphasis: "思源黑体", "Source Han Sans SC"`
+    def test_source_han_svg_variant_rewrites_text_fonts(self) -> None:
+        svg = """<svg xmlns="http://www.w3.org/2000/svg">
+  <text x="60" y="80" font-family="Microsoft YaHei, Arial, sans-serif" font-size="36" font-weight="bold">页面标题</text>
+  <text x="60" y="180" font-family="Microsoft YaHei, Arial, sans-serif" font-size="18">正文内容</text>
+  <text x="200" y="320" font-size="44" font-weight="bold">98%</text>
+</svg>"""
 
-## V. Layout Principles
-"""
+        updated, changed = rewrite_svg_text_fonts_to_source_han(svg)
 
-    def test_design_spec_typography_requires_source_han_fonts(self) -> None:
-        self.assertEqual(validate_locked_typography_in_design_spec(self.GOOD_TYPOGRAPHY_SPEC), [])
-
-        bad_spec = self.GOOD_TYPOGRAPHY_SPEC.replace("思源黑体", "微软雅黑").replace(
-            "Source Han Sans SC",
-            "Calibri",
-        )
-
-        errors = validate_locked_typography_in_design_spec(bad_spec)
-
-        self.assertTrue(any("Source Han Sans SC" in error for error in errors))
-        self.assertTrue(any("Microsoft YaHei" in error or "微软雅黑" in error for error in errors))
-        self.assertTrue(any("Calibri" in error for error in errors))
-
-    def test_svg_font_validation_rejects_legacy_fallbacks(self) -> None:
-        good_svg = '<svg><text font-family="思源黑体, Source Han Sans SC">正文</text></svg>'
-        bad_svg = '<svg><text font-family="Microsoft YaHei, Arial, sans-serif">正文</text></svg>'
-
-        self.assertEqual(validate_svg_locked_fonts("slide_01.svg", good_svg), [])
-        errors = validate_svg_locked_fonts("slide_01.svg", bad_svg)
-        self.assertTrue(any("Microsoft YaHei" in error for error in errors))
-        self.assertTrue(any("Arial" in error for error in errors))
+        self.assertEqual(changed, 3)
+        self.assertIn('font-family="思源宋体, Source Han Serif SC"', updated)
+        self.assertIn('font-family="思源黑体, Source Han Sans SC"', updated)
+        self.assertNotIn("Microsoft YaHei", updated)
+        self.assertIn(">98%<", updated)
 
     def test_drawingml_font_parser_preserves_source_han_typefaces(self) -> None:
         title_fonts = parse_font_family("思源宋体, Source Han Serif SC")
         body_fonts = parse_font_family("思源黑体, Source Han Sans SC")
+        generic_fonts = parse_font_family("Microsoft YaHei, Arial, sans-serif")
         default_fonts = parse_font_family("")
 
         self.assertEqual(title_fonts, {"latin": "思源宋体", "ea": "思源宋体"})
         self.assertEqual(body_fonts, {"latin": "思源黑体", "ea": "思源黑体"})
-        self.assertEqual(default_fonts, {"latin": "思源黑体", "ea": "思源黑体"})
+        self.assertEqual(generic_fonts, {"latin": "Arial", "ea": "Microsoft YaHei"})
+        self.assertEqual(default_fonts, {"latin": "Segoe UI", "ea": "Microsoft YaHei"})
 
 
 if __name__ == "__main__":

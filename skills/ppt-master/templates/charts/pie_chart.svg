@@ -48,12 +48,12 @@
     <rect width="1280" height="720" fill="#FFFFFF"/>
 
     <!-- 标题 -->
-    <text x="60" y="80" font-family="思源黑体, Source Han Sans SC"
+    <text x="60" y="80" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
           font-size="32" font-weight="bold" fill="#2C3E50">
         <tspan>市场份额分布</tspan>
     </text>
 
-    <text x="60" y="115" font-family="思源黑体, Source Han Sans SC"
+    <text x="60" y="115" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
           font-size="18" fill="#7F8C8D">
         <tspan>2025年第三季度 · 行业整体市场规模 120亿</tspan>
     </text>
@@ -96,25 +96,25 @@
 
     <!-- 百分比标签（直接在扇区上显示） -->
     <!-- 标签1: 公司A 35% -->
-    <text x="500" y="320" font-family="思源黑体, Source Han Sans SC"
+    <text x="500" y="320" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
           font-size="24" font-weight="bold" fill="#FFFFFF" text-anchor="middle">
         <tspan>35%</tspan>
     </text>
 
     <!-- 标签2: 公司B 25% -->
-    <text x="450" y="520" font-family="思源黑体, Source Han Sans SC"
+    <text x="450" y="520" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
           font-size="22" font-weight="bold" fill="#FFFFFF" text-anchor="middle">
         <tspan>25%</tspan>
     </text>
 
     <!-- 标签3: 公司C 20% -->
-    <text x="280" y="480" font-family="思源黑体, Source Han Sans SC"
+    <text x="280" y="480" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
           font-size="20" font-weight="bold" fill="#FFFFFF" text-anchor="middle">
         <tspan>20%</tspan>
     </text>
 
     <!-- 标签4: 公司D 12% -->
-    <text x="280" y="320" font-family="思源黑体, Source Han Sans SC"
+    <text x="280" y="320" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
           font-size="18" font-weight="bold" fill="#FFFFFF" text-anchor="middle">
         <tspan>12%</tspan>
     </text>
@@ -123,7 +123,7 @@
     <g>
         <line x1="380" y1="220" x2="340" y2="170" stroke="#607D8B" stroke-width="1.5"/>
         <circle cx="380" cy="220" r="3" fill="#607D8B"/>
-        <text x="330" y="165" font-family="思源黑体, Source Han Sans SC"
+        <text x="330" y="165" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="16" font-weight="600" fill="#607D8B" text-anchor="end">
             <tspan>8%</tspan>
         </text>
@@ -132,62 +132,62 @@
     <!-- 右侧图例 -->
     <g id="legend" transform="translate(720, 200)">
         <!-- 图例标题 -->
-        <text x="0" y="0" font-family="思源黑体, Source Han Sans SC"
+        <text x="0" y="0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="20" font-weight="600" fill="#2C3E50">
             <tspan>市场份额</tspan>
         </text>
 
         <!-- 图例项1: 公司A -->
         <rect x="0" y="30" width="24" height="24" rx="4" fill="url(#pieGrad1)"/>
-        <text x="40" y="48" font-family="思源黑体, Source Han Sans SC"
+        <text x="40" y="48" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="18" fill="#5D6D7E">
             <tspan>公司A</tspan>
         </text>
-        <text x="460" y="48" font-family="思源黑体, Source Han Sans SC"
+        <text x="460" y="48" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="18" font-weight="600" fill="#2C3E50" text-anchor="end">
             <tspan>42亿 (35%)</tspan>
         </text>
 
         <!-- 图例项2: 公司B -->
         <rect x="0" y="70" width="24" height="24" rx="4" fill="url(#pieGrad2)"/>
-        <text x="40" y="88" font-family="思源黑体, Source Han Sans SC"
+        <text x="40" y="88" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="18" fill="#5D6D7E">
             <tspan>公司B</tspan>
         </text>
-        <text x="460" y="88" font-family="思源黑体, Source Han Sans SC"
+        <text x="460" y="88" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="18" font-weight="600" fill="#2C3E50" text-anchor="end">
             <tspan>30亿 (25%)</tspan>
         </text>
 
         <!-- 图例项3: 公司C -->
         <rect x="0" y="110" width="24" height="24" rx="4" fill="url(#pieGrad3)"/>
-        <text x="40" y="128" font-family="思源黑体, Source Han Sans SC"
+        <text x="40" y="128" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="18" fill="#5D6D7E">
             <tspan>公司C</tspan>
         </text>
-        <text x="460" y="128" font-family="思源黑体, Source Han Sans SC"
+        <text x="460" y="128" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="18" font-weight="600" fill="#2C3E50" text-anchor="end">
             <tspan>24亿 (20%)</tspan>
         </text>
 
         <!-- 图例项4: 公司D -->
         <rect x="0" y="150" width="24" height="24" rx="4" fill="url(#pieGrad4)"/>
-        <text x="40" y="168" font-family="思源黑体, Source Han Sans SC"
+        <text x="40" y="168" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="18" fill="#5D6D7E">
             <tspan>公司D</tspan>
         </text>
-        <text x="460" y="168" font-family="思源黑体, Source Han Sans SC"
+        <text x="460" y="168" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="18" font-weight="600" fill="#2C3E50" text-anchor="end">
             <tspan>14.4亿 (12%)</tspan>
         </text>
 
         <!-- 图例项5: 其他 -->
         <rect x="0" y="190" width="24" height="24" rx="4" fill="url(#pieGrad5)"/>
-        <text x="40" y="208" font-family="思源黑体, Source Han Sans SC"
+        <text x="40" y="208" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="18" fill="#5D6D7E">
             <tspan>其他</tspan>
         </text>
-        <text x="460" y="208" font-family="思源黑体, Source Han Sans SC"
+        <text x="460" y="208" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="18" font-weight="600" fill="#2C3E50" text-anchor="end">
             <tspan>9.6亿 (8%)</tspan>
         </text>
@@ -196,18 +196,18 @@
         <line x1="0" y1="240" x2="460" y2="240" stroke="#E0E0E0" stroke-width="2"/>
 
         <!-- 合计 -->
-        <text x="0" y="270" font-family="思源黑体, Source Han Sans SC"
+        <text x="0" y="270" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="18" font-weight="600" fill="#2C3E50">
             <tspan>市场总规模</tspan>
         </text>
-        <text x="460" y="270" font-family="思源黑体, Source Han Sans SC"
+        <text x="460" y="270" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="20" font-weight="bold" fill="#2C3E50" text-anchor="end">
             <tspan>120亿 (100%)</tspan>
         </text>
     </g>
 
     <!-- 数据来源 -->
-    <text x="60" y="695" font-family="思源黑体, Source Han Sans SC"
+    <text x="60" y="695" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
           font-size="14" fill="#95A5A6">
         <tspan>数据来源: 行业研究报告</tspan>
     </text>

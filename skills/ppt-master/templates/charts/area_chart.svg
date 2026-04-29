@@ -38,12 +38,12 @@
     <rect width="1280" height="720" fill="#FFFFFF"/>
 
     <!-- 标题 -->
-    <text x="60" y="70" font-family="思源黑体, Source Han Sans SC"
+    <text x="60" y="70" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
           font-size="32" font-weight="bold" fill="#2C3E50">
         <tspan>网站流量趋势分析</tspan>
     </text>
 
-    <text x="60" y="105" font-family="思源黑体, Source Han Sans SC"
+    <text x="60" y="105" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
           font-size="18" fill="#7F8C8D">
         <tspan>2025年度月度数据 · 单位：万次访问</tspan>
     </text>
@@ -52,14 +52,14 @@
     <g id="legend" transform="translate(950, 70)">
         <line x1="0" y1="10" x2="30" y2="10" stroke="#2196F3" stroke-width="3"/>
         <circle cx="15" cy="10" r="5" fill="#2196F3"/>
-        <text x="40" y="15" font-family="思源黑体, Source Han Sans SC"
+        <text x="40" y="15" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="15" fill="#5D6D7E">
             <tspan>PC端访问</tspan>
         </text>
 
         <line x1="150" y1="10" x2="180" y2="10" stroke="#4CAF50" stroke-width="3"/>
         <circle cx="165" cy="10" r="5" fill="#4CAF50"/>
-        <text x="190" y="15" font-family="思源黑体, Source Han Sans SC"
+        <text x="190" y="15" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="15" fill="#5D6D7E">
             <tspan>移动端访问</tspan>
         </text>
@@ -75,23 +75,23 @@
         <line x1="120" y1="200" x2="1200" y2="200" stroke="#E0E0E0" stroke-width="1" stroke-dasharray="4,4"/>
 
         <!-- Y轴刻度标签 -->
-        <text x="105" y="565" font-family="思源黑体, Source Han Sans SC"
+        <text x="105" y="565" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="end">
             <tspan>0</tspan>
         </text>
-        <text x="105" y="475" font-family="思源黑体, Source Han Sans SC"
+        <text x="105" y="475" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="end">
             <tspan>200</tspan>
         </text>
-        <text x="105" y="385" font-family="思源黑体, Source Han Sans SC"
+        <text x="105" y="385" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="end">
             <tspan>400</tspan>
         </text>
-        <text x="105" y="295" font-family="思源黑体, Source Han Sans SC"
+        <text x="105" y="295" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="end">
             <tspan>600</tspan>
         </text>
-        <text x="105" y="205" font-family="思源黑体, Source Han Sans SC"
+        <text x="105" y="205" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="end">
             <tspan>800</tspan>
         </text>
@@ -102,29 +102,29 @@
 
         <!-- X轴标签（12个月） -->
         <!-- 每个月间距: (1200-120)/12 = 90px -->
-        <text x="165" y="590" font-family="思源黑体, Source Han Sans SC"
+        <text x="165" y="590" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle"><tspan>1月</tspan></text>
-        <text x="255" y="590" font-family="思源黑体, Source Han Sans SC"
+        <text x="255" y="590" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle"><tspan>2月</tspan></text>
-        <text x="345" y="590" font-family="思源黑体, Source Han Sans SC"
+        <text x="345" y="590" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle"><tspan>3月</tspan></text>
-        <text x="435" y="590" font-family="思源黑体, Source Han Sans SC"
+        <text x="435" y="590" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle"><tspan>4月</tspan></text>
-        <text x="525" y="590" font-family="思源黑体, Source Han Sans SC"
+        <text x="525" y="590" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle"><tspan>5月</tspan></text>
-        <text x="615" y="590" font-family="思源黑体, Source Han Sans SC"
+        <text x="615" y="590" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle"><tspan>6月</tspan></text>
-        <text x="705" y="590" font-family="思源黑体, Source Han Sans SC"
+        <text x="705" y="590" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle"><tspan>7月</tspan></text>
-        <text x="795" y="590" font-family="思源黑体, Source Han Sans SC"
+        <text x="795" y="590" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle"><tspan>8月</tspan></text>
-        <text x="885" y="590" font-family="思源黑体, Source Han Sans SC"
+        <text x="885" y="590" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle"><tspan>9月</tspan></text>
-        <text x="975" y="590" font-family="思源黑体, Source Han Sans SC"
+        <text x="975" y="590" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle"><tspan>10月</tspan></text>
-        <text x="1065" y="590" font-family="思源黑体, Source Han Sans SC"
+        <text x="1065" y="590" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle"><tspan>11月</tspan></text>
-        <text x="1155" y="590" font-family="思源黑体, Source Han Sans SC"
+        <text x="1155" y="590" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="14" fill="#7F8C8D" text-anchor="middle"><tspan>12月</tspan></text>
 
         <!--
@@ -187,11 +187,11 @@
         <!-- 峰值标注（8月） -->
         <g>
             <rect x="755" y="225" width="80" height="45" rx="6" fill="#2196F3"/>
-            <text x="795" y="245" font-family="思源黑体, Source Han Sans SC"
+            <text x="795" y="245" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
                   font-size="14" font-weight="600" fill="#FFFFFF" text-anchor="middle">
                 <tspan>峰值</tspan>
             </text>
-            <text x="795" y="262" font-family="思源黑体, Source Han Sans SC"
+            <text x="795" y="262" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
                   font-size="13" fill="#FFFFFF" text-anchor="middle">
                 <tspan>620万</tspan>
             </text>
@@ -203,51 +203,51 @@
     <g id="statsCards" transform="translate(60, 620)">
         <!-- 卡片1: 总访问量 -->
         <rect x="0" y="0" width="200" height="70" rx="8" fill="#F8F9FA" stroke="#E0E0E0" stroke-width="1"/>
-        <text x="20" y="25" font-family="思源黑体, Source Han Sans SC"
+        <text x="20" y="25" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="14" fill="#7F8C8D">
             <tspan>年度总访问量</tspan>
         </text>
-        <text x="20" y="55" font-family="思源黑体, Source Han Sans SC"
+        <text x="20" y="55" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="24" font-weight="bold" fill="#2C3E50">
             <tspan>10,240万</tspan>
         </text>
 
         <!-- 卡片2: PC端占比 -->
         <rect x="220" y="0" width="180" height="70" rx="8" fill="#E3F2FD" stroke="#2196F3" stroke-width="1"/>
-        <text x="240" y="25" font-family="思源黑体, Source Han Sans SC"
+        <text x="240" y="25" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="14" fill="#1976D2">
             <tspan>PC端占比</tspan>
         </text>
-        <text x="240" y="55" font-family="思源黑体, Source Han Sans SC"
+        <text x="240" y="55" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="24" font-weight="bold" fill="#2196F3">
             <tspan>55.8%</tspan>
         </text>
 
         <!-- 卡片3: 移动端占比 -->
         <rect x="420" y="0" width="180" height="70" rx="8" fill="#E8F5E9" stroke="#4CAF50" stroke-width="1"/>
-        <text x="440" y="25" font-family="思源黑体, Source Han Sans SC"
+        <text x="440" y="25" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="14" fill="#388E3C">
             <tspan>移动端占比</tspan>
         </text>
-        <text x="440" y="55" font-family="思源黑体, Source Han Sans SC"
+        <text x="440" y="55" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="24" font-weight="bold" fill="#4CAF50">
             <tspan>44.2%</tspan>
         </text>
 
         <!-- 卡片4: 同比增长 -->
         <rect x="620" y="0" width="180" height="70" rx="8" fill="#FFF3E0" stroke="#FF9800" stroke-width="1"/>
-        <text x="640" y="25" font-family="思源黑体, Source Han Sans SC"
+        <text x="640" y="25" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
               font-size="14" fill="#F57C00">
             <tspan>同比增长</tspan>
         </text>
-        <text x="640" y="55" font-family="思源黑体, Source Han Sans SC"
+        <text x="640" y="55" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="24" font-weight="bold" fill="#FF9800">
             <tspan>+23.5%</tspan>
         </text>
     </g>
 
     <!-- 数据来源 -->
-    <text x="1220" y="695" font-family="思源黑体, Source Han Sans SC"
+    <text x="1220" y="695" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
           font-size="14" fill="#95A5A6" text-anchor="end">
         <tspan>数据来源: 网站分析平台</tspan>
     </text>

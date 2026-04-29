@@ -83,7 +83,12 @@ def normalize_to_relative(url: str) -> str:
     return url.lstrip("/")
 
 
-def build_result_zip(native_pptx_path: Path, notes_path: Path | None, title: str) -> bytes:
+def build_result_zip(
+    native_pptx_path: Path,
+    notes_path: Path | None,
+    title: str,
+    source_han_native_pptx_path: Path | None = None,
+) -> bytes:
     safe_title = sanitize_title(title)
     notes_text = ""
     if notes_path and notes_path.exists():
@@ -92,6 +97,8 @@ def build_result_zip(native_pptx_path: Path, notes_path: Path | None, title: str
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(f"{safe_title}.pptx", native_pptx_path.read_bytes())
+        if source_han_native_pptx_path and source_han_native_pptx_path.exists():
+            archive.writestr(f"{safe_title}_\u601d\u6e90\u7248.pptx", source_han_native_pptx_path.read_bytes())
         archive.writestr(f"{safe_title}_\u8bb2\u89e3\u6587\u7a3f.txt", "\ufeff" + notes_text)
     return buffer.getvalue()
 

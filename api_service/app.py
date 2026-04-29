@@ -340,7 +340,12 @@ def _process_request(request: NormalizedRequest, job_id: str | None = None) -> d
             )
 
             notes_path = runner_result.project_path / "notes" / "total.md"
-            zip_buffer = build_result_zip(runner_result.native_pptx_path, notes_path, runner_result.title)
+            zip_buffer = build_result_zip(
+                runner_result.native_pptx_path,
+                notes_path,
+                runner_result.title,
+                runner_result.source_han_native_pptx_path,
+            )
 
             safe_title = sanitize_title(runner_result.title)
             cos_path = f"ppt/{request.report_id}/{safe_title}.zip"

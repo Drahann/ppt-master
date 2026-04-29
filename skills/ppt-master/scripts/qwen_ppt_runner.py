@@ -92,36 +92,6 @@ LANGUAGE_CONSISTENCY_RULE = (
     "all PPT-visible content, design_spec.md content, SVG text, and speaker notes must use that same language. "
     "Do not translate to another language unless the source explicitly requests translation."
 )
-LOCKED_TYPOGRAPHY_RULE = (
-    "- Typography lock: Use only Source Han fonts. Title text must use 思源宋体 / Source Han Serif SC. "
-    "Body, code, emphasis, labels, annotations, footers, chart text, and all other non-title text must use "
-    "思源黑体 / Source Han Sans SC. Do not use Microsoft YaHei, SimHei, SimSun, Arial, Calibri, Consolas, "
-    "Monaco, generic serif, generic sans-serif, or generic monospace in design_spec.md or SVG font-family values."
-)
-LOCKED_FONT_PLAN_TABLE = """| Role | Chinese | English | Fallback |
-| ---- | ------- | ------- | -------- |
-| **Title** | 思源宋体 | Source Han Serif SC | 思源宋体 |
-| **Body** | 思源黑体 | Source Han Sans SC | 思源黑体 |
-| **Code** | 思源黑体 | Source Han Sans SC | 思源黑体 |
-| **Emphasis** | 思源黑体 | Source Han Sans SC | 思源黑体 |"""
-REQUIRED_TYPOGRAPHY_TOKENS = (
-    "思源宋体",
-    "Source Han Serif SC",
-    "思源黑体",
-    "Source Han Sans SC",
-)
-BANNED_TYPOGRAPHY_TOKENS = (
-    "微软雅黑",
-    "Microsoft YaHei",
-    "SimHei",
-    "SimSun",
-    "Arial",
-    "Calibri",
-    "Consolas",
-    "Monaco",
-    "sans-serif",
-    "monospace",
-)
 DEFAULT_MAX_FOLLOW_UPS = 8
 QWEN_CALL_TIMEOUT_SECONDS = 60 * 60
 QWEN_SVG_BATCH_TURN_TIMEOUT_SECONDS = 30 * 60
@@ -141,6 +111,9 @@ PIE_CHART_REVIEW_INPUT_FILENAME = "pie_chart_review_input.json"
 PIE_CHART_REVIEW_REPORT_FILENAME = "pie_chart_review_report.json"
 SVG_ANCHOR_CONTEXT_FILENAME = "svg_anchor_context.json"
 SOURCE_IMAGE_REFERENCE_FILENAME = "source_image_reference.json"
+SOURCE_HAN_SVG_DIRNAME = "svg_final_sourcehan"
+SOURCE_HAN_TITLE_FONT_FAMILY = "思源宋体, Source Han Serif SC"
+SOURCE_HAN_BODY_FONT_FAMILY = "思源黑体, Source Han Sans SC"
 QWEN_PROJECT_GUIDE_PATH = REPO_ROOT / "QWEN.md"
 QWEN_SKILL_ROOT = REPO_ROOT / ".qwen" / "skills" / "ppt-master"
 QWEN_SKILL_WRAPPER_PATH = QWEN_SKILL_ROOT / "SKILL.md"
@@ -333,6 +306,8 @@ class RunOutput:
     qwen_session_id: str | None
     native_pptx_path: str | None
     svg_pptx_path: str | None
+    source_han_native_pptx_path: str | None
+    source_han_svg_pptx_path: str | None
     log_path: str | None
     error: str | None
 
@@ -3643,57 +3618,6 @@ def validate_source_images_in_design_spec(project_path: Path, design_spec_text: 
     return errors
 
 
-def validate_locked_typography_in_design_spec(design_spec_text: str) -> list[str]:
-    errors: list[str] = []
-    typography_section = extract_markdown_section(
-        design_spec_text,
-        "## IV. Typography System",
-        "## V. Layout Principles",
-    )
-    if not typography_section:
-        return ["design_spec.md missing typography section content"]
-
-    for token in REQUIRED_TYPOGRAPHY_TOKENS:
-        if token not in typography_section:
-            errors.append(f"design_spec.md typography must include locked font `{token}`")
-
-    for token in BANNED_TYPOGRAPHY_TOKENS:
-        if token.lower() in typography_section.lower():
-            errors.append(f"design_spec.md typography must not use `{token}`")
-
-    return errors
-
-
-def extract_svg_font_families(svg_text: str) -> list[str]:
-    families = re.findall(r'\bfont-family\s*=\s*["\']([^"\']+)["\']', svg_text, re.IGNORECASE)
-    families.extend(
-        item.strip()
-        for item in re.findall(r'font-family\s*:\s*([^;"\']+)', svg_text, re.IGNORECASE)
-        if item.strip()
-    )
-    return families
-
-
-def validate_svg_locked_fonts(svg_name: str, svg_text: str) -> list[str]:
-    if "<text" not in svg_text:
-        return []
-
-    errors: list[str] = []
-    families = extract_svg_font_families(svg_text)
-    if not families:
-        return [f"SVG text is missing locked Source Han font-family values in {svg_name}"]
-
-    for family in families:
-        lower_family = family.lower()
-        for token in BANNED_TYPOGRAPHY_TOKENS:
-            if token.lower() in lower_family:
-                errors.append(f"SVG uses disallowed font `{token}` in {svg_name}: {family}")
-        if not any(token in family for token in REQUIRED_TYPOGRAPHY_TOKENS):
-            errors.append(f"SVG font-family must use Source Han locked fonts in {svg_name}: {family}")
-
-    return errors
-
-
 def validate_design_spec(
     project_path: Path,
     plan: list[SlidePlanEntry],
@@ -3714,8 +3638,6 @@ def validate_design_spec(
 
     if "### Part " not in content:
         errors.append("design_spec.md content outline is not grouped into Part chapters")
-
-    errors.extend(validate_locked_typography_in_design_spec(content))
 
     icon_section = extract_markdown_section(
         content,
@@ -3782,8 +3704,6 @@ def validate_svg_outputs(
         except ET.ParseError as exc:
             errors.append(f"Invalid SVG XML: {entry.filename} ({exc})")
             continue
-
-        errors.extend(validate_svg_locked_fonts(entry.filename, text))
 
         if contains_emoji(text):
             message = f"SVG contains emoji text instead of icon-library icons: {entry.filename}"
@@ -4356,9 +4276,6 @@ Hard constraints:
 - For H2 `创新技术` and `产业验证`, do not create a parent H2 slide; create one slide per H3 instead.
 - If those H2 sections contain intro text before the first H3, absorb that intro into the first child slide.
 - For all other H2 sections, create one slide per H2 and absorb H3 details into that slide.
-{LOCKED_TYPOGRAPHY_RULE}
-- Section IV Font Plan must use this exact table:
-{LOCKED_FONT_PLAN_TABLE}
 
 Output constraints:
 - This stage must stop after a valid `design_spec.md` is written
@@ -4390,9 +4307,6 @@ Keep these constraints locked:
 - Content density should stay moderately high
 - Stay faithful to the source and highlight key points
 {LANGUAGE_CONSISTENCY_RULE}
-{LOCKED_TYPOGRAPHY_RULE}
-- Section IV Font Plan must use this exact table:
-{LOCKED_FONT_PLAN_TABLE}
 - Lock icon usage to `{DEFAULT_ICON_LIBRARY}` only
 - Do not use emoji in the design spec
 - Use only real visualization templates from `templates/charts/`
@@ -4431,9 +4345,6 @@ Repair the existing files in place and keep all original hard constraints:
 - cover and ending pages are required
 - stay faithful to the source and keep the content dense
 {LANGUAGE_CONSISTENCY_RULE}
-{LOCKED_TYPOGRAPHY_RULE}
-- Section IV Font Plan must use this exact table:
-{LOCKED_FONT_PLAN_TABLE}
 - keep icon usage locked to `{DEFAULT_ICON_LIBRARY}`
 - do not use emoji in the design spec
 - use only real visualization templates from `templates/charts/`
@@ -4556,7 +4467,6 @@ Project boundaries:
 Executor constraints:
 - Use the reviewed `design_spec.md` as the single source of truth
 {LANGUAGE_CONSISTENCY_RULE}
-{LOCKED_TYPOGRAPHY_RULE}
 - Keep free design and light theme
 - Treat `{SVG_DESIGN_COOKBOOK_PATH.name}` as a mandatory SVG visual design guide after design-parameter confirmation
 - Use the full cookbook copy embedded in `{executor_skill_pack_path.name}`; do not separately read generic workflow docs such as `AGENTS.md`, `QWEN.md`, `SKILL.md`, or `repo_skill.md` during SVG generation
@@ -4645,7 +4555,6 @@ Project boundaries:
 Executor constraints:
 - Use the reviewed `design_spec.md` as the single source of truth
 {LANGUAGE_CONSISTENCY_RULE}
-{LOCKED_TYPOGRAPHY_RULE}
 - Keep free design and light theme
 - Treat `{SVG_DESIGN_COOKBOOK_PATH.name}` as the mandatory visual execution guide
 - Use the full cookbook copy embedded in `{executor_skill_pack_path.name}`; do not separately read generic workflow docs such as `AGENTS.md`, `QWEN.md`, `SKILL.md`, or `repo_skill.md` during SVG generation
@@ -4689,7 +4598,6 @@ Keep these constraints locked:
 - No section header / chapter divider page
 - Cover and ending pages are required
 {LANGUAGE_CONSISTENCY_RULE}
-{LOCKED_TYPOGRAPHY_RULE}
 - Lock icon usage to `{DEFAULT_ICON_LIBRARY}` only
 - Do not use emoji in SVG
 - Use only real visualization templates from `templates/charts/`
@@ -4713,7 +4621,6 @@ Keep these constraints locked:
 - Light theme only
 - Canvas: {request["canvas_format"]}
 {LANGUAGE_CONSISTENCY_RULE}
-{LOCKED_TYPOGRAPHY_RULE}
 - Lock icon usage to `{DEFAULT_ICON_LIBRARY}` only
 - Do not use emoji in SVG
 - Use only real visualization templates from `templates/charts/`
@@ -4758,7 +4665,6 @@ Repair the SVG and notes outputs in place and keep all hard constraints:
 - no section header page
 - total page count must stay exactly {len(plan)}
 {LANGUAGE_CONSISTENCY_RULE}
-{LOCKED_TYPOGRAPHY_RULE}
 - keep icon usage locked to `{DEFAULT_ICON_LIBRARY}`
 - do not use emoji in SVG
 - use only real visualization templates from `templates/charts/`
@@ -4795,7 +4701,6 @@ Repair only the current batch SVG files in place and keep all hard constraints:
 - free design
 - light theme only
 {LANGUAGE_CONSISTENCY_RULE}
-{LOCKED_TYPOGRAPHY_RULE}
 - lock icon usage to `{DEFAULT_ICON_LIBRARY}`
 - do not use emoji in SVG
 - use only real visualization templates from `templates/charts/`
@@ -4841,7 +4746,7 @@ Review boundaries:
 Repair goal:
 - Fix only the C7 pie/donut chart geometry errors listed in `{review_input_path.name}`
 - Preserve the existing page composition, text, color roles, header/footer anchors, and source language
-- Preserve the locked Source Han font-family values; do not introduce fallback fonts outside 思源宋体 / Source Han Serif SC and 思源黑体 / Source Han Sans SC
+- Preserve existing font-family values unless a font edit is required by the target geometry fix
 - Recompute arc endpoints and mask radii carefully; use the checker-provided corrected coordinates as evidence, but keep the SVG visually coherent
 - Keep every edited SVG valid XML
 - After editing, run `python skills/ppt-master/scripts/svg_quality_checker.py <target-svg-file> --export --output {quality_report_path}` for the target SVG files, or an equivalent focused check
@@ -4881,7 +4786,7 @@ Repair only:
 - {review_report_path}
 
 Keep the existing layout and visible text. Do not edit notes, design_spec.md, slide plan, or non-target SVGs.
-Preserve the locked Source Han font-family values; do not introduce fallback fonts outside 思源宋体 / Source Han Serif SC and 思源黑体 / Source Han Sans SC.
+Preserve existing font-family values unless a font edit is required by the target geometry fix.
 Do not run `svg_auto_repair.py` for pie/donut geometry.
 When all listed C7 chart geometry issues are fixed and `{review_report_path.name}` is valid JSON, print exactly one line:
 {PIE_CHART_REVIEW_COMPLETION_SENTINEL_PREFIX} {project_path}
@@ -5260,9 +5165,6 @@ Hard output contract:
 - Do not use emoji in design_spec.md.
 - Stay faithful to source markdown and keep content density moderately high.
 {LANGUAGE_CONSISTENCY_RULE}
-{LOCKED_TYPOGRAPHY_RULE}
-- Section IV Font Plan must use this exact table:
-{LOCKED_FONT_PLAN_TABLE}
 
 Canvas format: {request["canvas_format"]}
 Project path: {project_path}
@@ -5830,18 +5732,125 @@ def run_python_tool(args: list[str], cwd: Path, log_path: Path) -> None:
         raise RunnerError(f"Tool failed ({' '.join(args)}): {completed.stderr.strip() or completed.stdout.strip()}")
 
 
-def find_export_outputs(project_path: Path) -> tuple[Path | None, Path | None]:
-    exports_dir = project_path / "exports"
-    if not exports_dir.exists():
-        return None, None
-    native: list[Path] = []
-    svg: list[Path] = []
-    for path in sorted(exports_dir.glob("*.pptx"), key=lambda item: item.stat().st_mtime, reverse=True):
-        if path.name.endswith("_svg.pptx"):
-            svg.append(path)
+def explicit_legacy_pptx_path(native_pptx_path: Path) -> Path:
+    return native_pptx_path.with_name(f"{native_pptx_path.stem}_svg{native_pptx_path.suffix}")
+
+
+def parse_inline_style(style: str | None) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not style:
+        return values
+    for part in style.split(";"):
+        if ":" not in part:
+            continue
+        key, value = part.split(":", 1)
+        values[key.strip().lower()] = value.strip()
+    return values
+
+
+def parse_float_value(raw: str | None) -> float | None:
+    if not raw:
+        return None
+    match = re.search(r"-?\d+(?:\.\d+)?", raw)
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
+def text_element_uses_source_han_serif(element: ET.Element) -> bool:
+    style = parse_inline_style(element.get("style"))
+    font_size = parse_float_value(element.get("font-size") or style.get("font-size")) or 0.0
+    y = parse_float_value(element.get("y")) or 9999.0
+    text = "".join(element.itertext()).strip()
+    if not text:
+        return False
+
+    metric_like = re.fullmatch(r"[\d\s.,:%+￥¥$€\-−–—/<>×xX亿万年月日]+", text) is not None
+    if metric_like:
+        return False
+
+    weight = (element.get("font-weight") or style.get("font-weight") or "").strip().lower()
+    is_bold = weight in {"bold", "600", "700", "800", "900"}
+    return font_size >= 42 or (font_size >= 28 and y <= 150) or (font_size >= 32 and is_bold)
+
+
+def set_text_font_family(element: ET.Element, family: str) -> None:
+    element.set("font-family", family)
+    style = element.get("style")
+    if not style or "font-family" not in style.lower():
+        return
+
+    parts: list[str] = []
+    replaced = False
+    for part in style.split(";"):
+        if not part.strip():
+            continue
+        if ":" in part and part.split(":", 1)[0].strip().lower() == "font-family":
+            parts.append(f"font-family:{family}")
+            replaced = True
         else:
-            native.append(path)
-    return (native[0] if native else None, svg[0] if svg else None)
+            parts.append(part.strip())
+    if not replaced:
+        parts.append(f"font-family:{family}")
+    element.set("style", "; ".join(parts))
+
+
+def rewrite_svg_text_fonts_to_source_han(svg_text: str) -> tuple[str, int]:
+    ET.register_namespace("", "http://www.w3.org/2000/svg")
+    ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
+    root = ET.fromstring(svg_text)
+    changed = 0
+    for element in root.iter():
+        if element.tag.rsplit("}", 1)[-1] != "text":
+            continue
+        family = (
+            SOURCE_HAN_TITLE_FONT_FAMILY
+            if text_element_uses_source_han_serif(element)
+            else SOURCE_HAN_BODY_FONT_FAMILY
+        )
+        if element.get("font-family") != family:
+            changed += 1
+        set_text_font_family(element, family)
+    return ET.tostring(root, encoding="unicode"), changed
+
+
+def build_source_han_svg_export_variant(project_path: Path, log_path: Path) -> Path:
+    source_dir = project_path / "svg_final"
+    if not source_dir.exists():
+        raise RunnerError(f"Cannot build Source Han export variant; missing {source_dir}")
+
+    target_dir = project_path / SOURCE_HAN_SVG_DIRNAME
+    project_root = project_path.resolve()
+    target_resolved = target_dir.resolve()
+    if project_root != target_resolved and project_root not in target_resolved.parents:
+        raise RunnerError(f"Refusing to replace SVG variant outside project directory: {target_dir}")
+
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+    shutil.copytree(source_dir, target_dir)
+
+    changed_files = 0
+    changed_text_nodes = 0
+    for svg_path in sorted(target_dir.glob("*.svg")):
+        original = svg_path.read_text(encoding="utf-8", errors="replace")
+        try:
+            updated, changed = rewrite_svg_text_fonts_to_source_han(original)
+        except ET.ParseError as exc:
+            raise RunnerError(f"Cannot rewrite fonts in {svg_path.name}: invalid XML ({exc})") from exc
+        if updated != original:
+            svg_path.write_text(updated, encoding="utf-8")
+            changed_files += 1
+            changed_text_nodes += changed
+
+    append_log(
+        log_path,
+        f"Built Source Han SVG export variant at {target_dir}; "
+        f"changed_files={changed_files} text_nodes={changed_text_nodes}",
+    )
+    return target_dir
 
 
 def create_project(request: dict[str, Any], manager: ProjectManager, log_path: Path) -> Path:
@@ -6821,10 +6830,6 @@ def execute_generation(
         ],
         critical_rules=[
             "Emoji are forbidden in design_spec.md and downstream SVG output.",
-            LOCKED_TYPOGRAPHY_RULE,
-            "Section IV Font Plan must use exactly: "
-            + "Title=思源宋体/Source Han Serif SC; Body=思源黑体/Source Han Sans SC; "
-            + "Code=思源黑体/Source Han Sans SC; Emphasis=思源黑体/Source Han Sans SC.",
             f"Do not use emoji as bullets, labels, callouts, status markers, pseudo-icons, or decorative accents; use normal text or `{DEFAULT_ICON_LIBRARY}/...` icon placeholders instead.",
             f"If an icon is needed, use only real `{DEFAULT_ICON_LIBRARY}/...` names from the allowed icon inventory.",
         ],
@@ -7167,7 +7172,7 @@ def execute_generation(
     return notes_session_id
 
 
-def run_post_processing(project_path: Path, log_path: Path) -> tuple[Path, Path]:
+def run_post_processing(project_path: Path, log_path: Path) -> tuple[Path, Path, Path, Path]:
     with acquire_resource_slot(
         "postprocess",
         label=f"postprocess_{project_path.name}",
@@ -7184,15 +7189,44 @@ def run_post_processing(project_path: Path, log_path: Path) -> tuple[Path, Path]
             cwd=REPO_ROOT,
             log_path=log_path,
         )
+        exports_dir = project_path / "exports"
+        exports_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        yahei_native = exports_dir / f"{project_path.name}_{timestamp}_yahei.pptx"
+        yahei_svg = explicit_legacy_pptx_path(yahei_native)
+        source_han_native = exports_dir / f"{project_path.name}_{timestamp}_sourcehan.pptx"
+        source_han_svg = explicit_legacy_pptx_path(source_han_native)
+
         run_python_tool(
-            ["skills/ppt-master/scripts/svg_to_pptx.py", str(project_path), "-s", "final"],
+            [
+                "skills/ppt-master/scripts/svg_to_pptx.py",
+                str(project_path),
+                "-s",
+                "final",
+                "-o",
+                str(yahei_native),
+            ],
             cwd=REPO_ROOT,
             log_path=log_path,
         )
-    native_pptx, svg_pptx = find_export_outputs(project_path)
-    if native_pptx is None or svg_pptx is None:
-        raise RunnerError("Post-processing completed but export outputs were not found in exports/")
-    return native_pptx, svg_pptx
+        build_source_han_svg_export_variant(project_path, log_path)
+        run_python_tool(
+            [
+                "skills/ppt-master/scripts/svg_to_pptx.py",
+                str(project_path),
+                "-s",
+                SOURCE_HAN_SVG_DIRNAME,
+                "-o",
+                str(source_han_native),
+            ],
+            cwd=REPO_ROOT,
+            log_path=log_path,
+        )
+    expected_outputs = (yahei_native, yahei_svg, source_han_native, source_han_svg)
+    missing = [str(path) for path in expected_outputs if not path.exists()]
+    if missing:
+        raise RunnerError("Post-processing completed but export outputs were not found: " + ", ".join(missing))
+    return expected_outputs
 
 
 def build_failure_output(
@@ -7209,6 +7243,8 @@ def build_failure_output(
         qwen_session_id=session_id,
         native_pptx_path=None,
         svg_pptx_path=None,
+        source_han_native_pptx_path=None,
+        source_han_svg_pptx_path=None,
         log_path=str(log_path) if log_path else None,
         error=error,
     )
@@ -7284,7 +7320,7 @@ def main() -> None:
             log_path=log_path,
         )
 
-        native_pptx, svg_pptx = run_post_processing(project_path, log_path)
+        native_pptx, svg_pptx, source_han_native_pptx, source_han_svg_pptx = run_post_processing(project_path, log_path)
         output = RunOutput(
             job_id=request["job_id"],
             status="succeeded",
@@ -7292,6 +7328,8 @@ def main() -> None:
             qwen_session_id=session_id,
             native_pptx_path=str(native_pptx),
             svg_pptx_path=str(svg_pptx),
+            source_han_native_pptx_path=str(source_han_native_pptx),
+            source_han_svg_pptx_path=str(source_han_svg_pptx),
             log_path=str(log_path),
             error=None,
         )

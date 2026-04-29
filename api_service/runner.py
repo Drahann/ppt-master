@@ -23,6 +23,8 @@ class RunnerResult:
     project_path: Path
     native_pptx_path: Path
     svg_pptx_path: Path | None
+    source_han_native_pptx_path: Path | None
+    source_han_svg_pptx_path: Path | None
     log_path: Path | None
     title: str
     slide_count: int
@@ -118,6 +120,10 @@ def execute_runner(
     native_pptx_path = Path(payload["native_pptx_path"])
     svg_pptx_raw = payload.get("svg_pptx_path")
     svg_pptx_path = Path(svg_pptx_raw) if svg_pptx_raw else None
+    source_han_native_raw = payload.get("source_han_native_pptx_path")
+    source_han_native_pptx_path = Path(source_han_native_raw) if source_han_native_raw else None
+    source_han_svg_raw = payload.get("source_han_svg_pptx_path")
+    source_han_svg_pptx_path = Path(source_han_svg_raw) if source_han_svg_raw else None
     log_raw = payload.get("log_path")
     log_path = Path(log_raw) if log_raw else None
 
@@ -127,6 +133,8 @@ def execute_runner(
         project_path=project_path,
         native_pptx_path=native_pptx_path,
         svg_pptx_path=svg_pptx_path,
+        source_han_native_pptx_path=source_han_native_pptx_path,
+        source_han_svg_pptx_path=source_han_svg_pptx_path,
         log_path=log_path,
         title=title,
         slide_count=_read_slide_count(project_path),

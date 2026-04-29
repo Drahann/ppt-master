@@ -31,9 +31,9 @@
     <rect width="1280" height="720" fill="url(#bgGrad)"/>
 
     <!-- 标题区域 -->
-    <text x="640" y="65" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+    <text x="640" y="65" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
           font-size="32" font-weight="700" fill="#1A252F" letter-spacing="-0.5">实施路径五步法</text>
-    <text x="640" y="95" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+    <text x="640" y="95" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
           font-size="16" fill="#7F8C8D">Five-Step Implementation · 从规划到落地的完整路径</text>
 
     <!-- 主连接线 -->
@@ -49,41 +49,41 @@
     <!-- 步骤1 -->
     <circle cx="165" cy="265" r="38" fill="#6C5CE7" filter="url(#cardShadow)"/>
     <circle cx="165" cy="265" r="32" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-opacity="0.3"/>
-    <text x="165" y="260" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+    <text x="165" y="260" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
           font-size="24" font-weight="800" fill="#FFFFFF">01</text>
-    <text x="165" y="278" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+    <text x="165" y="278" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
           font-size="9" font-weight="600" fill="#FFFFFF" fill-opacity="0.7">STEP</text>
 
     <!-- 步骤2 -->
     <circle cx="395" cy="265" r="38" fill="#00B894" filter="url(#cardShadow)"/>
     <circle cx="395" cy="265" r="32" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-opacity="0.3"/>
-    <text x="395" y="260" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+    <text x="395" y="260" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
           font-size="24" font-weight="800" fill="#FFFFFF">02</text>
-    <text x="395" y="278" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+    <text x="395" y="278" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
           font-size="9" font-weight="600" fill="#FFFFFF" fill-opacity="0.7">STEP</text>
 
     <!-- 步骤3 -->
     <circle cx="625" cy="265" r="38" fill="#FDCB6E" filter="url(#cardShadow)"/>
     <circle cx="625" cy="265" r="32" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-opacity="0.3"/>
-    <text x="625" y="260" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+    <text x="625" y="260" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
           font-size="24" font-weight="800" fill="#FFFFFF">03</text>
-    <text x="625" y="278" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+    <text x="625" y="278" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
           font-size="9" font-weight="600" fill="#FFFFFF" fill-opacity="0.7">STEP</text>
 
     <!-- 步骤4 -->
     <circle cx="855" cy="265" r="38" fill="#E17055" filter="url(#cardShadow)"/>
     <circle cx="855" cy="265" r="32" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-opacity="0.3"/>
-    <text x="855" y="260" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+    <text x="855" y="260" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
           font-size="24" font-weight="800" fill="#FFFFFF">04</text>
-    <text x="855" y="278" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+    <text x="855" y="278" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
           font-size="9" font-weight="600" fill="#FFFFFF" fill-opacity="0.7">STEP</text>
 
     <!-- 步骤5 -->
     <circle cx="1085" cy="265" r="38" fill="#0984E3" filter="url(#cardShadow)"/>
     <circle cx="1085" cy="265" r="32" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-opacity="0.3"/>
-    <text x="1085" y="260" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+    <text x="1085" y="260" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
           font-size="24" font-weight="800" fill="#FFFFFF">05</text>
-    <text x="1085" y="278" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+    <text x="1085" y="278" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
           font-size="9" font-weight="600" fill="#FFFFFF" fill-opacity="0.7">STEP</text>
 
     <!-- 虚线连接到卡片 -->
@@ -98,21 +98,21 @@
     <g filter="url(#cardShadow)">
         <rect x="60" y="355" width="210" height="280" rx="12" fill="#FFFFFF"/>
         <rect x="60" y="355" width="210" height="6" rx="3" fill="#6C5CE7"/>
-        <text x="165" y="395" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+        <text x="165" y="395" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="17" font-weight="700" fill="#1A252F">需求分析</text>
-        <text x="165" y="418" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+        <text x="165" y="418" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#6C5CE7" font-weight="600">Requirements</text>
         <line x1="90" y1="435" x2="240" y2="435" stroke="#F0F0F0" stroke-width="1"/>
-        <text x="80" y="462" font-family="思源黑体, Source Han Sans SC"
+        <text x="80" y="462" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#5F6368">· 梳理业务目标</text>
-        <text x="80" y="485" font-family="思源黑体, Source Han Sans SC"
+        <text x="80" y="485" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#5F6368">· 调研用户需求</text>
-        <text x="80" y="508" font-family="思源黑体, Source Han Sans SC"
+        <text x="80" y="508" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#5F6368">· 分析竞品现状</text>
-        <text x="80" y="531" font-family="思源黑体, Source Han Sans SC"
+        <text x="80" y="531" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#5F6368">· 确定核心指标</text>
         <rect x="90" y="560" width="60" height="22" rx="11" fill="#6C5CE7" fill-opacity="0.1"/>
-        <text x="120" y="575" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+        <text x="120" y="575" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="11" font-weight="600" fill="#6C5CE7">2周</text>
     </g>
 
@@ -120,21 +120,21 @@
     <g filter="url(#cardShadow)">
         <rect x="290" y="355" width="210" height="280" rx="12" fill="#FFFFFF"/>
         <rect x="290" y="355" width="210" height="6" rx="3" fill="#00B894"/>
-        <text x="395" y="395" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+        <text x="395" y="395" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="17" font-weight="700" fill="#1A252F">方案设计</text>
-        <text x="395" y="418" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+        <text x="395" y="418" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#00B894" font-weight="600">Design</text>
         <line x1="320" y1="435" x2="470" y2="435" stroke="#F0F0F0" stroke-width="1"/>
-        <text x="310" y="462" font-family="思源黑体, Source Han Sans SC"
+        <text x="310" y="462" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#5F6368">· 架构方案评审</text>
-        <text x="310" y="485" font-family="思源黑体, Source Han Sans SC"
+        <text x="310" y="485" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#5F6368">· 技术选型确认</text>
-        <text x="310" y="508" font-family="思源黑体, Source Han Sans SC"
+        <text x="310" y="508" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#5F6368">· 里程碑规划</text>
-        <text x="310" y="531" font-family="思源黑体, Source Han Sans SC"
+        <text x="310" y="531" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#5F6368">· 资源分配方案</text>
         <rect x="320" y="560" width="60" height="22" rx="11" fill="#00B894" fill-opacity="0.1"/>
-        <text x="350" y="575" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+        <text x="350" y="575" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="11" font-weight="600" fill="#00B894">3周</text>
     </g>
 
@@ -142,21 +142,21 @@
     <g filter="url(#cardShadow)">
         <rect x="520" y="355" width="210" height="280" rx="12" fill="#FFFFFF"/>
         <rect x="520" y="355" width="210" height="6" rx="3" fill="#FDCB6E"/>
-        <text x="625" y="395" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+        <text x="625" y="395" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="17" font-weight="700" fill="#1A252F">开发实施</text>
-        <text x="625" y="418" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+        <text x="625" y="418" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#D4A537" font-weight="600">Develop</text>
         <line x1="550" y1="435" x2="700" y2="435" stroke="#F0F0F0" stroke-width="1"/>
-        <text x="540" y="462" font-family="思源黑体, Source Han Sans SC"
+        <text x="540" y="462" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#5F6368">· 核心模块开发</text>
-        <text x="540" y="485" font-family="思源黑体, Source Han Sans SC"
+        <text x="540" y="485" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#5F6368">· 持续集成部署</text>
-        <text x="540" y="508" font-family="思源黑体, Source Han Sans SC"
+        <text x="540" y="508" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#5F6368">· 代码审查流程</text>
-        <text x="540" y="531" font-family="思源黑体, Source Han Sans SC"
+        <text x="540" y="531" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#5F6368">· 单元测试覆盖</text>
         <rect x="550" y="560" width="60" height="22" rx="11" fill="#FDCB6E" fill-opacity="0.15"/>
-        <text x="580" y="575" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+        <text x="580" y="575" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="11" font-weight="600" fill="#D4A537">6周</text>
     </g>
 
@@ -164,21 +164,21 @@
     <g filter="url(#cardShadow)">
         <rect x="750" y="355" width="210" height="280" rx="12" fill="#FFFFFF"/>
         <rect x="750" y="355" width="210" height="6" rx="3" fill="#E17055"/>
-        <text x="855" y="395" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+        <text x="855" y="395" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="17" font-weight="700" fill="#1A252F">测试验证</text>
-        <text x="855" y="418" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+        <text x="855" y="418" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#E17055" font-weight="600">Testing</text>
         <line x1="780" y1="435" x2="930" y2="435" stroke="#F0F0F0" stroke-width="1"/>
-        <text x="770" y="462" font-family="思源黑体, Source Han Sans SC"
+        <text x="770" y="462" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#5F6368">· 功能回归测试</text>
-        <text x="770" y="485" font-family="思源黑体, Source Han Sans SC"
+        <text x="770" y="485" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#5F6368">· 性能压力测试</text>
-        <text x="770" y="508" font-family="思源黑体, Source Han Sans SC"
+        <text x="770" y="508" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#5F6368">· 用户验收测试</text>
-        <text x="770" y="531" font-family="思源黑体, Source Han Sans SC"
+        <text x="770" y="531" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#5F6368">· Bug修复闭环</text>
         <rect x="780" y="560" width="60" height="22" rx="11" fill="#E17055" fill-opacity="0.1"/>
-        <text x="810" y="575" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+        <text x="810" y="575" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="11" font-weight="600" fill="#E17055">3周</text>
     </g>
 
@@ -186,25 +186,25 @@
     <g filter="url(#cardShadow)">
         <rect x="980" y="355" width="210" height="280" rx="12" fill="#FFFFFF"/>
         <rect x="980" y="355" width="210" height="6" rx="3" fill="#0984E3"/>
-        <text x="1085" y="395" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+        <text x="1085" y="395" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="17" font-weight="700" fill="#1A252F">上线运维</text>
-        <text x="1085" y="418" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+        <text x="1085" y="418" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#0984E3" font-weight="600">Launch</text>
         <line x1="1010" y1="435" x2="1160" y2="435" stroke="#F0F0F0" stroke-width="1"/>
-        <text x="1000" y="462" font-family="思源黑体, Source Han Sans SC"
+        <text x="1000" y="462" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#5F6368">· 灰度发布策略</text>
-        <text x="1000" y="485" font-family="思源黑体, Source Han Sans SC"
+        <text x="1000" y="485" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#5F6368">· 监控告警配置</text>
-        <text x="1000" y="508" font-family="思源黑体, Source Han Sans SC"
+        <text x="1000" y="508" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#5F6368">· 数据效果追踪</text>
-        <text x="1000" y="531" font-family="思源黑体, Source Han Sans SC"
+        <text x="1000" y="531" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="12" fill="#5F6368">· 持续迭代优化</text>
         <rect x="1010" y="560" width="60" height="22" rx="11" fill="#0984E3" fill-opacity="0.1"/>
-        <text x="1040" y="575" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+        <text x="1040" y="575" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
               font-size="11" font-weight="600" fill="#0984E3">持续</text>
     </g>
 
     <!-- 底部注释 -->
-    <text x="640" y="680" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
+    <text x="640" y="680" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
           font-size="12" fill="#BDC3C7">总周期约14周 · 各阶段可根据项目规模灵活调整</text>
 </svg>
