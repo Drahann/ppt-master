@@ -389,13 +389,20 @@ def claude_config_base(project_path: Path) -> Path:
 
 
 def scoped_claude_env(env: dict[str, str], scope: str) -> dict[str, str]:
-    if truthy_env(os.environ.get("PPT_MASTER_CLAUDE_SHARE_CONFIG")):
+    share_config = env.get("PPT_MASTER_CLAUDE_SHARE_CONFIG") or os.environ.get("PPT_MASTER_CLAUDE_SHARE_CONFIG")
+    if truthy_env(share_config):
         return env
     base = env.get("PPT_MASTER_CLAUDE_CONFIG_BASE")
     if not base:
         return env
-    safe_scope = re.sub(r"[^A-Za-z0-9_.-]+", "_", scope).strip("_") or "default"
-    config_dir = Path(base) / safe_scope
+    scope_mode = (
+        env.get("PPT_MASTER_CLAUDE_CONFIG_SCOPE") or os.environ.get("PPT_MASTER_CLAUDE_CONFIG_SCOPE") or "job"
+    ).strip().lower()
+    if scope_mode in {"batch", "scope", "scoped"}:
+        safe_scope = re.sub(r"[^A-Za-z0-9_.-]+", "_", scope).strip("_") or "default"
+        config_dir = Path(base) / safe_scope
+    else:
+        config_dir = Path(base)
     config_dir.mkdir(parents=True, exist_ok=True)
     scoped = env.copy()
     scoped["CLAUDE_CONFIG_DIR"] = str(config_dir)
