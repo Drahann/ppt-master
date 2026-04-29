@@ -147,9 +147,11 @@ yarn.lock
 
 # Environment variables
 .env
+.env.api
 .env.local
 .env.*.local
 .env*.ps1
+secrets/
 
 # Database files
 *.db
@@ -159,6 +161,7 @@ yarn.lock
 # Cache and locks
 .cache/
 .omx/
+tmp/
 *.lock
 .lock
 

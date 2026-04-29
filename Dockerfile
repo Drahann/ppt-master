@@ -1,0 +1,50 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONIOENCODING=utf-8
+ENV PIP_NO_CACHE_DIR=1
+ENV PPT_API_HOST=0.0.0.0
+ENV PPT_API_PORT=3000
+ENV PPT_MASTER_CLAUDE_CONFIG_ROOT=/app/tmp/claude-code-config
+
+ARG APT_MIRROR=mirrors.tuna.tsinghua.edu.cn
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+ARG CLAUDE_CODE_PACKAGE=@anthropic-ai/claude-code@latest
+
+RUN if [ -f /etc/apt/sources.list ]; then \
+      sed -i "s|http://deb.debian.org/debian|https://${APT_MIRROR}/debian|g; s|http://security.debian.org/debian-security|https://${APT_MIRROR}/debian-security|g" /etc/apt/sources.list; \
+    fi && \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+      sed -i "s|http://deb.debian.org/debian|https://${APT_MIRROR}/debian|g; s|http://security.debian.org/debian-security|https://${APT_MIRROR}/debian-security|g" /etc/apt/sources.list.d/debian.sources; \
+    fi && \
+    apt-get update && apt-get install -y --no-install-recommends \
+      build-essential \
+      ca-certificates \
+      curl \
+      fonts-noto-cjk \
+      git \
+      libcairo2 \
+      libcairo2-dev \
+      libjpeg62-turbo \
+      libpng16-16 \
+      nodejs \
+      npm \
+      pkg-config \
+      zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt ./requirements.txt
+RUN pip install -i ${PIP_INDEX_URL} --trusted-host ${PIP_TRUSTED_HOST} -r requirements.txt
+RUN npm install -g "${CLAUDE_CODE_PACKAGE}"
+
+COPY . .
+
+RUN mkdir -p /app/projects /app/tmp/api-jobs /app/tmp/claude-code-config /app/secrets /root/.claude
+
+EXPOSE 3000
+
+CMD ["uvicorn", "api_service.app:app", "--host", "0.0.0.0", "--port", "3000"]

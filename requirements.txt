@@ -1,6 +1,13 @@
 # PPT Master Dependencies / PPT Master 依赖
 # =============================================
 #
+# Production API shell / FastAPI + Redis queue + COS upload
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+redis>=5.0.0
+cos-python-sdk-v5>=1.9.31
+psutil>=5.9.0
+#
 # Most tools use only the Python standard library. Below are optional dependencies.
 # 大部分工具仅使用 Python 标准库，以下为可选依赖。
 #
