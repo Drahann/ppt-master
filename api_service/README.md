@@ -79,7 +79,7 @@ Use `callbackMode=defer` for rag-agent when PPT starts in parallel with PDF and 
 
 ## Redis LLM Slots
 
-When `REDIS_URL` is configured, `qwen_ppt_runner.py` uses Redis slot leases for LLM stages instead of local files. Without Redis, it falls back to the existing file-slot backend.
+When `REDIS_URL` is configured, `qwen_ppt_runner.py` uses Redis slot leases for LLM stages instead of local files. Without Redis, it falls back to the existing file-slot backend. The targeted Pie/Donut C7 SVG review gates are launched asynchronously as SVG batches finish and are treated as SVG-stage Qwen turns, so they share the SVG concurrency, pacing, and account-pool controls.
 
 Slot keys:
 

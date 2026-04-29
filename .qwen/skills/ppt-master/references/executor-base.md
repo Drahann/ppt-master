@@ -202,10 +202,16 @@ Apply corresponding fonts for different text roles based on the font plan in the
 
 | Role | Chinese Recommended | English Recommended |
 |------|--------------------|--------------------|
-| Title font | Microsoft YaHei / KaiTi / SimHei | Arial / Georgia |
-| Body font | Microsoft YaHei / SimSun | Calibri / Times |
-| Emphasis font | SimHei | Arial Black / Consolas |
-| Annotation font | Microsoft YaHei / SimSun | Arial / Times |
+| Title font | 思源宋体 | Source Han Serif SC |
+| Body font | 思源黑体 | Source Han Sans SC |
+| Emphasis font | 思源黑体 | Source Han Sans SC |
+| Annotation font | 思源黑体 | Source Han Sans SC |
+
+Use only these two font families in SVG `font-family` values:
+- Title text: `"思源宋体", "Source Han Serif SC"`
+- Body, code, emphasis, labels, annotations, footers, chart text: `"思源黑体", "Source Han Sans SC"`
+
+Do not add Arial, Calibri, Consolas, Microsoft YaHei, SimHei, SimSun, generic `sans-serif`, generic `serif`, or generic `monospace` fallbacks.
 
 ---
 

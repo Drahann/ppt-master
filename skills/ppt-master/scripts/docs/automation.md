@@ -57,11 +57,12 @@ Behavior:
 - Precomputes real chart-template references from `templates/charts/charts_index.json`
 - Precomputes per-slide `chunk` icon candidates from the real icon library
 - Precomputes a slide content digest so the model starts from structured source notes instead of raw markdown only
-- Runs four isolated Qwen stages:
+- Runs isolated Qwen stages:
   - `spec_generation`: writes `design_spec.md`
   - `spec_review`: re-reads the generated spec in a separate session and repairs icon/template issues
   - `svg_generation`: generates `svg_output/`
-  - `notes_generation`: writes `notes/total.md` after SVG generation has finished
+  - `pie_chart_review`: as each SVG batch completes, re-reads only SVGs with C7 pie/donut geometry errors and repairs those pages in separate Qwen sessions while later batches continue
+  - `notes_generation`: writes `notes/total.md` after SVG generation and the C7 review sweep have finished
 - Uses batched serial SVG generation automatically for long decks by default
   - `batch_mode=auto`: enable batching when page count exceeds the threshold
   - `batch_mode=always`: always use batched serial SVG generation
@@ -81,7 +82,8 @@ Behavior:
 - Writes deterministic review input with invalid-icon candidates and unknown chart-template findings before the review stage
 - Rejects invalid `design_spec.md` outputs when required sections are missing, chart template names are fake, icon planning is too thin, or icon names do not exist in the locked library
 - Rejects invalid SVG outputs when XML parsing fails, icon coverage is too low, `data-icon` names do not exist in the locked icon library, or emoji are used instead of proper icons
-- Runs deterministic `svg_quality_checker.py` and `svg_auto_repair.py` after notes generation
+- Runs deterministic `svg_quality_checker.py` after each completed SVG batch to route C7 pie/donut geometry issues into async Qwen review gates, then runs a final full-deck C7 sweep before notes
+- Runs deterministic `svg_auto_repair.py` after notes generation only for title icon and syntax/XML cleanup; script-based pie/donut geometry repair is disabled
 - Runs `total_md_split.py`, `finalize_svg.py`, and `svg_to_pptx.py -s final`
 
 Output:
@@ -110,10 +112,13 @@ Runner artifacts are written to `<project_path>/runner/`:
 - `svg_anchor_context.json`
 - `spec_prompt.txt`
 - `review_prompt.txt`
+- `pie_chart_review_prompt.txt` / `pie_chart_review_batch_*_prompt.txt`
 - `bootstrap_prompt.txt`
 - `notes_prompt.txt`
 - `spec_review_input.json`
 - `spec_review_report.json`
+- `pie_chart_review_input.json` / `pie_chart_review_batch_*_input.json`
+- `pie_chart_review_report.json` / `pie_chart_review_batch_*_report.json`
 - `svg_quality_report.txt`
 - `stage_sessions.json`
 - `spec_turn_*.stdout.txt`
@@ -122,6 +127,9 @@ Runner artifacts are written to `<project_path>/runner/`:
 - `review_turn_*.stdout.txt`
 - `review_turn_*.stderr.txt`
 - `review_turn_*.assistant.txt`
+- `svg_pie_review*_turn_*.stdout.txt`
+- `svg_pie_review*_turn_*.stderr.txt`
+- `svg_pie_review*_turn_*.assistant.txt`
 - `svg_batch_*.stdout.txt` / `svg_batch_*.stderr.txt` / `svg_batch_*.assistant.txt` when batched SVG mode is active
 - `notes_turn_*.stdout.txt`
 - `notes_turn_*.stderr.txt`
@@ -134,7 +142,8 @@ Runner artifacts are written to `<project_path>/runner/`:
 
 Notes:
 - `model` drives the Strategist, SVG, and Notes stages
-- `review_model` drives the isolated design-spec review stage; if omitted, it defaults to `qwen3-max`
+- `review_model` drives isolated review stages, including async C7 pie/donut SVG review gates; if omitted, it defaults to `qwen3.6-plus`
+- `PPT_API_PIE_CHART_REVIEW_WORKERS` controls how many C7 review Qwen processes may run in parallel per runner; default is `2`
 - The returned `qwen_session_id` is the final completed Qwen stage session id, which is currently `notes_generation`
 - Completion is accepted only when the stage sentinel appears and the generated files pass deterministic validation
 - To stop a stuck local run cleanly on Windows, prefer `stop_qwen_runner.py` instead of killing only the outer `python` process

@@ -40,7 +40,7 @@
   <rect x="0" y="0" width="1280" height="6" fill="url(#headerGrad)"/>
   <g id="header">
     <rect x="60" y="40" width="6" height="36" rx="3" fill="[PRIMARY]"/>
-    <text x="80" y="70" font-family="Microsoft YaHei, Arial, sans-serif"
+    <text x="80" y="70" font-family="思源黑体, Source Han Sans SC"
       font-size="32" font-weight="bold" fill="#263238">__TITLE__</text>
     <use data-icon="chunk/__ICON__" x="__TITLE_END__" y="46"
       width="30" height="30" fill="[PRIMARY]"/>
@@ -54,10 +54,10 @@
   <g id="footer">
     <rect x="0" y="690" width="1280" height="30" fill="#F0F4F8"/>
     <text x="640" y="710" text-anchor="middle"
-      font-family="Microsoft YaHei, Arial, sans-serif"
+      font-family="思源黑体, Source Han Sans SC"
       font-size="11" fill="#90A4AE">项目名 | 机构名</text>
     <text x="1220" y="710" text-anchor="end"
-      font-family="Arial, sans-serif"
+      font-family="思源黑体, Source Han Sans SC"
       font-size="11" fill="#90A4AE">__PAGE__</text>
   </g>
 </svg>
@@ -253,14 +253,14 @@
 大数字永远不单独出现。它必须搭配 3 个伴随元素，组成一个"数字信息块"：
 
 ```xml
-<!-- ① 大数字（居中，Arial，36-48px，主题色） -->
+<!-- ① 大数字（居中，思源黑体，36-48px，主题色） -->
 <text x="245" y="220" text-anchor="middle"
-  font-family="Arial, sans-serif" font-size="48"
+  font-family="思源黑体, Source Han Sans SC" font-size="48"
   font-weight="bold" fill="[PRIMARY]">9</text>
 
 <!-- ② 单位说明（紧跟大数字下方，16px，BODY色） -->
 <text x="245" y="250" text-anchor="middle"
-  font-family="Microsoft YaHei, Arial, sans-serif"
+  font-family="思源黑体, Source Han Sans SC"
   font-size="16" fill="#263238">篇学术论文</text>
 
 <!-- ③ Badge标签（药丸形，大数字下方8px处） -->
@@ -278,7 +278,7 @@
 | 规则 | 说明 |
 |------|------|
 | 字号 = **36~48px**，不超过 48px | 64px 在卡片内太大，比例失调 |
-| 字体 = **Arial**（纯数字部分） | 中文字体的数字不好看 |
+| 字体 = **思源黑体 / Source Han Sans SC**（纯数字部分） | 中文字体的数字不好看 |
 | 每张卡片 **最多 1 个** 大数字 | 2 个大数字 = 没有焦点 |
 | 必须是**具体数字** | 禁止用 "N"、"多"、"若干" 当大数字 |
 | 没有数据就**不放**大数字 | 用标题栏+图标+列表代替 |
@@ -370,8 +370,8 @@
 
 **典型组合（三栏卡片 500px 高）**：
 ```
-E1 标题栏(55px) + E2 大数字(80px) + E3 Badge(28px) 
-+ 分割线(1px) + E4 信息列表3行(90px) 
+E1 标题栏(55px) + E2 大数字(80px) + E3 Badge(28px)
++ 分割线(1px) + E4 信息列表3行(90px)
 + 分割线(1px) + E7 底注(30px)
 = 285px 内容 + 间距 ≈ 380px → 空白率 24% ✅
 ```
@@ -384,9 +384,9 @@ E1 标题栏(55px) + E2 大数字(80px) + E3 Badge(28px)
 <!-- 信息卡：浅色底+左侧图标+右侧标题和说明 -->
 <rect x="674" y="195" width="520" height="70" rx="8" fill="#F0F4F8"/>
 <use data-icon="chunk/microchip" x="690" y="213" width="28" height="28" fill="[PRIMARY]"/>
-<text x="730" y="228" font-family="Microsoft YaHei, Arial, sans-serif"
+<text x="730" y="228" font-family="思源黑体, Source Han Sans SC"
   font-size="15" font-weight="bold" fill="#263238">柔性传感材料研发</text>
-<text x="730" y="248" font-family="Microsoft YaHei, Arial, sans-serif"
+<text x="730" y="248" font-family="思源黑体, Source Han Sans SC"
   font-size="13" fill="#546E7A">高性能柔性传感阵列设计与复合材料体系</text>
 ```
 
@@ -445,14 +445,14 @@ E1 标题栏(55px) + E2 大数字(80px) + E3 Badge(28px)
 <!-- 大卡片内部嵌套 2 个白色指标小卡 -->
 <rect x="84" y="390" width="200" height="90" rx="10" fill="#FFFFFF"/>
 <text x="184" y="425" text-anchor="middle"
-  font-family="Arial, sans-serif" font-size="32"
+  font-family="思源黑体, Source Han Sans SC" font-size="32"
   font-weight="bold" fill="[PRIMARY]">50+</text>
 <text x="184" y="455" text-anchor="middle"
   font-size="13" fill="#546E7A">核心期刊论文</text>
 
 <rect x="304" y="390" width="200" height="90" rx="10" fill="#FFFFFF"/>
 <text x="404" y="425" text-anchor="middle"
-  font-family="Arial, sans-serif" font-size="32"
+  font-family="思源黑体, Source Han Sans SC" font-size="32"
   font-weight="bold" fill="[ACCENT]">10+</text>
 <text x="404" y="455" text-anchor="middle"
   font-size="13" fill="#546E7A">授权发明专利</text>
@@ -478,7 +478,7 @@ E1 标题栏(55px) + E2 大数字(80px) + E3 Badge(28px)
   <!-- 左侧色条装饰 -->
   <rect x="60" y="40" width="6" height="36" rx="3" fill="[PRIMARY]"/>
   <!-- 页面标题 -->
-  <text x="80" y="70" font-family="Microsoft YaHei, Arial, sans-serif"
+  <text x="80" y="70" font-family="思源黑体, Source Han Sans SC"
     font-size="32" font-weight="bold" fill="#263238">页面标题</text>
   <!-- 标题右侧图标 -->
   <use data-icon="chunk/lightbulb" x="[标题文字右端+12]" y="46"
@@ -497,10 +497,10 @@ E1 标题栏(55px) + E2 大数字(80px) + E3 Badge(28px)
 <g id="footer">
   <rect x="0" y="690" width="1280" height="30" fill="#F0F4F8"/>
   <text x="640" y="710" text-anchor="middle"
-    font-family="Microsoft YaHei, Arial, sans-serif"
+    font-family="思源黑体, Source Han Sans SC"
     font-size="11" fill="#90A4AE">项目名称 | 机构名称</text>
   <text x="1220" y="710" text-anchor="end"
-    font-family="Arial, sans-serif"
+    font-family="思源黑体, Source Han Sans SC"
     font-size="11" fill="#90A4AE">02</text>
 </g>
 ```
@@ -653,7 +653,7 @@ E1 标题栏(55px) + E2 大数字(80px) + E3 Badge(28px)
 <!-- 正面数据框 -->
 <rect x="84" y="330" width="240" height="60" rx="8"
   fill="#2E7D32" fill-opacity="0.08"/>
-<text x="204" y="355" text-anchor="middle" font-family="Arial, sans-serif"
+<text x="204" y="355" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
   font-size="24" font-weight="bold" fill="#2E7D32">↓40%</text>
 <text x="204" y="378" text-anchor="middle" font-size="12"
   fill="#2E7D32">培训周期缩短</text>
@@ -810,7 +810,7 @@ ls skills/ppt-master/templates/icons/chunk/ | grep lightbulb
 <!-- 平分宽度 -->
 <g id="km1">
   <rect x="60" y="550" width="380" height="90" rx="12" fill="#F0F4F8"/>
-  <text x="250" y="585" text-anchor="middle" font-family="Arial, sans-serif"
+  <text x="250" y="585" text-anchor="middle" font-family="思源黑体, Source Han Sans SC"
     font-size="28" font-weight="bold" fill="[PRIMARY]">5亿</text>
   <text x="250" y="615" text-anchor="middle" font-size="14" fill="#546E7A">第5年总产值</text>
 </g>
@@ -826,9 +826,9 @@ ls skills/ppt-master/templates/icons/chunk/ | grep lightbulb
   <rect x="60" y="105" width="1160" height="70" rx="12" fill="[PRIMARY]"/>
   <use data-icon="chunk/chart-bar" x="88" y="118"
     width="28" height="28" fill="#FFFFFF"/>
-  <text x="128" y="132" font-family="Microsoft YaHei, Arial, sans-serif"
+  <text x="128" y="132" font-family="思源黑体, Source Han Sans SC"
     font-size="20" font-weight="bold" fill="#FFFFFF">行业现状一览</text>
-  <text x="128" y="155" font-family="Microsoft YaHei, Arial, sans-serif"
+  <text x="128" y="155" font-family="思源黑体, Source Han Sans SC"
     font-size="14" fill="#FFFFFF" fill-opacity="0.85">
     全球XR市场规模4500亿 · 复合增长40%+ · 国产替代窗口期已至</text>
   <!-- 右侧 pill badge -->
@@ -1375,5 +1375,3 @@ ls skills/ppt-master/templates/icons/chunk/ | grep lightbulb
 即使执行了重锚，仍然可能出现注意力漂移。**所有设计一致性问题都将在生成后的自动修复脚本（svg_auto_repair.py）中被检测和修正**。
 
 重锚是"尽力预防"，脚本是"兜底修复"。两者缺一不可。
-
-

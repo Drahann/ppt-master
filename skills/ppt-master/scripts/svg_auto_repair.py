@@ -2,10 +2,12 @@
 """
 PPT Master - SVG Auto Repair Tool
 
-Deterministic script-based SVG repair for three categories:
-  1. Pie/donut chart geometry (C7 arc fixes)
-  2. Title icon position standardization
-  3. SVG format/syntax error correction
+Deterministic script-based SVG repair for two categories:
+  1. Title icon position standardization
+  2. SVG format/syntax error correction
+
+Pie/donut chart geometry (C7) is intentionally handled by the Qwen SVG
+review gate in qwen_ppt_runner.py instead of this script.
 
 Usage:
     python3 scripts/svg_auto_repair.py <project_path>
@@ -13,7 +15,6 @@ Usage:
 """
 
 import json
-import math
 import re
 import sys
 import unicodedata
@@ -24,134 +25,17 @@ from typing import Any
 
 
 # ────────────────────────────────────────────────────────────────
-# Repair 1: Pie / Donut Chart Geometry (C7)
+# Deprecated C7 hook: pie/donut geometry is repaired by Qwen review.
 # ────────────────────────────────────────────────────────────────
 
 def _repair_arc_geometry(content: str) -> tuple[str, list[str]]:
-    """Fix arc endpoint coordinates using trigonometric recalculation.
+    """Deprecated no-op; C7 geometry is handled by Qwen SVG review."""
+    return content, []
 
-    Parses donut/pie sector paths of the form:
-        M sx,sy A R,R ... ex,ey L ix,iy A r,r ... iex,iey Z
-    Detects the chart center from mask circles or endpoint averaging,
-    then snaps every arc endpoint to lie exactly on its declared radius.
-    """
-    fixes: list[str] = []
-
-    # Detect mask circles (donut center)
-    circle_pattern = re.compile(
-        r'<circle[^>]*cx="([\d.]+)"[^>]*cy="([\d.]+)"[^>]*r="([\d.]+)"'
-    )
-    circles = circle_pattern.findall(content)
-
-    # Full sector path regex
-    sector_pattern = re.compile(
-        r'(<path[^>]*\bd=")'
-        r'(M\s+([\d.]+)\s*,\s*([\d.]+)\s+'
-        r'A\s+([\d.]+)\s*,\s*[\d.]+\s+[\d.]+\s+([\d,]+)\s+([\d.]+)\s*,\s*([\d.]+)\s+'
-        r'L\s+([\d.]+)\s*,\s*([\d.]+)\s+'
-        r'A\s+([\d.]+)\s*,\s*[\d.]+\s+[\d.]+\s+([\d,]+)\s+([\d.]+)\s*,\s*([\d.]+))'
-        r'(\s*Z[^"]*")',
-        re.IGNORECASE,
-    )
-
-    sectors = list(sector_pattern.finditer(content))
-    if len(sectors) < 2:
-        return content, fixes
-
-    # Determine chart center from mask circle or endpoint average
-    chart_cx, chart_cy = None, None
-    for cx_s, cy_s, cr_s in circles:
-        cr = float(cr_s)
-        if cr < 200:
-            chart_cx, chart_cy = float(cx_s), float(cy_s)
-            break
-
-    if chart_cx is None:
-        pts = []
-        for m in sectors:
-            pts.append((float(m.group(3)), float(m.group(4))))
-            pts.append((float(m.group(7)), float(m.group(8))))
-        if len(pts) >= 3:
-            chart_cx = sum(p[0] for p in pts) / len(pts)
-            chart_cy = sum(p[1] for p in pts) / len(pts)
-
-    if chart_cx is None:
-        return content, fixes
-
-    TOLERANCE = 5
-
-    def snap(px: float, py: float, r: float) -> tuple[float, float, bool]:
-        dist = math.sqrt((px - chart_cx) ** 2 + (py - chart_cy) ** 2)
-        if abs(dist - r) <= TOLERANCE:
-            return px, py, False
-        angle = math.atan2(py - chart_cy, px - chart_cx)
-        return (
-            round(chart_cx + r * math.cos(angle), 1),
-            round(chart_cy + r * math.sin(angle), 1),
-            True,
-        )
-
-    # Process in reverse to keep match positions stable
-    for m in reversed(sectors):
-        mx, my = float(m.group(3)), float(m.group(4))
-        outer_r = float(m.group(5))
-        outer_flags = m.group(6)
-        oex, oey = float(m.group(7)), float(m.group(8))
-        isx, isy = float(m.group(9)), float(m.group(10))
-        inner_r = float(m.group(11))
-        inner_flags = m.group(12)
-        iex, iey = float(m.group(13)), float(m.group(14))
-
-        nmx, nmy, c1 = snap(mx, my, outer_r)
-        noex, noey, c2 = snap(oex, oey, outer_r)
-        nisx, nisy, c3 = snap(isx, isy, inner_r)
-        niex, niey, c4 = snap(iex, iey, inner_r)
-
-        if not any([c1, c2, c3, c4]):
-            continue
-
-        new_d = (
-            f"M {nmx},{nmy} "
-            f"A {outer_r},{outer_r} 0 {outer_flags} {noex},{noey} "
-            f"L {nisx},{nisy} "
-            f"A {inner_r},{inner_r} 0 {inner_flags} {niex},{niey}"
-        )
-        full_old = m.group(0)
-        full_new = m.group(1) + new_d + m.group(15)
-        content = content[:m.start()] + full_new + content[m.end():]
-        fixes.append(f"Arc fix: snapped sector endpoints to radius (center {chart_cx:.0f},{chart_cy:.0f})")
-
-    # Fix mask circle radius to match inner arc radius
-    arc_cmd_pattern = re.compile(
-        r'A\s+([\d.]+)\s*,\s*([\d.]+)\s+[\d.]+\s+[\d,]+\s+[\d.]+\s*,\s*[\d.]+'
-    )
-    multi_arc_paths = re.findall(r'd="([^"]*A[^"]*A[^"]*)"', content)
-    donut_inner_radii: set[float] = set()
-    for path_d in multi_arc_paths:
-        arcs = arc_cmd_pattern.findall(path_d)
-        radii = {float(rx) for rx, _ in arcs}
-        if len(radii) == 2:
-            donut_inner_radii.add(min(radii))
-
-    for cx_s, cy_s, cr_s in circles:
-        cr = float(cr_s)
-        for inner_r in donut_inner_radii:
-            if abs(cr - inner_r) > 2 and cr < inner_r * 2:
-                old = f'r="{cr_s}"'
-                new = f'r="{inner_r}"'
-                # Only fix the specific circle
-                pattern = re.compile(
-                    rf'(<circle[^>]*cx="{re.escape(cx_s)}"[^>]*cy="{re.escape(cy_s)}"[^>]*)r="{re.escape(cr_s)}"'
-                )
-                content, n = pattern.subn(rf'\g<1>r="{inner_r}"', content, count=1)
-                if n > 0:
-                    fixes.append(f"Mask circle fix: r={cr_s} → r={inner_r}")
-
-    return content, fixes
 
 
 # ────────────────────────────────────────────────────────────────
-# Repair 2: Title Icon Position Standardization
+# Repair 1: Title Icon Position Standardization
 # ────────────────────────────────────────────────────────────────
 
 def _format_num(value: float) -> str:
@@ -341,7 +225,7 @@ def _repair_title_icon_position(
 
 
 # ────────────────────────────────────────────────────────────────
-# Repair 3: SVG Format / Syntax Errors
+# Repair 2: SVG Format / Syntax Errors
 # ────────────────────────────────────────────────────────────────
 
 def _repair_svg_syntax(content: str) -> tuple[str, list[str]]:
@@ -582,19 +466,15 @@ def repair_svg_file(
     original = content
     all_fixes: list[str] = []
 
-    # Repair 1: Arc geometry
-    content, fixes = _repair_arc_geometry(content)
-    all_fixes.extend(fixes)
-
-    # Repair 2: Title icon position
+    # Repair 1: Title icon position
     content, fixes = _repair_title_icon_position(content, anchor)
     all_fixes.extend(fixes)
 
-    # Repair 3: SVG syntax
+    # Repair 2: SVG syntax
     content, fixes = _repair_svg_syntax(content)
     all_fixes.extend(fixes)
 
-    # Repair 4: XML structure validation / fallback repair
+    # Repair 3: XML structure validation / fallback repair
     content, fixes, parse_error = _repair_xml_structure(content)
     all_fixes.extend(fixes)
     if parse_error:

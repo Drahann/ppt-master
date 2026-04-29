@@ -36,6 +36,7 @@ EA_FONTS = {
     'Noto Sans SC', 'Noto Sans TC', 'Noto Serif SC', 'Noto Serif TC',
     'Source Han Sans SC', 'Source Han Sans TC',
     'Source Han Serif SC', 'Source Han Serif TC',
+    '思源黑体', '思源宋体',
     'WenQuanYi Micro Hei', 'WenQuanYi Zen Hei',
     'YouYuan', 'LiSu', 'HuaWenKaiTi',
     'Songti SC', 'Songti TC',
@@ -62,10 +63,12 @@ FONT_FALLBACK_WIN = {
     'Noto Sans TC': 'Microsoft JhengHei',
     'Noto Serif SC': 'SimSun',
     'Noto Serif TC': 'SimSun',
-    'Source Han Sans SC': 'Microsoft YaHei',
-    'Source Han Sans TC': 'Microsoft JhengHei',
-    'Source Han Serif SC': 'SimSun',
-    'Source Han Serif TC': 'SimSun',
+    'Source Han Sans SC': 'Source Han Sans SC',
+    'Source Han Sans TC': 'Source Han Sans TC',
+    'Source Han Serif SC': 'Source Han Serif SC',
+    'Source Han Serif TC': 'Source Han Serif TC',
+    '思源黑体': '思源黑体',
+    '思源宋体': '思源宋体',
     'WenQuanYi Micro Hei': 'Microsoft YaHei',
     'WenQuanYi Zen Hei': 'Microsoft YaHei',
     # Latin fonts (macOS / Linux / Web -> Windows)
@@ -88,9 +91,9 @@ FONT_FALLBACK_WIN = {
 }
 
 GENERIC_FONT_MAP = {
-    'monospace': 'Consolas',
-    'sans-serif': 'Segoe UI',
-    'serif': 'Times New Roman',
+    'monospace': '思源黑体',
+    'sans-serif': '思源黑体',
+    'serif': '思源宋体',
 }
 
 # When the latin font is serif and no EA font is specified,
@@ -98,6 +101,7 @@ GENERIC_FONT_MAP = {
 _SERIF_LATIN = {
     'Times New Roman', 'Georgia', 'Garamond', 'Palatino', 'Palatino Linotype',
     'Book Antiqua', 'Cambria', 'SimSun', 'Liberation Serif', 'DejaVu Serif',
+    'Source Han Serif SC', 'Source Han Serif TC', '思源宋体',
 }
 
 # SVG stroke-dasharray -> DrawingML prstDash
@@ -239,7 +243,7 @@ def parse_font_family(font_family_str: str) -> dict[str, str]:
     Windows. macOS/Linux-only fonts are mapped via FONT_FALLBACK_WIN.
     """
     if not font_family_str:
-        return {'latin': 'Segoe UI', 'ea': 'Microsoft YaHei'}
+        return {'latin': '思源黑体', 'ea': '思源黑体'}
 
     fonts = [f.strip().strip("'\"") for f in font_family_str.split(',')]
     latin_font = None
@@ -267,7 +271,7 @@ def parse_font_family(font_family_str: str) -> dict[str, str]:
 
     # EA must always be a CJK-capable font
     if not ea_font:
-        ea_font = 'SimSun' if final_latin in _SERIF_LATIN else 'Microsoft YaHei'
+        ea_font = '思源宋体' if final_latin in _SERIF_LATIN else '思源黑体'
 
     return {'latin': final_latin, 'ea': ea_font}
 

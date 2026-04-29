@@ -78,19 +78,18 @@
 
 ### Font Plan
 
-> Strategist should select a font preset based on content characteristics, or customize the font combination
-> Preset descriptions: P1=Modern business/tech | P2=Government docs | P3=Culture/arts | P4=Traditional/conservative | P5=English-primary
+> Font choice is locked for the automated workflow. Do not substitute Microsoft YaHei, SimHei, SimSun, Arial, Calibri, Consolas, Monaco, or generic fallback families.
 
-**Recommended preset**: [Fill in preset code]
+**Recommended preset**: SourceHan-Locked
 
 | Role | Chinese | English | Fallback |
 | ---- | ------- | ------- | -------- |
-| **Title** | [font name] | [font name] | [font name] |
-| **Body** | [font name] | [font name] | [font name] |
-| **Code** | - | Consolas | Monaco |
-| **Emphasis** | [font name] | [font name] | [font name] |
+| **Title** | 思源宋体 | Source Han Serif SC | 思源宋体 |
+| **Body** | 思源黑体 | Source Han Sans SC | 思源黑体 |
+| **Code** | 思源黑体 | Source Han Sans SC | 思源黑体 |
+| **Emphasis** | 思源黑体 | Source Han Sans SC | 思源黑体 |
 
-**Font stack**: `[Fill in CSS font-family string]`
+**Font stack**: `Title: "思源宋体", "Source Han Serif SC"; Body/Code/Emphasis: "思源黑体", "Source Han Sans SC"`
 
 ### Font Size Hierarchy
 
@@ -155,7 +154,7 @@
 > Before reusing a layout, check if it has already reached the cap.
 
 | Total Content Pages | Max Pages Per Layout Mode |
-|---------------------|--------------------------| 
+|---------------------|--------------------------|
 | 10–15 | 3 |
 | 16–25 | 4 |
 | 26–35 | 6 |

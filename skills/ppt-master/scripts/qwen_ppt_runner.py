@@ -80,6 +80,7 @@ except Exception:  # pragma: no cover - runner can operate without the API packa
 COMPLETION_SENTINEL_PREFIX = "PPT_RUN_COMPLETE:"
 SPEC_COMPLETION_SENTINEL_PREFIX = "PPT_SPEC_COMPLETE:"
 REVIEW_COMPLETION_SENTINEL_PREFIX = "PPT_SPEC_REVIEW_COMPLETE:"
+PIE_CHART_REVIEW_COMPLETION_SENTINEL_PREFIX = "PPT_PIE_CHART_REVIEW_COMPLETE:"
 SVG_BATCH_COMPLETION_SENTINEL_PREFIX = "PPT_SVG_BATCH_COMPLETE:"
 NOTES_COMPLETION_SENTINEL_PREFIX = "PPT_NOTES_COMPLETE:"
 DEFAULT_CANVAS_FORMAT = "ppt169"
@@ -90,6 +91,36 @@ LANGUAGE_CONSISTENCY_RULE = (
     "- Language lock: Infer the source-document language from the received JSON/imported source markdown; "
     "all PPT-visible content, design_spec.md content, SVG text, and speaker notes must use that same language. "
     "Do not translate to another language unless the source explicitly requests translation."
+)
+LOCKED_TYPOGRAPHY_RULE = (
+    "- Typography lock: Use only Source Han fonts. Title text must use 思源宋体 / Source Han Serif SC. "
+    "Body, code, emphasis, labels, annotations, footers, chart text, and all other non-title text must use "
+    "思源黑体 / Source Han Sans SC. Do not use Microsoft YaHei, SimHei, SimSun, Arial, Calibri, Consolas, "
+    "Monaco, generic serif, generic sans-serif, or generic monospace in design_spec.md or SVG font-family values."
+)
+LOCKED_FONT_PLAN_TABLE = """| Role | Chinese | English | Fallback |
+| ---- | ------- | ------- | -------- |
+| **Title** | 思源宋体 | Source Han Serif SC | 思源宋体 |
+| **Body** | 思源黑体 | Source Han Sans SC | 思源黑体 |
+| **Code** | 思源黑体 | Source Han Sans SC | 思源黑体 |
+| **Emphasis** | 思源黑体 | Source Han Sans SC | 思源黑体 |"""
+REQUIRED_TYPOGRAPHY_TOKENS = (
+    "思源宋体",
+    "Source Han Serif SC",
+    "思源黑体",
+    "Source Han Sans SC",
+)
+BANNED_TYPOGRAPHY_TOKENS = (
+    "微软雅黑",
+    "Microsoft YaHei",
+    "SimHei",
+    "SimSun",
+    "Arial",
+    "Calibri",
+    "Consolas",
+    "Monaco",
+    "sans-serif",
+    "monospace",
 )
 DEFAULT_MAX_FOLLOW_UPS = 8
 QWEN_CALL_TIMEOUT_SECONDS = 60 * 60
@@ -106,6 +137,8 @@ LOG_FILENAME = "runner.log"
 USAGE_SUMMARY_FILENAME = "usage_summary.json"
 LIVE_USAGE_FILENAME_SUFFIX = ".live_usage.json"
 SVG_QUALITY_REPORT_FILENAME = "svg_quality_report.txt"
+PIE_CHART_REVIEW_INPUT_FILENAME = "pie_chart_review_input.json"
+PIE_CHART_REVIEW_REPORT_FILENAME = "pie_chart_review_report.json"
 SVG_ANCHOR_CONTEXT_FILENAME = "svg_anchor_context.json"
 SOURCE_IMAGE_REFERENCE_FILENAME = "source_image_reference.json"
 QWEN_PROJECT_GUIDE_PATH = REPO_ROOT / "QWEN.md"
@@ -139,6 +172,7 @@ COOKBOOK_REREAD_INTERVAL = 8
 BATCH_SIZE = 6
 BATCH_MODE_THRESHOLD = 15
 DEFAULT_PARALLEL_BATCH_WORKERS = 3
+DEFAULT_PIE_CHART_REVIEW_WORKERS = 2
 DEFAULT_BATCH_PARTITION = "anchor_even"
 RAMP_BATCH_SIZES = (2, 3, 4, 5, 6, 7, 8)
 ANCHOR_BATCH_SIZE = 2
@@ -1771,7 +1805,7 @@ def effective_svg_worker_count(
 
 def infer_slot_stage(artifact_prefix: str) -> str:
     prefix = artifact_prefix.lower()
-    if prefix.startswith("svg_batch") or prefix == "qwen":
+    if prefix.startswith("svg_batch") or prefix.startswith("svg_") or prefix == "qwen":
         return "svg"
     if prefix.startswith("spec"):
         return "spec"
@@ -3609,6 +3643,57 @@ def validate_source_images_in_design_spec(project_path: Path, design_spec_text: 
     return errors
 
 
+def validate_locked_typography_in_design_spec(design_spec_text: str) -> list[str]:
+    errors: list[str] = []
+    typography_section = extract_markdown_section(
+        design_spec_text,
+        "## IV. Typography System",
+        "## V. Layout Principles",
+    )
+    if not typography_section:
+        return ["design_spec.md missing typography section content"]
+
+    for token in REQUIRED_TYPOGRAPHY_TOKENS:
+        if token not in typography_section:
+            errors.append(f"design_spec.md typography must include locked font `{token}`")
+
+    for token in BANNED_TYPOGRAPHY_TOKENS:
+        if token.lower() in typography_section.lower():
+            errors.append(f"design_spec.md typography must not use `{token}`")
+
+    return errors
+
+
+def extract_svg_font_families(svg_text: str) -> list[str]:
+    families = re.findall(r'\bfont-family\s*=\s*["\']([^"\']+)["\']', svg_text, re.IGNORECASE)
+    families.extend(
+        item.strip()
+        for item in re.findall(r'font-family\s*:\s*([^;"\']+)', svg_text, re.IGNORECASE)
+        if item.strip()
+    )
+    return families
+
+
+def validate_svg_locked_fonts(svg_name: str, svg_text: str) -> list[str]:
+    if "<text" not in svg_text:
+        return []
+
+    errors: list[str] = []
+    families = extract_svg_font_families(svg_text)
+    if not families:
+        return [f"SVG text is missing locked Source Han font-family values in {svg_name}"]
+
+    for family in families:
+        lower_family = family.lower()
+        for token in BANNED_TYPOGRAPHY_TOKENS:
+            if token.lower() in lower_family:
+                errors.append(f"SVG uses disallowed font `{token}` in {svg_name}: {family}")
+        if not any(token in family for token in REQUIRED_TYPOGRAPHY_TOKENS):
+            errors.append(f"SVG font-family must use Source Han locked fonts in {svg_name}: {family}")
+
+    return errors
+
+
 def validate_design_spec(
     project_path: Path,
     plan: list[SlidePlanEntry],
@@ -3629,6 +3714,8 @@ def validate_design_spec(
 
     if "### Part " not in content:
         errors.append("design_spec.md content outline is not grouped into Part chapters")
+
+    errors.extend(validate_locked_typography_in_design_spec(content))
 
     icon_section = extract_markdown_section(
         content,
@@ -3695,6 +3782,8 @@ def validate_svg_outputs(
         except ET.ParseError as exc:
             errors.append(f"Invalid SVG XML: {entry.filename} ({exc})")
             continue
+
+        errors.extend(validate_svg_locked_fonts(entry.filename, text))
 
         if contains_emoji(text):
             message = f"SVG contains emoji text instead of icon-library icons: {entry.filename}"
@@ -3780,6 +3869,143 @@ def check_batch_state(
     return not errors, errors
 
 
+def is_chart_geometry_issue(error_msg: str) -> bool:
+    lowered = error_msg.lower()
+    return (
+        "chart geometry" in lowered
+        or "sector" in lowered
+        or "donut" in lowered
+        or "arc" in lowered
+    )
+
+
+def collect_svg_quality_results(
+    project_path: Path,
+    *,
+    report_path: Path | None = None,
+    target_files: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Run the in-process SVG quality checker and return structured results."""
+    tools_dir = Path(__file__).resolve().parent
+    if str(tools_dir) not in sys.path:
+        sys.path.insert(0, str(tools_dir))
+    try:
+        from svg_quality_checker import SVGQualityChecker  # type: ignore
+    except Exception as exc:
+        raise RunnerError(f"Unable to import svg_quality_checker.py: {exc}") from exc
+
+    svg_dir = project_path / "svg_output"
+    if not svg_dir.exists():
+        svg_dir = project_path
+    svg_files = sorted(svg_dir.glob("*.svg")) if svg_dir.exists() else []
+    if target_files is not None:
+        svg_files = [path for path in svg_files if path.name in target_files]
+
+    checker = SVGQualityChecker()
+    with redirect_stdout(io.StringIO()):
+        for svg_file in svg_files:
+            checker.check_file(str(svg_file))
+        if report_path is not None:
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            checker.export_report(str(report_path))
+    return list(checker.results)
+
+
+def collect_pie_chart_review_issues(
+    project_path: Path,
+    runner_dir: Path,
+    *,
+    report_path: Path | None = None,
+    log_path: Path | None = None,
+    target_files: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Return SVG C7 pie/donut chart geometry issues for the AI review gate."""
+    quality_report_path = report_path or (runner_dir / SVG_QUALITY_REPORT_FILENAME)
+    try:
+        results = collect_svg_quality_results(
+            project_path,
+            report_path=quality_report_path,
+            target_files=target_files,
+        )
+    except RunnerError as exc:
+        if log_path is not None:
+            append_log(log_path, f"Pie chart review issue scan failed: {exc}")
+        raise
+
+    issues: list[dict[str, Any]] = []
+    for result in results:
+        errors = result.get("errors") if isinstance(result, dict) else None
+        if not isinstance(errors, list):
+            continue
+        chart_errors = [str(item) for item in errors if is_chart_geometry_issue(str(item))]
+        if not chart_errors:
+            continue
+        file_name = str(result.get("file") or "")
+        svg_path = result.get("path")
+        if not svg_path:
+            svg_path = str(project_path / "svg_output" / file_name)
+        issues.append(
+            {
+                "file": file_name,
+                "path": str(svg_path),
+                "errors": chart_errors,
+            }
+        )
+    return issues
+
+
+def build_pie_chart_review_input(
+    project_path: Path,
+    plan: list[SlidePlanEntry],
+    issues: list[dict[str, Any]],
+    svg_anchor_context_path: Path,
+) -> dict[str, Any]:
+    issue_files = {str(item.get("file") or "") for item in issues}
+    target_slides = [
+        {
+            "filename": entry.filename,
+            "heading": entry.heading,
+            "kind": entry.kind,
+            "source_h2": entry.source_h2,
+            "source_h3": entry.source_h3,
+        }
+        for entry in plan
+        if entry.filename in issue_files
+    ]
+    return {
+        "project_path": str(project_path),
+        "svg_output_dir": str(project_path / "svg_output"),
+        "svg_anchor_context_path": str(svg_anchor_context_path),
+        "target_slides": target_slides,
+        "chart_geometry_issues": issues,
+    }
+
+
+def check_pie_chart_review_state(
+    project_path: Path,
+    runner_dir: Path,
+    review_report_path: Path,
+    quality_report_path: Path,
+    target_files: set[str],
+    log_path: Path | None = None,
+) -> tuple[bool, list[str]]:
+    errors: list[str] = []
+    issues = collect_pie_chart_review_issues(
+        project_path,
+        runner_dir,
+        report_path=quality_report_path,
+        log_path=log_path,
+        target_files=target_files,
+    )
+    for item in issues:
+        for error in item.get("errors") or []:
+            errors.append(f"[{item.get('file')}] {error}")
+
+    errors.extend(validate_stage_report(review_report_path))
+
+    return not errors, errors
+
+
 def check_notes_state(
     project_path: Path,
     plan: list[SlidePlanEntry],
@@ -3811,6 +4037,26 @@ def check_spec_state(
     return not errors, errors
 
 
+def validate_stage_report(report_path: Path) -> list[str]:
+    errors: list[str] = []
+    if not report_path.exists():
+        errors.append(f"Missing {report_path.name}")
+        return errors
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8", errors="replace"))
+    except json.JSONDecodeError as exc:
+        errors.append(f"Invalid JSON in {report_path.name}: {exc}")
+        return errors
+    if not isinstance(payload, dict):
+        errors.append(f"{report_path.name} must be a JSON object")
+        return errors
+    if not payload.get("status"):
+        errors.append(f"{report_path.name} is missing status")
+    if "summary" not in payload:
+        errors.append(f"{report_path.name} is missing summary")
+    return errors
+
+
 def check_review_state(
     project_path: Path,
     plan: list[SlidePlanEntry],
@@ -3818,21 +4064,7 @@ def check_review_state(
     review_report_path: Path,
 ) -> tuple[bool, list[str]]:
     errors = validate_design_spec(project_path, plan, valid_chart_keys, strict_icons=True)
-    if not review_report_path.exists():
-        errors.append(f"Missing {review_report_path.name}")
-    else:
-        try:
-            payload = json.loads(review_report_path.read_text(encoding="utf-8", errors="replace"))
-        except json.JSONDecodeError as exc:
-            errors.append(f"Invalid JSON in {review_report_path.name}: {exc}")
-        else:
-            if not isinstance(payload, dict):
-                errors.append(f"{review_report_path.name} must be a JSON object")
-            else:
-                if not payload.get("status"):
-                    errors.append(f"{review_report_path.name} is missing status")
-                if "summary" not in payload:
-                    errors.append(f"{review_report_path.name} is missing summary")
+    errors.extend(validate_stage_report(review_report_path))
     return not errors, errors
 
 
@@ -4124,6 +4356,9 @@ Hard constraints:
 - For H2 `创新技术` and `产业验证`, do not create a parent H2 slide; create one slide per H3 instead.
 - If those H2 sections contain intro text before the first H3, absorb that intro into the first child slide.
 - For all other H2 sections, create one slide per H2 and absorb H3 details into that slide.
+{LOCKED_TYPOGRAPHY_RULE}
+- Section IV Font Plan must use this exact table:
+{LOCKED_FONT_PLAN_TABLE}
 
 Output constraints:
 - This stage must stop after a valid `design_spec.md` is written
@@ -4155,6 +4390,9 @@ Keep these constraints locked:
 - Content density should stay moderately high
 - Stay faithful to the source and highlight key points
 {LANGUAGE_CONSISTENCY_RULE}
+{LOCKED_TYPOGRAPHY_RULE}
+- Section IV Font Plan must use this exact table:
+{LOCKED_FONT_PLAN_TABLE}
 - Lock icon usage to `{DEFAULT_ICON_LIBRARY}` only
 - Do not use emoji in the design spec
 - Use only real visualization templates from `templates/charts/`
@@ -4193,6 +4431,9 @@ Repair the existing files in place and keep all original hard constraints:
 - cover and ending pages are required
 - stay faithful to the source and keep the content dense
 {LANGUAGE_CONSISTENCY_RULE}
+{LOCKED_TYPOGRAPHY_RULE}
+- Section IV Font Plan must use this exact table:
+{LOCKED_FONT_PLAN_TABLE}
 - keep icon usage locked to `{DEFAULT_ICON_LIBRARY}`
 - do not use emoji in the design spec
 - use only real visualization templates from `templates/charts/`
@@ -4315,6 +4556,7 @@ Project boundaries:
 Executor constraints:
 - Use the reviewed `design_spec.md` as the single source of truth
 {LANGUAGE_CONSISTENCY_RULE}
+{LOCKED_TYPOGRAPHY_RULE}
 - Keep free design and light theme
 - Treat `{SVG_DESIGN_COOKBOOK_PATH.name}` as a mandatory SVG visual design guide after design-parameter confirmation
 - Use the full cookbook copy embedded in `{executor_skill_pack_path.name}`; do not separately read generic workflow docs such as `AGENTS.md`, `QWEN.md`, `SKILL.md`, or `repo_skill.md` during SVG generation
@@ -4403,6 +4645,7 @@ Project boundaries:
 Executor constraints:
 - Use the reviewed `design_spec.md` as the single source of truth
 {LANGUAGE_CONSISTENCY_RULE}
+{LOCKED_TYPOGRAPHY_RULE}
 - Keep free design and light theme
 - Treat `{SVG_DESIGN_COOKBOOK_PATH.name}` as the mandatory visual execution guide
 - Use the full cookbook copy embedded in `{executor_skill_pack_path.name}`; do not separately read generic workflow docs such as `AGENTS.md`, `QWEN.md`, `SKILL.md`, or `repo_skill.md` during SVG generation
@@ -4446,6 +4689,7 @@ Keep these constraints locked:
 - No section header / chapter divider page
 - Cover and ending pages are required
 {LANGUAGE_CONSISTENCY_RULE}
+{LOCKED_TYPOGRAPHY_RULE}
 - Lock icon usage to `{DEFAULT_ICON_LIBRARY}` only
 - Do not use emoji in SVG
 - Use only real visualization templates from `templates/charts/`
@@ -4469,6 +4713,7 @@ Keep these constraints locked:
 - Light theme only
 - Canvas: {request["canvas_format"]}
 {LANGUAGE_CONSISTENCY_RULE}
+{LOCKED_TYPOGRAPHY_RULE}
 - Lock icon usage to `{DEFAULT_ICON_LIBRARY}` only
 - Do not use emoji in SVG
 - Use only real visualization templates from `templates/charts/`
@@ -4513,6 +4758,7 @@ Repair the SVG and notes outputs in place and keep all hard constraints:
 - no section header page
 - total page count must stay exactly {len(plan)}
 {LANGUAGE_CONSISTENCY_RULE}
+{LOCKED_TYPOGRAPHY_RULE}
 - keep icon usage locked to `{DEFAULT_ICON_LIBRARY}`
 - do not use emoji in SVG
 - use only real visualization templates from `templates/charts/`
@@ -4549,6 +4795,7 @@ Repair only the current batch SVG files in place and keep all hard constraints:
 - free design
 - light theme only
 {LANGUAGE_CONSISTENCY_RULE}
+{LOCKED_TYPOGRAPHY_RULE}
 - lock icon usage to `{DEFAULT_ICON_LIBRARY}`
 - do not use emoji in SVG
 - use only real visualization templates from `templates/charts/`
@@ -4564,6 +4811,80 @@ Current batch slide plan:
 
 When this batch's SVG files satisfy the checks, print exactly one line:
 {SVG_BATCH_COMPLETION_SENTINEL_PREFIX} {project_path}
+"""
+
+
+def build_pie_chart_review_prompt(
+    project_path: Path,
+    review_input_path: Path,
+    review_report_path: Path,
+    quality_report_path: Path,
+    svg_anchor_context_path: Path,
+    executor_skill_pack_path: Path,
+) -> str:
+    return f"""You are in the SVG pie/donut chart review gate for PPT Master.
+
+Read these files before doing anything else:
+1. {executor_skill_pack_path}
+2. {project_path / "design_spec.md"}
+3. {svg_anchor_context_path}
+4. {review_input_path}
+
+Review boundaries:
+- Project path: {project_path}
+- Edit only the SVG files listed in `{review_input_path.name}`
+- Do NOT edit `design_spec.md`, the slide plan, notes, or any non-target SVG file
+- Do NOT create new slides or rename SVG files
+- Do NOT run `total_md_split.py`, `finalize_svg.py`, or `svg_to_pptx.py`
+- Do NOT run `svg_auto_repair.py` for pie/donut geometry; this gate exists because script-based pie repair is disabled
+
+Repair goal:
+- Fix only the C7 pie/donut chart geometry errors listed in `{review_input_path.name}`
+- Preserve the existing page composition, text, color roles, header/footer anchors, and source language
+- Preserve the locked Source Han font-family values; do not introduce fallback fonts outside 思源宋体 / Source Han Serif SC and 思源黑体 / Source Han Sans SC
+- Recompute arc endpoints and mask radii carefully; use the checker-provided corrected coordinates as evidence, but keep the SVG visually coherent
+- Keep every edited SVG valid XML
+- After editing, run `python skills/ppt-master/scripts/svg_quality_checker.py <target-svg-file> --export --output {quality_report_path}` for the target SVG files, or an equivalent focused check
+- If a whole-project check reports unrelated pages, ignore non-target files and repair only the files listed in `{review_input_path.name}`
+
+Output requirements:
+- Write `{review_report_path.name}` as JSON with:
+  - `status`
+  - `summary`
+  - `files_reviewed`
+  - `issues_found`
+  - `issues_fixed`
+  - `remaining_risks`
+- After writing the required files, do not output any explanation, summary, file list, or confirmation text.
+- The only allowed final assistant output is the sentinel line below.
+
+When all listed pie/donut chart geometry issues are fixed, print exactly:
+{PIE_CHART_REVIEW_COMPLETION_SENTINEL_PREFIX} {project_path}
+"""
+
+
+def build_pie_chart_review_continue_prompt(
+    project_path: Path,
+    review_input_path: Path,
+    review_report_path: Path,
+    generation_errors: list[str],
+) -> str:
+    bullet_errors = "\n".join(f"- {item}" for item in generation_errors)
+    return f"""Continue the SVG pie/donut chart review gate.
+
+Project path: {project_path}
+The target SVGs are still failing these checks:
+{bullet_errors}
+
+Repair only:
+- the SVG files listed in `{review_input_path.name}`
+- {review_report_path}
+
+Keep the existing layout and visible text. Do not edit notes, design_spec.md, slide plan, or non-target SVGs.
+Preserve the locked Source Han font-family values; do not introduce fallback fonts outside 思源宋体 / Source Han Serif SC and 思源黑体 / Source Han Sans SC.
+Do not run `svg_auto_repair.py` for pie/donut geometry.
+When all listed C7 chart geometry issues are fixed and `{review_report_path.name}` is valid JSON, print exactly one line:
+{PIE_CHART_REVIEW_COMPLETION_SENTINEL_PREFIX} {project_path}
 """
 
 
@@ -4939,6 +5260,9 @@ Hard output contract:
 - Do not use emoji in design_spec.md.
 - Stay faithful to source markdown and keep content density moderately high.
 {LANGUAGE_CONSISTENCY_RULE}
+{LOCKED_TYPOGRAPHY_RULE}
+- Section IV Font Plan must use this exact table:
+{LOCKED_FONT_PLAN_TABLE}
 
 Canvas format: {request["canvas_format"]}
 Project path: {project_path}
@@ -5760,6 +6084,7 @@ def execute_batched_svg_generation(
     plan: list[SlidePlanEntry],
     runner_dir: Path,
     log_path: Path,
+    pie_chart_review_callback: Any | None = None,
 ) -> list[str]:
     _batches, prepared_batches, _anchor_first = prepare_svg_batch_artifacts(
         request=request,
@@ -5789,6 +6114,8 @@ def execute_batched_svg_generation(
             log_path=log_path,
         )
         session_ids.append(session_id)
+        if pie_chart_review_callback is not None:
+            pie_chart_review_callback(prepared.batch_index, prepared.batch_plan)
 
     return session_ids
 
@@ -5806,6 +6133,7 @@ def execute_parallel_svg_generation(
     plan: list[SlidePlanEntry],
     runner_dir: Path,
     log_path: Path,
+    pie_chart_review_callback: Any | None = None,
 ) -> list[str]:
     if centralized_svg_scheduler_enabled(log_path):
         append_log(log_path, "Using centralized Redis SVG scheduler")
@@ -5822,6 +6150,7 @@ def execute_parallel_svg_generation(
             plan=plan,
             runner_dir=runner_dir,
             log_path=log_path,
+            pie_chart_review_callback=pie_chart_review_callback,
         )
 
     fair_delay = env_int("PPT_API_SVG_FAIR_SHARE_DELAY_SECONDS", SVG_FAIR_SHARE_DELAY_SECONDS, minimum=0)
@@ -5850,6 +6179,7 @@ def execute_parallel_svg_generation(
             plan=plan,
             runner_dir=runner_dir,
             log_path=log_path,
+            pie_chart_review_callback=pie_chart_review_callback,
         )
 
 
@@ -5866,6 +6196,7 @@ def _execute_parallel_svg_generation_registered(
     plan: list[SlidePlanEntry],
     runner_dir: Path,
     log_path: Path,
+    pie_chart_review_callback: Any | None = None,
 ) -> list[str]:
     batches, prepared_batches, anchor_first = prepare_svg_batch_artifacts(
         request=request,
@@ -5908,6 +6239,8 @@ def _execute_parallel_svg_generation_registered(
             log_path=log_path,
         )
         append_log(log_path, f"Anchor SVG batch {first_prepared.batch_index + 1} completed")
+        if pie_chart_review_callback is not None:
+            pie_chart_review_callback(first_prepared.batch_index, first_prepared.batch_plan)
         remaining_batch_artifacts = prepared_batches[1:]
 
     max_executor_workers = max(1, min(len(remaining_batch_artifacts), requested_workers))
@@ -5953,6 +6286,8 @@ def _execute_parallel_svg_generation_registered(
                 prepared = future_map.pop(future)
                 session_by_index[prepared.batch_index] = future.result()
                 append_log(log_path, f"Parallel SVG batch {prepared.batch_index + 1} completed")
+                if pie_chart_review_callback is not None:
+                    pie_chart_review_callback(prepared.batch_index, prepared.batch_plan)
 
     return [session_by_index[index] for index in sorted(session_by_index)]
 
@@ -5970,6 +6305,7 @@ def execute_parallel_svg_generation_centralized(
     plan: list[SlidePlanEntry],
     runner_dir: Path,
     log_path: Path,
+    pie_chart_review_callback: Any | None = None,
 ) -> list[str]:
     store = get_svg_scheduler_store(log_path)
     if store is None or SvgBatchTask is None or build_svg_scheduler_task_id is None:
@@ -5999,6 +6335,7 @@ def execute_parallel_svg_generation_centralized(
                 plan=plan,
                 runner_dir=runner_dir,
                 log_path=log_path,
+                pie_chart_review_callback=pie_chart_review_callback,
             )
 
     _batches, prepared_batches, _anchor_first = prepare_svg_batch_artifacts(
@@ -6024,6 +6361,7 @@ def execute_parallel_svg_generation_centralized(
     )
     task_ids: list[str] = []
     task_id_to_batch_index: dict[str, int] = {}
+    task_id_to_batch_plan: dict[str, list[SlidePlanEntry]] = {}
     for prepared in prepared_batches:
         worker_request_path = runner_dir / f"svg_batch_{prepared.batch_index + 1:02d}.worker.json"
         write_json(
@@ -6051,6 +6389,7 @@ def execute_parallel_svg_generation_centralized(
         store.enqueue_task(task)
         task_ids.append(task_id)
         task_id_to_batch_index[task_id] = prepared.batch_index
+        task_id_to_batch_plan[task_id] = prepared.batch_plan
         append_log(
             log_path,
             f"Centralized SVG task enqueued: batch={prepared.batch_index + 1} task_id={task_id} requires_anchor={prepared.requires_anchor}",
@@ -6060,8 +6399,10 @@ def execute_parallel_svg_generation_centralized(
         store=store,
         task_ids=task_ids,
         task_id_to_batch_index=task_id_to_batch_index,
+        task_id_to_batch_plan=task_id_to_batch_plan,
         owner_job_id=owner_job_id,
         log_path=log_path,
+        pie_chart_review_callback=pie_chart_review_callback,
     )
     return [sessions_by_index[index] for index in sorted(sessions_by_index)]
 
@@ -6071,8 +6412,10 @@ def wait_for_centralized_svg_tasks(
     store: RedisSvgSchedulerStoreType,
     task_ids: list[str],
     task_id_to_batch_index: dict[str, int],
+    task_id_to_batch_plan: dict[str, list[SlidePlanEntry]] | None = None,
     owner_job_id: str,
     log_path: Path,
+    pie_chart_review_callback: Any | None = None,
 ) -> dict[int, str]:
     timeout_seconds = env_int("PPT_API_SVG_BUDGET_LEASE_WAIT_TIMEOUT_SECONDS", LLM_SLOT_WAIT_TIMEOUT_SECONDS, minimum=60)
     started = time.time()
@@ -6092,6 +6435,8 @@ def wait_for_centralized_svg_tasks(
                 batch_index = task_id_to_batch_index[task_id]
                 sessions_by_index[batch_index] = task.session_id or task.task_id
                 append_log(log_path, f"Centralized SVG batch {batch_index + 1} completed via scheduler")
+                if pie_chart_review_callback is not None and task_id_to_batch_plan is not None:
+                    pie_chart_review_callback(batch_index, task_id_to_batch_plan.get(task_id) or [])
             elif task.status == SVG_TASK_FAILED:
                 store.fail_pending_tasks_for_job(owner_job_id, task.error or f"Centralized SVG batch failed: {task_id}")
                 store.clear_job_state(owner_job_id)
@@ -6102,6 +6447,171 @@ def wait_for_centralized_svg_tasks(
             time.sleep(1)
     store.clear_job_state(owner_job_id)
     return sessions_by_index
+
+
+def execute_pie_chart_review_stage(
+    *,
+    request: dict[str, Any],
+    project_path: Path,
+    plan: list[SlidePlanEntry],
+    target_plan: list[SlidePlanEntry] | None = None,
+    review_label: str = "final",
+    svg_anchor_context_path: Path,
+    executor_skill_pack_path: Path,
+    runner_dir: Path,
+    log_path: Path,
+) -> str:
+    active_plan = target_plan or plan
+    target_files = collect_expected_svg_names(active_plan)
+    safe_label = sanitize_token(review_label)
+    review_input_path = runner_dir / (
+        PIE_CHART_REVIEW_INPUT_FILENAME
+        if safe_label == "final"
+        else f"pie_chart_review_{safe_label}_input.json"
+    )
+    review_report_path = runner_dir / (
+        PIE_CHART_REVIEW_REPORT_FILENAME
+        if safe_label == "final"
+        else f"pie_chart_review_{safe_label}_report.json"
+    )
+    quality_report_path = runner_dir / (
+        SVG_QUALITY_REPORT_FILENAME
+        if safe_label == "final"
+        else f"pie_chart_review_{safe_label}_quality_report.txt"
+    )
+    issues = collect_pie_chart_review_issues(
+        project_path,
+        runner_dir,
+        report_path=quality_report_path,
+        log_path=log_path,
+        target_files=target_files,
+    )
+    review_input = build_pie_chart_review_input(
+        project_path=project_path,
+        plan=active_plan,
+        issues=issues,
+        svg_anchor_context_path=svg_anchor_context_path,
+    )
+    write_json(review_input_path, review_input)
+
+    if not issues:
+        write_json(
+            review_report_path,
+            {
+                "status": "skipped",
+                "summary": "No C7 pie/donut chart geometry issues found after SVG generation.",
+                "files_reviewed": [],
+                "issues_found": [],
+                "issues_fixed": [],
+                "remaining_risks": [],
+            },
+        )
+        append_log(log_path, f"Pie chart SVG review skipped ({safe_label}): no C7 chart geometry issues")
+        return f"skipped_no_pie_chart_issues_{safe_label}"
+
+    prompt = build_pie_chart_review_prompt(
+        project_path=project_path,
+        review_input_path=review_input_path,
+        review_report_path=review_report_path,
+        quality_report_path=quality_report_path,
+        svg_anchor_context_path=svg_anchor_context_path,
+        executor_skill_pack_path=executor_skill_pack_path,
+    )
+    prompt_path = runner_dir / (
+        "pie_chart_review_prompt.txt"
+        if safe_label == "final"
+        else f"pie_chart_review_{safe_label}_prompt.txt"
+    )
+    prompt_path.write_text(prompt, encoding="utf-8")
+    append_log(
+        log_path,
+        f"Starting pie chart SVG review gate ({safe_label}) for files: "
+        + ", ".join(str(item.get("file")) for item in issues),
+    )
+    return execute_qwen_stage(
+        stage_name=f"pie_chart_review_{safe_label}",
+        artifact_prefix="svg_pie_review" if safe_label == "final" else f"svg_pie_review_{safe_label}",
+        initial_prompt=prompt,
+        completion_sentinel_prefix=PIE_CHART_REVIEW_COMPLETION_SENTINEL_PREFIX,
+        state_checker=lambda: check_pie_chart_review_state(
+            project_path=project_path,
+            runner_dir=runner_dir,
+            review_report_path=review_report_path,
+            quality_report_path=quality_report_path,
+            target_files=target_files,
+            log_path=log_path,
+        ),
+        continue_prompt_builder=lambda errors: build_pie_chart_review_continue_prompt(
+            project_path,
+            review_input_path,
+            review_report_path,
+            errors,
+        ),
+        confirmation_prompt_builder=lambda errors: build_pie_chart_review_continue_prompt(
+            project_path,
+            review_input_path,
+            review_report_path,
+            errors,
+        ),
+        model=str(request.get("review_model") or request.get("model") or DEFAULT_REVIEW_MODEL),
+        runner_dir=runner_dir,
+        log_path=log_path,
+    )
+
+
+def pie_chart_review_worker_count() -> int:
+    return env_int("PPT_API_PIE_CHART_REVIEW_WORKERS", DEFAULT_PIE_CHART_REVIEW_WORKERS, minimum=1)
+
+
+def submit_pie_chart_review(
+    *,
+    executor: ThreadPoolExecutor,
+    futures: list[Any],
+    request: dict[str, Any],
+    project_path: Path,
+    plan: list[SlidePlanEntry],
+    batch_index: int,
+    batch_plan: list[SlidePlanEntry],
+    svg_anchor_context_path: Path,
+    executor_skill_pack_path: Path,
+    runner_dir: Path,
+    log_path: Path,
+) -> None:
+    if not batch_plan:
+        return
+    review_label = f"batch_{batch_index + 1:02d}"
+    append_log(
+        log_path,
+        f"Queueing async pie chart SVG review scan for {review_label}: "
+        + ", ".join(entry.filename for entry in batch_plan),
+    )
+    futures.append(
+        executor.submit(
+            execute_pie_chart_review_stage,
+            request=request,
+            project_path=project_path,
+            plan=plan,
+            target_plan=batch_plan,
+            review_label=review_label,
+            svg_anchor_context_path=svg_anchor_context_path,
+            executor_skill_pack_path=executor_skill_pack_path,
+            runner_dir=runner_dir,
+            log_path=log_path,
+        )
+    )
+
+
+def collect_pie_chart_review_futures(futures: list[Any], log_path: Path) -> list[str]:
+    if not futures:
+        return []
+    append_log(log_path, f"Waiting for {len(futures)} async pie chart SVG review task(s)")
+    done, _pending = wait(tuple(futures))
+    session_ids: list[str] = []
+    for future in done:
+        session_id = future.result()
+        session_ids.append(str(session_id))
+        append_log(log_path, f"Async pie chart SVG review completed: {session_id}")
+    return session_ids
 
 
 def usage_summary_for_stage(runner_dir: Path, stage_name: str) -> dict[str, Any] | None:
@@ -6311,6 +6821,10 @@ def execute_generation(
         ],
         critical_rules=[
             "Emoji are forbidden in design_spec.md and downstream SVG output.",
+            LOCKED_TYPOGRAPHY_RULE,
+            "Section IV Font Plan must use exactly: "
+            + "Title=思源宋体/Source Han Serif SC; Body=思源黑体/Source Han Sans SC; "
+            + "Code=思源黑体/Source Han Sans SC; Emphasis=思源黑体/Source Han Sans SC.",
             f"Do not use emoji as bullets, labels, callouts, status markers, pseudo-icons, or decorative accents; use normal text or `{DEFAULT_ICON_LIBRARY}/...` icon placeholders instead.",
             f"If an icon is needed, use only real `{DEFAULT_ICON_LIBRARY}/...` names from the allowed icon inventory.",
         ],
@@ -6456,72 +6970,118 @@ def execute_generation(
 
     svg_session_id: str
     svg_batch_session_ids: list[str] = []
-    if use_parallel_svg:
-        append_log(
-            log_path,
-            "Using parallel batched SVG generation: "
-            f"pages={len(plan)} batch_size={batch_size} "
-            f"workers={int(request.get('parallel_batch_workers', DEFAULT_PARALLEL_BATCH_WORKERS))} "
-            f"batch_partition={request.get('batch_partition', 'fixed')}",
-        )
-        svg_batch_session_ids = execute_parallel_svg_generation(
+    pie_chart_review_session_ids: list[str] = []
+    pie_chart_review_futures: list[Any] = []
+    pie_chart_executor = ThreadPoolExecutor(
+        max_workers=pie_chart_review_worker_count(),
+        thread_name_prefix="pie-chart-review",
+    )
+
+    def queue_pie_chart_review(batch_index: int, batch_plan: list[SlidePlanEntry]) -> None:
+        submit_pie_chart_review(
+            executor=pie_chart_executor,
+            futures=pie_chart_review_futures,
             request=request,
             project_path=project_path,
-            slide_plan_path=slide_plan_path,
-            slide_digest_path=slide_digest_path,
-            icon_reference_path=icon_reference_path,
-            source_image_reference_path=source_image_reference_path,
-            svg_anchor_context_path=svg_anchor_context_path,
-            executor_style_path=executor_style_path,
-            executor_skill_pack_path=executor_skill_pack_path,
             plan=plan,
+            batch_index=batch_index,
+            batch_plan=batch_plan,
+            svg_anchor_context_path=svg_anchor_context_path,
+            executor_skill_pack_path=executor_skill_pack_path,
             runner_dir=runner_dir,
             log_path=log_path,
         )
-        svg_session_id = svg_batch_session_ids[-1]
-    elif use_batched_svg:
-        append_log(
-            log_path,
-            f"Using batched serial SVG generation: pages={len(plan)} batch_size={batch_size} batch_mode={batch_mode}",
+
+    try:
+        if use_parallel_svg:
+            append_log(
+                log_path,
+                "Using parallel batched SVG generation: "
+                f"pages={len(plan)} batch_size={batch_size} "
+                f"workers={int(request.get('parallel_batch_workers', DEFAULT_PARALLEL_BATCH_WORKERS))} "
+                f"batch_partition={request.get('batch_partition', 'fixed')}",
+            )
+            svg_batch_session_ids = execute_parallel_svg_generation(
+                request=request,
+                project_path=project_path,
+                slide_plan_path=slide_plan_path,
+                slide_digest_path=slide_digest_path,
+                icon_reference_path=icon_reference_path,
+                source_image_reference_path=source_image_reference_path,
+                svg_anchor_context_path=svg_anchor_context_path,
+                executor_style_path=executor_style_path,
+                executor_skill_pack_path=executor_skill_pack_path,
+                plan=plan,
+                runner_dir=runner_dir,
+                log_path=log_path,
+                pie_chart_review_callback=queue_pie_chart_review,
+            )
+            svg_session_id = svg_batch_session_ids[-1]
+        elif use_batched_svg:
+            append_log(
+                log_path,
+                f"Using batched serial SVG generation: pages={len(plan)} batch_size={batch_size} batch_mode={batch_mode}",
+            )
+            svg_batch_session_ids = execute_batched_svg_generation(
+                request=request,
+                project_path=project_path,
+                slide_plan_path=slide_plan_path,
+                slide_digest_path=slide_digest_path,
+                icon_reference_path=icon_reference_path,
+                source_image_reference_path=source_image_reference_path,
+                svg_anchor_context_path=svg_anchor_context_path,
+                executor_style_path=executor_style_path,
+                executor_skill_pack_path=executor_skill_pack_path,
+                plan=plan,
+                runner_dir=runner_dir,
+                log_path=log_path,
+                pie_chart_review_callback=queue_pie_chart_review,
+            )
+            svg_session_id = svg_batch_session_ids[-1]
+        else:
+            append_log(
+                log_path,
+                f"Using single-session SVG generation: pages={len(plan)} batch_mode={batch_mode}",
+            )
+            svg_session_id = execute_qwen_stage(
+                stage_name="svg_generation",
+                artifact_prefix="qwen",
+                initial_prompt=svg_prompt,
+                completion_sentinel_prefix=COMPLETION_SENTINEL_PREFIX,
+                state_checker=lambda: check_svg_only_state(project_path, plan, valid_chart_keys, runner_dir),
+                continue_prompt_builder=lambda errors: build_svg_continue_prompt(
+                    request,
+                    project_path,
+                    plan,
+                    errors,
+                    svg_anchor_context_path,
+                ),
+                confirmation_prompt_builder=lambda _errors: build_svg_confirmation_prompt(plan, request),
+                model=request.get("model"),
+                runner_dir=runner_dir,
+                log_path=log_path,
+            )
+
+        pie_chart_review_session_ids.extend(
+            collect_pie_chart_review_futures(pie_chart_review_futures, log_path)
         )
-        svg_batch_session_ids = execute_batched_svg_generation(
-            request=request,
-            project_path=project_path,
-            slide_plan_path=slide_plan_path,
-            slide_digest_path=slide_digest_path,
-            icon_reference_path=icon_reference_path,
-            source_image_reference_path=source_image_reference_path,
-            svg_anchor_context_path=svg_anchor_context_path,
-            executor_style_path=executor_style_path,
-            executor_skill_pack_path=executor_skill_pack_path,
-            plan=plan,
-            runner_dir=runner_dir,
-            log_path=log_path,
-        )
-        svg_session_id = svg_batch_session_ids[-1]
+    except Exception:
+        pie_chart_executor.shutdown(wait=False, cancel_futures=True)
+        raise
     else:
-        append_log(
-            log_path,
-            f"Using single-session SVG generation: pages={len(plan)} batch_mode={batch_mode}",
-        )
-        svg_session_id = execute_qwen_stage(
-            stage_name="svg_generation",
-            artifact_prefix="qwen",
-            initial_prompt=svg_prompt,
-            completion_sentinel_prefix=COMPLETION_SENTINEL_PREFIX,
-            state_checker=lambda: check_svg_only_state(project_path, plan, valid_chart_keys, runner_dir),
-            continue_prompt_builder=lambda errors: build_svg_continue_prompt(
-                request,
-                project_path,
-                plan,
-                errors,
-                svg_anchor_context_path,
-            ),
-            confirmation_prompt_builder=lambda _errors: build_svg_confirmation_prompt(plan, request),
-            model=request.get("model"),
-            runner_dir=runner_dir,
-            log_path=log_path,
-        )
+        pie_chart_executor.shutdown(wait=True)
+
+    pie_chart_review_session_id = execute_pie_chart_review_stage(
+        request=request,
+        project_path=project_path,
+        plan=plan,
+        review_label="final",
+        svg_anchor_context_path=svg_anchor_context_path,
+        executor_skill_pack_path=executor_skill_pack_path,
+        runner_dir=runner_dir,
+        log_path=log_path,
+    )
+    pie_chart_review_session_ids.append(pie_chart_review_session_id)
 
     notes_prompt = build_notes_bootstrap_prompt(
         project_path=project_path,
@@ -6577,7 +7137,7 @@ def execute_generation(
     except Exception as exc:
         append_log(log_path, f"SVG quality check completed with issues: {exc}")
 
-    append_log(log_path, "Running SVG auto repair (pie charts, title icons, syntax)")
+    append_log(log_path, "Running SVG auto repair (title icons, syntax/XML only)")
     try:
         run_python_tool(
             [
@@ -6596,6 +7156,8 @@ def execute_generation(
         {
             "spec_session_id": spec_session_id,
             "review_session_id": review_session_id,
+            "pie_chart_review_session_id": pie_chart_review_session_id,
+            "pie_chart_review_sessions": pie_chart_review_session_ids,
             "svg_session_id": svg_session_id,
             "svg_batch_sessions": svg_batch_session_ids,
             "notes_session_id": notes_session_id,

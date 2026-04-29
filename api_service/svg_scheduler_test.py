@@ -23,7 +23,17 @@ RUNNER_SCRIPTS_DIR = REPO_ROOT / "skills" / "ppt-master" / "scripts"
 if str(RUNNER_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(RUNNER_SCRIPTS_DIR))
 
-from qwen_ppt_runner import SlidePlanEntry, split_plan_into_batches  # type: ignore  # noqa: E402
+from qwen_ppt_runner import (  # type: ignore  # noqa: E402
+    SlidePlanEntry,
+    check_pie_chart_review_state,
+    collect_pie_chart_review_issues,
+    is_chart_geometry_issue,
+    split_plan_into_batches,
+    validate_locked_typography_in_design_spec,
+    validate_svg_locked_fonts,
+)
+from svg_auto_repair import repair_svg_file  # type: ignore  # noqa: E402
+from svg_to_pptx.drawingml_utils import parse_font_family  # type: ignore  # noqa: E402
 
 
 class FakeRedis:
@@ -612,6 +622,136 @@ class AnchorEvenBatchingTests(unittest.TestCase):
         self.assertEqual([len(batch) for batch in batches], [8, 8, 8, 8])
         self.assertEqual(batches[0][0].filename, "slide_01.svg")
         self.assertEqual(batches[-1][-1].filename, "slide_32.svg")
+
+
+class PieChartReviewIssueTests(unittest.TestCase):
+    BAD_DONUT_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+<circle cx="200" cy="200" r="50"/>
+<path d="M 300,200 A 100,100 0 0,1 200,300 L 200,250 A 50,50 0 0,0 250,200 Z"/>
+<path d="M 240,300 A 100,100 0 0,1 100,200 L 150,200 A 50,50 0 0,0 200,250 Z"/>
+</svg>
+"""
+
+    def test_chart_geometry_classifier_targets_c7_errors(self) -> None:
+        self.assertTrue(is_chart_geometry_issue("Chart sector 2: outer arc start does not connect"))
+        self.assertTrue(is_chart_geometry_issue("Donut mask circle r=40 does not match inner arc radius 60"))
+        self.assertFalse(is_chart_geometry_issue("Card overlap detected: card at (1,2) overlaps"))
+
+    def test_collects_only_pie_chart_geometry_issues(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            svg_dir = project / "svg_output"
+            runner_dir = project / "runner"
+            svg_dir.mkdir(parents=True)
+            runner_dir.mkdir(parents=True)
+            (svg_dir / "slide_01.svg").write_text(
+                self.BAD_DONUT_SVG,
+                encoding="utf-8",
+            )
+            (svg_dir / "slide_02.svg").write_text(
+                """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+<rect x="10" y="10" width="100" height="80"/>
+</svg>
+""",
+                encoding="utf-8",
+            )
+
+            issues = collect_pie_chart_review_issues(project, runner_dir)
+
+            self.assertEqual([item["file"] for item in issues], ["slide_01.svg"])
+            self.assertTrue(any("sector" in error.lower() for error in issues[0]["errors"]))
+
+    def test_pie_chart_review_state_accepts_valid_report_without_spec_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            svg_dir = project / "svg_output"
+            runner_dir = project / "runner"
+            svg_dir.mkdir(parents=True)
+            runner_dir.mkdir(parents=True)
+            (svg_dir / "slide_01.svg").write_text(
+                """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+<rect x="10" y="10" width="100" height="80"/>
+</svg>
+""",
+                encoding="utf-8",
+            )
+            report_path = runner_dir / "pie_chart_review_report.json"
+            report_path.write_text(
+                json.dumps({"status": "passed", "summary": "clean"}),
+                encoding="utf-8",
+            )
+
+            complete, errors = check_pie_chart_review_state(
+                project,
+                runner_dir,
+                report_path,
+                runner_dir / "svg_quality_report.txt",
+                {"slide_01.svg"},
+            )
+
+            self.assertTrue(complete)
+            self.assertEqual(errors, [])
+
+    def test_svg_auto_repair_does_not_rewrite_pie_geometry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            svg_path = Path(tmp) / "slide_01.svg"
+            svg_path.write_text(self.BAD_DONUT_SVG, encoding="utf-8")
+
+            report = repair_svg_file(svg_path, anchor=None, dry_run=False)
+
+            self.assertEqual(svg_path.read_text(encoding="utf-8"), self.BAD_DONUT_SVG)
+            self.assertFalse(report["repairs"])
+            self.assertFalse(report["modified"])
+
+
+class LockedTypographyTests(unittest.TestCase):
+    GOOD_TYPOGRAPHY_SPEC = """## IV. Typography System
+
+### Font Plan
+
+| Role | Chinese | English | Fallback |
+| ---- | ------- | ------- | -------- |
+| **Title** | 思源宋体 | Source Han Serif SC | 思源宋体 |
+| **Body** | 思源黑体 | Source Han Sans SC | 思源黑体 |
+| **Code** | 思源黑体 | Source Han Sans SC | 思源黑体 |
+| **Emphasis** | 思源黑体 | Source Han Sans SC | 思源黑体 |
+
+**Font stack**: `Title: "思源宋体", "Source Han Serif SC"; Body/Code/Emphasis: "思源黑体", "Source Han Sans SC"`
+
+## V. Layout Principles
+"""
+
+    def test_design_spec_typography_requires_source_han_fonts(self) -> None:
+        self.assertEqual(validate_locked_typography_in_design_spec(self.GOOD_TYPOGRAPHY_SPEC), [])
+
+        bad_spec = self.GOOD_TYPOGRAPHY_SPEC.replace("思源黑体", "微软雅黑").replace(
+            "Source Han Sans SC",
+            "Calibri",
+        )
+
+        errors = validate_locked_typography_in_design_spec(bad_spec)
+
+        self.assertTrue(any("Source Han Sans SC" in error for error in errors))
+        self.assertTrue(any("Microsoft YaHei" in error or "微软雅黑" in error for error in errors))
+        self.assertTrue(any("Calibri" in error for error in errors))
+
+    def test_svg_font_validation_rejects_legacy_fallbacks(self) -> None:
+        good_svg = '<svg><text font-family="思源黑体, Source Han Sans SC">正文</text></svg>'
+        bad_svg = '<svg><text font-family="Microsoft YaHei, Arial, sans-serif">正文</text></svg>'
+
+        self.assertEqual(validate_svg_locked_fonts("slide_01.svg", good_svg), [])
+        errors = validate_svg_locked_fonts("slide_01.svg", bad_svg)
+        self.assertTrue(any("Microsoft YaHei" in error for error in errors))
+        self.assertTrue(any("Arial" in error for error in errors))
+
+    def test_drawingml_font_parser_preserves_source_han_typefaces(self) -> None:
+        title_fonts = parse_font_family("思源宋体, Source Han Serif SC")
+        body_fonts = parse_font_family("思源黑体, Source Han Sans SC")
+        default_fonts = parse_font_family("")
+
+        self.assertEqual(title_fonts, {"latin": "思源宋体", "ea": "思源宋体"})
+        self.assertEqual(body_fonts, {"latin": "思源黑体", "ea": "思源黑体"})
+        self.assertEqual(default_fonts, {"latin": "思源黑体", "ea": "思源黑体"})
 
 
 if __name__ == "__main__":
