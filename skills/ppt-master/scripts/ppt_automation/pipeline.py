@@ -266,7 +266,8 @@ def validate_svg_directory(svg_dir: Path) -> None:
 
 
 def generate(options: GenerationOptions) -> RunResult:
-    raw_markdown = read_input_markdown(Path(options.input), options.json_field)
+    input_path = Path(options.input)
+    raw_markdown = read_input_markdown(input_path, options.json_field)
     initial_deck = parse_markdown_deck(raw_markdown, max_slides=options.max_slides)
     project_name = options.project_name or safe_project_name(initial_deck.title)
     canvas_format = normalized_format(options.format)
@@ -274,14 +275,16 @@ def generate(options: GenerationOptions) -> RunResult:
     logger = UsageLogger(project_path)
 
     try:
-        markdown, image_assets = download_and_rewrite_markdown_images(raw_markdown, project_path)
+        markdown, image_assets = download_and_rewrite_markdown_images(raw_markdown, project_path, input_path.parent)
         deck = parse_markdown_deck(markdown, max_slides=options.max_slides)
         if image_assets:
             logger.log(
                 "input_images",
                 downloaded=sum(1 for asset in image_assets if asset.status == "downloaded"),
+                copied=sum(1 for asset in image_assets if asset.status == "copied"),
                 ignored=sum(1 for asset in image_assets if asset.status == "ignored"),
                 failed=sum(1 for asset in image_assets if asset.status == "failed"),
+                missing=sum(1 for asset in image_assets if asset.status == "missing"),
             )
         write_source(project_path, markdown)
         write_manifest(project_path, deck)
