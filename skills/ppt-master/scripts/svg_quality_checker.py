@@ -12,10 +12,16 @@ Usage:
 
 import sys
 import re
+import colorsys
 from pathlib import Path
 from typing import List, Dict, Tuple
 from collections import defaultdict
 from xml.etree import ElementTree as ET
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 try:
     from project_utils import CANVAS_FORMATS
@@ -60,7 +66,8 @@ class SVGQualityChecker:
         # and a spec_lock.md is found near the SVG)
         self._lock_cache: Dict[Path, Dict] = {}
         self._drift_summary: Dict[str, Dict[str, set]] = {
-            'colors': defaultdict(set),
+            'extra_colors': defaultdict(set),
+            'theme': defaultdict(set),
             'fonts': defaultdict(set),
             'sizes': defaultdict(set),
         }
@@ -480,7 +487,9 @@ class SVGQualityChecker:
         allowed_colors = set()
         for v in lock.get('colors', {}).values():
             if HEX_VALUE_RE.fullmatch(v):
-                allowed_colors.add(v.upper())
+                color = self._normalize_hex_color(v)
+                if color:
+                    allowed_colors.add(color)
 
         typo = lock.get('typography', {})
         # Font families: default `font_family` plus any per-role `*_family`
@@ -515,13 +524,17 @@ class SVGQualityChecker:
                     body_px = None
 
         # Scan SVG for used values
-        color_drifts = set()
+        color_values = []
+        extra_colors = set()
         for attr in ('fill', 'stroke', 'stop-color'):
             pattern = re.compile(rf'\b{attr}\s*=\s*["\'](#[0-9A-Fa-f]{{3,8}})["\']')
             for m in pattern.finditer(content):
-                val = m.group(1).upper()
+                val = self._normalize_hex_color(m.group(1))
+                if not val:
+                    continue
+                color_values.append(val)
                 if val not in allowed_colors:
-                    color_drifts.add(val)
+                    extra_colors.add(val)
 
         font_drifts = set()
         for m in re.finditer(r'font-family\s*=\s*["\']([^"\']+)["\']', content):
@@ -547,17 +560,19 @@ class SVGQualityChecker:
 
         # Record in run-wide aggregation
         fname = svg_path.name
-        for v in color_drifts:
-            self._drift_summary['colors'][v].add(fname)
+        for v in extra_colors:
+            self._drift_summary['extra_colors'][v].add(fname)
         for v in font_drifts:
             self._drift_summary['fonts'][v].add(fname)
         for v in size_drifts:
             self._drift_summary['sizes'][v].add(fname)
+        theme_warning = self._theme_color_warning(color_values, lock)
+        if theme_warning:
+            self._drift_summary['theme'][theme_warning].add(fname)
+            result['warnings'].append(theme_warning)
 
         # Per-file warning (one condensed line; details live in summary)
         parts = []
-        if color_drifts:
-            parts.append(f"{len(color_drifts)} color(s)")
         if font_drifts:
             parts.append(f"{len(font_drifts)} font-family value(s)")
         if size_drifts:
@@ -577,6 +592,105 @@ class SVGQualityChecker:
         if v.endswith('px'):
             v = v[:-2].strip()
         return v
+
+    @staticmethod
+    def _normalize_hex_color(value: str) -> str | None:
+        """Normalize HEX colors to #RRGGBB, ignoring alpha for hue analysis."""
+        if not isinstance(value, str):
+            return None
+        raw = value.strip().lstrip("#")
+        if len(raw) in (3, 4):
+            raw = "".join(ch * 2 for ch in raw[:3])
+        elif len(raw) in (6, 8):
+            raw = raw[:6]
+        else:
+            return None
+        if not re.fullmatch(r"[0-9A-Fa-f]{6}", raw):
+            return None
+        return "#" + raw.upper()
+
+    @staticmethod
+    def _rgb01(color: str) -> tuple[float, float, float] | None:
+        color = SVGQualityChecker._normalize_hex_color(color) or ""
+        if not color:
+            return None
+        return (
+            int(color[1:3], 16) / 255,
+            int(color[3:5], 16) / 255,
+            int(color[5:7], 16) / 255,
+        )
+
+    @staticmethod
+    def _is_neutral_color(color: str) -> bool:
+        rgb = SVGQualityChecker._rgb01(color)
+        if rgb is None:
+            return True
+        hue, sat, val = colorsys.rgb_to_hsv(*rgb)
+        del hue
+        # Text/navy, near-white panels, and low-saturation borders are not
+        # treated as theme accents.
+        return sat < 0.18 or val > 0.96 or val < 0.18
+
+    @staticmethod
+    def _same_hue_family(color: str, anchor: str, tolerance_degrees: float = 42.0) -> bool:
+        color_rgb = SVGQualityChecker._rgb01(color)
+        anchor_rgb = SVGQualityChecker._rgb01(anchor)
+        if color_rgb is None or anchor_rgb is None:
+            return False
+        if SVGQualityChecker._is_neutral_color(color):
+            return False
+        h1, _, _ = colorsys.rgb_to_hsv(*color_rgb)
+        h2, _, _ = colorsys.rgb_to_hsv(*anchor_rgb)
+        distance = min(abs(h1 - h2), 1 - abs(h1 - h2)) * 360
+        return distance <= tolerance_degrees
+
+    def _theme_color_warning(self, color_values: list[str], lock: Dict) -> str | None:
+        colors = lock.get('colors', {})
+        primary = self._normalize_hex_color(colors.get('primary', ''))
+        if not primary:
+            return None
+        secondary_anchors = [
+            self._normalize_hex_color(colors.get(key, ''))
+            for key in ('accent', 'secondary_accent')
+        ]
+        secondary_anchors = [color for color in secondary_anchors if color]
+
+        counts = defaultdict(int)
+        samples_by_group = {
+            'primary': defaultdict(int),
+            'secondary': defaultdict(int),
+            'other': defaultdict(int),
+        }
+        for color in color_values:
+            if self._is_neutral_color(color):
+                continue
+            if self._same_hue_family(color, primary):
+                group = 'primary'
+            elif any(self._same_hue_family(color, anchor) for anchor in secondary_anchors):
+                group = 'secondary'
+            else:
+                group = 'other'
+            counts[group] += 1
+            samples_by_group[group][color] += 1
+
+        total = counts['primary'] + counts['secondary'] + counts['other']
+        if total < 6:
+            return None
+        dominant_group = max(('primary', 'secondary', 'other'), key=lambda key: counts[key])
+        if dominant_group == 'primary':
+            return None
+        dominant_count = counts[dominant_group]
+        primary_count = counts['primary']
+        if dominant_count < max(6, primary_count + 3):
+            return None
+        if primary_count / total >= 0.35:
+            return None
+        sample = max(samples_by_group[dominant_group].items(), key=lambda item: item[1])[0]
+        return (
+            f"theme color drift: primary accent {primary} is not the dominant "
+            f"non-neutral accent (primary={primary_count}, {dominant_group}={dominant_count}, "
+            f"sample={sample}). Keep primary as the page theme; use other colors as supporting accents."
+        )
 
     def _categorize_issue(self, error_msg: str) -> str:
         """Categorize issue type"""
@@ -706,13 +820,19 @@ class SVGQualityChecker:
         """
         if not self._lock_seen:
             return
-        has_drift = any(self._drift_summary[cat] for cat in self._drift_summary)
-        if not has_drift:
-            print("\n[OK] spec_lock drift: none — all colors, fonts, and sizes are anchored to spec_lock.md")
+        actionable = any(self._drift_summary[cat] for cat in ('theme', 'fonts', 'sizes'))
+        extra_colors = self._drift_summary.get('extra_colors', {})
+        if not actionable:
+            print("\n[OK] spec_lock drift: no actionable theme/font/size drift")
+            if extra_colors:
+                print(
+                    f"[INFO] additional HEX colors observed: {len(extra_colors)} "
+                    "(treated as palette richness, not drift, unless they dominate the page theme)"
+                )
             return
 
-        print("\nspec_lock drift — values used outside spec_lock.md:")
-        labels = [('colors', 'Colors'),
+        print("\nactionable spec_lock drift:")
+        labels = [('theme', 'Theme color dominance'),
                   ('fonts', 'Font families'),
                   ('sizes', 'Font sizes')]
         for category, label in labels:
@@ -725,10 +845,12 @@ class SVGQualityChecker:
                 n = len(files)
                 suffix = "file" if n == 1 else "files"
                 print(f"    {val}  ({n} {suffix})")
+        if extra_colors:
+            print(f"  Informational additional HEX colors: {len(extra_colors)} distinct value(s)")
         print(
-            "Tip: frequent out-of-lock values usually mean spec_lock.md is missing\n"
-            "     entries — extend the lock (scripts/update_spec.py or manual edit).\n"
-            "     Rare ones are likely Executor drift — review the affected SVGs."
+            "Tip: color variety is allowed, but each slide should keep the locked\n"
+            "     primary accent as the dominant non-neutral theme color. Secondary\n"
+            "     and derived colors should remain supporting accents."
         )
 
     def _percentage(self, count: int) -> int:

@@ -1,5 +1,7 @@
 # Image_Generator Reference Manual
 
+> Legacy reference: automation v1 does not generate AI images by default. Keep this file for optional future image-generation lanes.
+
 > This file is the streamlined reference for the Image_Generator role. Common standards (SVG technical constraints, canvas formats, post-processing pipeline, etc.) are in [shared-standards.md](./shared-standards.md).
 
 ## Core Mission

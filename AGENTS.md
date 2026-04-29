@@ -2,9 +2,13 @@
 
 This file is the project entry point for general AI agents.
 
+For a complete current-state onboarding brief, read [`AGENT_CONTEXT.md`](AGENT_CONTEXT.md). If this file's legacy summaries conflict with `AGENT_CONTEXT.md` or `skills/ppt-master/SKILL.md`, prefer `SKILL.md` first, then `AGENT_CONTEXT.md`.
+
 Before any PPT generation task, **you MUST first read [`skills/ppt-master/SKILL.md`](skills/ppt-master/SKILL.md)** — the authoritative workflow for project creation, role switching, serial execution, quality gates, post-processing, and export.
 
 ## Project Overview
+
+Current default: automation-first generation. Use `Markdown/JSON input -> slide_manifest -> design_plan/spec_lock -> per-slide SVG -> quality report -> notes -> finalize_svg -> export PPTX`. The older multi-role / Eight Confirmations pipeline below is legacy context only unless the user explicitly asks for it.
 
 PPT Master is an AI-driven presentation generation system. Multi-role collaboration (Strategist → Image_Generator → Executor) converts source documents (PDF/DOCX/URL/Markdown) into natively editable PPTX with real PowerPoint shapes (DrawingML).
 
@@ -26,6 +30,8 @@ PPT Master is an AI-driven presentation generation system. Multi-role collaborat
 - On conflict with a generic coding skill, prioritize [`skills/ppt-master/SKILL.md`](skills/ppt-master/SKILL.md) and this file inside this repository.
 
 ## Command Quick Reference
+
+Current automation entry point: `python skills/ppt-master/scripts/api_ppt.py generate <input.md|postppt.json> --project-name <name>`. Use the manual commands below only for source conversion, standalone project management, or post-processing an existing generated project.
 
 Convenience summary only — full workflow in [`skills/ppt-master/SKILL.md`](skills/ppt-master/SKILL.md).
 

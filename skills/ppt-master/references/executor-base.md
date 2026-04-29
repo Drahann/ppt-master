@@ -1,5 +1,7 @@
 # Executor Common Guidelines
 
+> Legacy reference: automation mode uses `scripts/ppt_automation/` and Claude Code per-slide generation. Keep this file as SVG/PPT technical guidance, not as a mandatory role-switch gate.
+
 > Style-specific content is in the corresponding `executor-{style}.md`. Technical constraints are in shared-standards.md.
 
 ---
@@ -77,6 +79,7 @@ Before drawing each page, look up its entry in `page_rhythm` (key format `P<NN>`
 - **Template structure**: if templates exist, inherit the visual framework
 - **Main-agent ownership**: SVG generation must run in the main agent (not sub-agents) — pages share upstream context for cross-page visual continuity
 - **Generation rhythm**: lock global design context first, then generate pages sequentially in one continuous context. No batched groups (e.g., 5 at a time).
+- **API Automation Mode**: `scripts/api_ppt.py generate` may call Claude Code CLI once per slide with a stable cached prefix and the current page content last. Each call may produce only the current slide's SVG. The local deterministic renderer is only a pipeline smoke path and is not a substitute for final design-quality SVG generation.
 - **Phased batch generation** (recommended):
   1. **Visual Construction Phase**: generate all SVG pages sequentially for visual consistency. Do NOT run `svg_position_calculator.py` during the initial draft — use layout judgment for chart marks. **MUST embed calibration markers** per §3.1 below on every chart page.
   2. **Quality Check Gate**: run `python3 scripts/svg_quality_checker.py <project_path>` on `svg_output/`. Any `error` (banned features, viewBox mismatch, spec_lock drift, non-PPT-safe font, etc.) MUST be fixed on the offending page before proceeding — regenerate and re-check. Address `warning`s when straightforward. Do NOT defer to after `finalize_svg.py` — finalize rewrites SVG and masks some violations.

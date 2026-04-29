@@ -1,5 +1,7 @@
 # Executor Consultant Top — Top-tier Consulting Style (MBB Level)
 
+> Legacy reference: automation mode no longer routes through this role file by default. Use it only as optional style guidance.
+
 > Common guidelines: executor-base.md. Technical constraints: shared-standards.md.
 
 ---
