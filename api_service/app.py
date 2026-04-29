@@ -518,6 +518,7 @@ def _build_metrics_payload() -> dict[str, object]:
         "notes_provider": settings.notes_provider,
         "qwen_model": settings.qwen_model,
         "qwen_notes_model": settings.qwen_notes_model,
+        "qwen_timeout": settings.qwen_timeout,
         "claude_model": settings.claude_model,
         "claude_flash_model": settings.claude_flash_model,
         "start_stagger": {

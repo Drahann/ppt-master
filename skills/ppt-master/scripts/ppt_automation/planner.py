@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from .config import DEFAULT_BASE_URL, DEFAULT_MODEL, QWEN_BASE_URL, QWEN_MAX_TOKENS, QWEN_MODEL
+from .config import DEFAULT_BASE_URL, DEFAULT_MODEL, QWEN_BASE_URL, QWEN_MAX_TOKENS, QWEN_MODEL, QWEN_TIMEOUT
 from .errors import GenerationError
 from .parser import Deck
 from .project import basic_canvas_dict, write_plan_artifacts
@@ -593,6 +593,7 @@ def call_qwen_openai(
     prompt: str,
     system: str,
     max_tokens: int,
+    timeout: int = QWEN_TIMEOUT,
 ) -> tuple[str, dict[str, Any]]:
     endpoint = base_url.rstrip("/") + "/chat/completions"
     payload = {
@@ -613,7 +614,7 @@ def call_qwen_openai(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=300) as response:
+        with urllib.request.urlopen(request, timeout=max(60, int(timeout))) as response:
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
@@ -647,6 +648,7 @@ def generate_plan(
     qwen_base_url: str = QWEN_BASE_URL,
     qwen_model: str = QWEN_MODEL,
     qwen_max_tokens: int = QWEN_MAX_TOKENS,
+    qwen_timeout: int = QWEN_TIMEOUT,
     logger: UsageLogger | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if renderer == "local":
@@ -664,6 +666,7 @@ def generate_plan(
             prompt=prompt,
             system=DEEPSEEK_SYSTEM,
             max_tokens=qwen_max_tokens,
+            timeout=qwen_timeout,
         )
     else:
         actual_model = model

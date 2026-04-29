@@ -55,6 +55,12 @@ PPT_API_RUNNER_START_JITTER_SECONDS=12
 PPT_API_RUNNER_START_STAGGER_SCOPE=global
 ```
 
+For `qwen3.6-plus` spec generation, the Qwen request timeout is intentionally longer than the old 5-minute default:
+
+```env
+PPT_API_QWEN_TIMEOUT=900
+```
+
 ## Start Redis
 
 ```bash

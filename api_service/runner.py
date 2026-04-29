@@ -94,6 +94,8 @@ def execute_runner(
         qwen_model or settings.qwen_model,
         "--qwen-max-tokens",
         str(settings.qwen_max_tokens),
+        "--qwen-timeout",
+        str(settings.qwen_timeout),
         "--deepseek-base-url",
         account_lease.base_url if account_lease and account_lease.base_url else settings.deepseek_base_url,
         "--deepseek-model",

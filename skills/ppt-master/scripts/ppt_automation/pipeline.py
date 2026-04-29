@@ -20,6 +20,7 @@ from .config import (
     QWEN_BASE_URL,
     QWEN_MAX_TOKENS,
     QWEN_MODEL,
+    QWEN_TIMEOUT,
     REPO_ROOT,
     TOOLS_DIR,
     normalized_format,
@@ -63,6 +64,7 @@ class GenerationOptions:
     qwen_base_url: str = QWEN_BASE_URL
     qwen_model: str = QWEN_MODEL
     qwen_max_tokens: int = QWEN_MAX_TOKENS
+    qwen_timeout: int = QWEN_TIMEOUT
     claude_model: str = CLAUDE_MODEL
     claude_flash_model: str = CLAUDE_FLASH_MODEL
     claude_effort: str = "high"
@@ -217,6 +219,7 @@ def generate_notes(project_path: Path, options: GenerationOptions, logger: Usage
             prompt=prompt,
             system=DEEPSEEK_SYSTEM,
             max_tokens=options.qwen_max_tokens,
+            timeout=options.qwen_timeout,
         )
     else:
         model = options.deepseek_model
@@ -307,6 +310,7 @@ def generate(options: GenerationOptions) -> RunResult:
             qwen_base_url=options.qwen_base_url,
             qwen_model=options.qwen_model,
             qwen_max_tokens=options.qwen_max_tokens,
+            qwen_timeout=options.qwen_timeout,
             logger=logger,
         )
         write_prompt_files(project_path, deck, canvas_format, options.style)

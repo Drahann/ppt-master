@@ -59,6 +59,7 @@ class Settings:
     qwen_model: str
     qwen_notes_model: str | None
     qwen_max_tokens: int
+    qwen_timeout: int
     deepseek_base_url: str
     deepseek_model: str
     claude_model: str
@@ -124,6 +125,7 @@ def load_settings() -> Settings:
         qwen_model=os.getenv("PPT_API_QWEN_MODEL", "qwen3.6-plus").strip() or "qwen3.6-plus",
         qwen_notes_model=((os.getenv("PPT_API_QWEN_NOTES_MODEL") or "").strip() or None),
         qwen_max_tokens=max(1024, _env_int("PPT_API_QWEN_MAX_TOKENS", 65536)),
+        qwen_timeout=max(60, _env_int("PPT_API_QWEN_TIMEOUT", 900)),
         deepseek_base_url=os.getenv("PPT_API_DEEPSEEK_BASE_URL", "https://api.deepseek.com/anthropic").strip(),
         deepseek_model=os.getenv("PPT_API_DEEPSEEK_MODEL", "deepseek-v4-pro").strip() or "deepseek-v4-pro",
         claude_model=os.getenv("PPT_API_CLAUDE_MODEL", "deepseek-v4-pro[1m]").strip() or "deepseek-v4-pro[1m]",

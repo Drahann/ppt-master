@@ -31,6 +31,7 @@ python skills/ppt-master/scripts/api_ppt.py generate <source.md> \
   --notes-provider qwen \
   --qwen-model qwen3.6-plus \
   --qwen-max-tokens 65536 \
+  --qwen-timeout 900 \
   --cache-prime \
   --svg-workers 12 \
   --svg-batch-size 3 \

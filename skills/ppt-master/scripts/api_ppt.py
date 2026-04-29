@@ -21,6 +21,7 @@ from ppt_automation.config import (  # noqa: E402
     QWEN_BASE_URL,
     QWEN_MAX_TOKENS,
     QWEN_MODEL,
+    QWEN_TIMEOUT,
     REPO_ROOT,
 )
 from ppt_automation.pipeline import GenerationOptions, generate  # noqa: E402
@@ -48,6 +49,7 @@ def add_generate_parser(subparsers: argparse._SubParsersAction[argparse.Argument
     parser.add_argument("--qwen-base-url", default=QWEN_BASE_URL, help="OpenAI-compatible DashScope base URL.")
     parser.add_argument("--qwen-model", default=QWEN_MODEL, help="Qwen model for planning and notes.")
     parser.add_argument("--qwen-max-tokens", type=int, default=QWEN_MAX_TOKENS, help="Max output tokens for Qwen planning/notes.")
+    parser.add_argument("--qwen-timeout", type=int, default=QWEN_TIMEOUT, help="Timeout per Qwen planning/notes request in seconds.")
     parser.add_argument("--claude-model", default=CLAUDE_MODEL, help="Model env value for Claude Code.")
     parser.add_argument("--claude-flash-model", default=CLAUDE_FLASH_MODEL, help="Haiku/subagent model env value for Claude Code.")
     parser.add_argument("--claude-effort", default="high", choices=["low", "medium", "high", "max"], help="CLAUDE_CODE_EFFORT_LEVEL for SVG generation.")
