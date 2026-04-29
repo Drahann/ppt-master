@@ -28,6 +28,13 @@ mkdir -p secrets
 cp deploy/production/deepseek_claude_account_pool.example.json secrets/deepseek_claude_account_pool.json
 ```
 
+This working tree also contains ignored ready-to-copy files when generated locally:
+
+- `.env.api`
+- `secrets/deepseek_claude_account_pool.json`
+- `deploy/production/server-claude.env.api`
+- `deploy/production/deepseek_claude_account_pool.json`
+
 Default policy:
 
 - 10 DeepSeek/Claude accounts.
@@ -36,6 +43,17 @@ Default policy:
 - Each PPT job requests 12 SVG slots by default.
 
 That makes one account naturally admit two concurrent jobs, and the full pool admits twenty concurrent jobs.
+
+## Runner Start Stagger
+
+The API applies a Redis-backed process-start gate before launching `api_ppt.py`. With the production env below, runner processes start at least `4s` apart globally, then add `0-12s` random jitter per job:
+
+```env
+PPT_API_RUNNER_START_STAGGER_ENABLED=1
+PPT_API_RUNNER_START_STAGGER_SECONDS=4
+PPT_API_RUNNER_START_JITTER_SECONDS=12
+PPT_API_RUNNER_START_STAGGER_SCOPE=global
+```
 
 ## Start Redis
 

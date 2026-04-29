@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import shutil
 import threading
 import time
@@ -97,6 +98,12 @@ def healthz() -> dict[str, object]:
             "svgBatchSize": settings.svg_batch_size,
             "claudeEffort": settings.claude_effort,
             "cachePrime": settings.cache_prime,
+            "startStagger": {
+                "enabled": settings.runner_start_stagger_enabled,
+                "seconds": settings.runner_start_stagger_seconds,
+                "jitterSeconds": settings.runner_start_jitter_seconds,
+                "scope": settings.runner_start_stagger_scope,
+            },
         },
         "redis": {
             "configured": bool(settings.redis_url),
@@ -277,6 +284,7 @@ def _process_request(request: NormalizedRequest, job_id: str | None = None) -> d
             if image_warnings:
                 (job_dir / "image_warnings.txt").write_text("\n".join(image_warnings) + "\n", encoding="utf-8")
 
+            _apply_runner_start_delay(metric_job_id, job_id, account_lease.account_id if account_lease else None)
             _update_job_stage(metric_job_id, job_id, "runner", event="api_ppt_generate_started")
             runner_result = execute_runner(
                 source_md_path=source_md_path,
@@ -418,6 +426,75 @@ def _redis_job_snapshot() -> dict[str, object]:
         return {"enabled": True, "error": str(exc)}
 
 
+def _apply_runner_start_delay(metric_job_id: str, queue_job_id: str | None, account_id: str | None) -> float:
+    if not settings.runner_start_stagger_enabled:
+        return 0.0
+
+    base_seconds = max(0.0, settings.runner_start_stagger_seconds)
+    jitter_seconds = random.uniform(0.0, max(0.0, settings.runner_start_jitter_seconds))
+    redis_delay = _reserve_runner_start_slot(account_id, base_seconds) if job_store is not None else base_seconds
+    delay = max(0.0, redis_delay + jitter_seconds)
+    if delay <= 0:
+        return 0.0
+
+    _update_job_stage(
+        metric_job_id,
+        queue_job_id,
+        "runner_stagger",
+        event=f"delay_seconds={delay:.2f};redis_delay={redis_delay:.2f};jitter={jitter_seconds:.2f}",
+    )
+    logger.info("Runner start stagger job_id=%s account=%s delay=%.2fs", metric_job_id, account_id, delay)
+    time.sleep(delay)
+    return delay
+
+
+def _reserve_runner_start_slot(account_id: str | None, base_seconds: float) -> float:
+    if job_store is None or base_seconds <= 0:
+        return 0.0
+
+    key = _runner_start_gate_key(account_id)
+    lock_key = f"{key}:lock"
+    token = f"{threading.get_ident()}:{time.time():.6f}:{random.random():.12f}"
+    deadline = time.time() + 3.0
+    client = job_store.client
+    locked = False
+
+    while time.time() < deadline:
+        if client.set(lock_key, token, nx=True, ex=10):
+            locked = True
+            break
+        time.sleep(0.05)
+
+    if not locked:
+        return 0.0
+
+    try:
+        now = time.time()
+        raw_next = client.get(key)
+        try:
+            next_allowed = float(raw_next) if raw_next else 0.0
+        except (TypeError, ValueError):
+            next_allowed = 0.0
+        scheduled_at = max(now, next_allowed)
+        client.set(key, f"{scheduled_at + base_seconds:.6f}", ex=max(3600, settings.runner_timeout_seconds))
+        return max(0.0, scheduled_at - now)
+    finally:
+        try:
+            if client.get(lock_key) == token:
+                client.delete(lock_key)
+        except Exception:
+            pass
+
+
+def _runner_start_gate_key(account_id: str | None) -> str:
+    if job_store is None:
+        return ""
+    if settings.runner_start_stagger_scope == "account" and account_id:
+        safe_account = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in account_id).strip("._-") or "unknown"
+        return job_store.key(f"runner_start:account:{safe_account}")
+    return job_store.key("runner_start:global")
+
+
 def _account_pool_snapshot() -> dict[str, object]:
     pool = _ensure_account_pool()
     if pool is None:
@@ -443,6 +520,12 @@ def _build_metrics_payload() -> dict[str, object]:
         "qwen_notes_model": settings.qwen_notes_model,
         "claude_model": settings.claude_model,
         "claude_flash_model": settings.claude_flash_model,
+        "start_stagger": {
+            "enabled": settings.runner_start_stagger_enabled,
+            "seconds": settings.runner_start_stagger_seconds,
+            "jitter_seconds": settings.runner_start_jitter_seconds,
+            "scope": settings.runner_start_stagger_scope,
+        },
     }
     payload["asyncWorkers"] = {
         "configured": settings.async_worker_count,

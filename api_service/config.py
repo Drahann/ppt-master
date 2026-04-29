@@ -18,6 +18,16 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -59,6 +69,10 @@ class Settings:
     svg_workers: int
     svg_batch_size: int
     cache_prime: bool
+    runner_start_stagger_enabled: bool
+    runner_start_stagger_seconds: float
+    runner_start_jitter_seconds: float
+    runner_start_stagger_scope: str
     account_pool_file: str | None
     account_pool_json: str | None
     require_account_pool: bool
@@ -120,6 +134,10 @@ def load_settings() -> Settings:
         svg_workers=max(1, _env_int("PPT_API_SVG_WORKERS", 12)),
         svg_batch_size=max(1, _env_int("PPT_API_SVG_BATCH_SIZE", 3)),
         cache_prime=_env_bool("PPT_API_CACHE_PRIME", True),
+        runner_start_stagger_enabled=_env_bool("PPT_API_RUNNER_START_STAGGER_ENABLED", True),
+        runner_start_stagger_seconds=max(0.0, _env_float("PPT_API_RUNNER_START_STAGGER_SECONDS", 4.0)),
+        runner_start_jitter_seconds=max(0.0, _env_float("PPT_API_RUNNER_START_JITTER_SECONDS", 12.0)),
+        runner_start_stagger_scope=_choice("PPT_API_RUNNER_START_STAGGER_SCOPE", "global", {"global", "account"}),
         account_pool_file=((os.getenv("PPT_API_DEEPSEEK_ACCOUNT_POOL_FILE") or os.getenv("PPT_API_ACCOUNT_POOL_FILE") or "").strip() or None),
         account_pool_json=((os.getenv("PPT_API_DEEPSEEK_ACCOUNT_POOL_JSON") or os.getenv("PPT_API_ACCOUNT_POOL_JSON") or "").strip() or None),
         require_account_pool=_env_bool("PPT_API_REQUIRE_ACCOUNT_POOL", True),

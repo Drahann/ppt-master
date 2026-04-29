@@ -152,6 +152,10 @@ yarn.lock
 .env.*.local
 .env*.ps1
 secrets/
+deploy/production/server-claude.env.api
+deploy/production/deepseek_claude_account_pool.json
+deploy/production/apireport
+deploy/redis/redis.env
 
 # Database files
 *.db

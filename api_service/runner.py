@@ -129,6 +129,10 @@ def execute_runner(
     (working_dir / "runner_request.json").write_text(json.dumps(request_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     child_env = dict(os.environ)
+    qwen_api_key = child_env.get("DASHSCOPE_API_KEY") or child_env.get("QWEN_API_KEY") or child_env.get("PPT_API_QWEN_API_KEY")
+    if qwen_api_key:
+        child_env.setdefault("DASHSCOPE_API_KEY", qwen_api_key)
+        child_env.setdefault("QWEN_API_KEY", qwen_api_key)
     if account_lease is not None:
         child_env["DEEPSEEK_API_KEY"] = account_lease.api_key
         child_env["ANTHROPIC_AUTH_TOKEN"] = account_lease.api_key
