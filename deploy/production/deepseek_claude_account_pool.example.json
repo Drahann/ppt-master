@@ -54,61 +54,6 @@
       "max_concurrent_jobs": 2,
       "slot_capacity": 24,
       "enabled": true
-    },
-    {
-      "account_id": "deepseek-claude-06",
-      "api_key": "sk-account-06",
-      "base_url": "https://api.deepseek.com/anthropic",
-      "deepseek_model": "deepseek-v4-pro",
-      "claude_model": "deepseek-v4-pro[1m]",
-      "claude_flash_model": "deepseek-v4-flash",
-      "max_concurrent_jobs": 2,
-      "slot_capacity": 24,
-      "enabled": true
-    },
-    {
-      "account_id": "deepseek-claude-07",
-      "api_key": "sk-account-07",
-      "base_url": "https://api.deepseek.com/anthropic",
-      "deepseek_model": "deepseek-v4-pro",
-      "claude_model": "deepseek-v4-pro[1m]",
-      "claude_flash_model": "deepseek-v4-flash",
-      "max_concurrent_jobs": 2,
-      "slot_capacity": 24,
-      "enabled": true
-    },
-    {
-      "account_id": "deepseek-claude-08",
-      "api_key": "sk-account-08",
-      "base_url": "https://api.deepseek.com/anthropic",
-      "deepseek_model": "deepseek-v4-pro",
-      "claude_model": "deepseek-v4-pro[1m]",
-      "claude_flash_model": "deepseek-v4-flash",
-      "max_concurrent_jobs": 2,
-      "slot_capacity": 24,
-      "enabled": true
-    },
-    {
-      "account_id": "deepseek-claude-09",
-      "api_key": "sk-account-09",
-      "base_url": "https://api.deepseek.com/anthropic",
-      "deepseek_model": "deepseek-v4-pro",
-      "claude_model": "deepseek-v4-pro[1m]",
-      "claude_flash_model": "deepseek-v4-flash",
-      "max_concurrent_jobs": 2,
-      "slot_capacity": 24,
-      "enabled": true
-    },
-    {
-      "account_id": "deepseek-claude-10",
-      "api_key": "sk-account-10",
-      "base_url": "https://api.deepseek.com/anthropic",
-      "deepseek_model": "deepseek-v4-pro",
-      "claude_model": "deepseek-v4-pro[1m]",
-      "claude_flash_model": "deepseek-v4-flash",
-      "max_concurrent_jobs": 2,
-      "slot_capacity": 24,
-      "enabled": true
     }
   ]
 }
