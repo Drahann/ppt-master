@@ -8,7 +8,7 @@ description: >
 
 # PPT Master Skill
 
-> PPT Master now defaults to an automation-first pipeline: Markdown/JSON input → design plan → per-slide SVG → quality report → PPTX export.
+> PPT Master now defaults to an automation-first pipeline: Markdown/JSON input → design plan → batch-generated per-slide SVG → quality report → PPTX export.
 
 ## Default Pipeline
 
@@ -113,10 +113,11 @@ The old interactive workflow is no longer the main execution path, but these rep
 ## Model Usage
 
 - DeepSeek direct Anthropic-compatible API is used for `design_plan/spec_lock` and speaker notes in live mode.
-- Claude Code CLI is used only for per-slide SVG generation in live mode.
+- Claude Code CLI is used for batch SVG generation in live mode, producing one per-slide SVG file per requested slide.
+- SVG/spec font choices are preserved for the primary editable PPTX export. Post-processing also builds a temporary `svg_final_sourcehan/` variant and exports a Source Han version (`思源宋体` titles, `思源黑体` body text) without changing `svg_final/`.
 - All live prompt families start with a byte-stable `PPT_MASTER_COMMON_PREFIX_V1` deck prefix: fixed rules, canvas, style, source Markdown, and compact slide manifest.
 - The common prefix must not include project paths, timestamps, logs, current page numbers, or random values.
-- `--cache-prime` sends a low-output ACK request for that common prefix before live model work; SVG page prompts append page-specific content after the stable prefix.
+- `--cache-prime` sends a low-output ACK request for that common prefix before live model work; SVG batch prompts append batch-specific slide content after the stable prefix.
 - Theme color policy: extra HEX colors are allowed for richness, but the locked primary accent must remain the dominant non-neutral accent on every slide.
 - Layout diversity is semantic, not quota-based: `design_plan` should prefer specific archetypes and include `layout_family`, `layout_signature`, `visual_structure`, and `why_this_layout` per slide.
 - Usage is appended to `logs/usage.jsonl`; legacy `logs/api_ppt.log` is also written for compatibility.

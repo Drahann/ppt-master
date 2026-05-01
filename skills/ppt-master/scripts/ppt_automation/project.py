@@ -18,6 +18,8 @@ class RunResult:
     project_path: str | None
     pptx_path: str | None = None
     svg_pptx_path: str | None = None
+    source_han_pptx_path: str | None = None
+    source_han_svg_pptx_path: str | None = None
     quality_report_path: str | None = None
     quality: dict[str, int] | None = None
     slides: int = 0

@@ -13,6 +13,7 @@ Usage:
 import sys
 import re
 import colorsys
+import html
 from pathlib import Path
 from typing import List, Dict, Tuple
 from collections import defaultdict
@@ -304,8 +305,10 @@ class SVGQualityChecker:
         stack must END with a cross-platform pre-installed family. See
         strategist.md §g "PPT-safe font discipline".
         """
-        font_matches = re.findall(
-            r'font-family[:\s]*["\']([^"\']+)["\']', content, re.IGNORECASE)
+        font_matches = [
+            html.unescape(m.group(2).strip())
+            for m in re.finditer(r'font-family\s*=\s*(["\'])(.*?)\1', content, re.IGNORECASE)
+        ]
 
         if not font_matches:
             return
@@ -470,6 +473,13 @@ class SVGQualityChecker:
                 return data
         return None
 
+    def _normalize_font_family(self, value: str) -> str:
+        parts = [
+            part.strip().strip('"').strip("'")
+            for part in html.unescape(value or "").split(',')
+        ]
+        return ", ".join(part for part in parts if part)
+
     def _check_spec_lock_drift(self, content: str, svg_path: Path, result: Dict):
         """Detect values used in the SVG that fall outside spec_lock.md.
 
@@ -500,7 +510,7 @@ class SVGQualityChecker:
         if typo:
             default_font = typo.get('font_family', '').strip()
             if default_font:
-                allowed_fonts.add(default_font)
+                allowed_fonts.add(self._normalize_font_family(default_font))
             for k, v in typo.items():
                 if k == 'font_family' or not k.endswith('_family'):
                     continue
@@ -508,7 +518,7 @@ class SVGQualityChecker:
                 # Skip placeholder text like "same as body (omit if identical)"
                 if not v_clean or v_clean.lower().startswith('same as'):
                     continue
-                allowed_fonts.add(v_clean)
+                allowed_fonts.add(self._normalize_font_family(v_clean))
 
         # Sizes: declared slots are anchors; body is the ramp baseline.
         allowed_sizes = set()
@@ -537,8 +547,8 @@ class SVGQualityChecker:
                     extra_colors.add(val)
 
         font_drifts = set()
-        for m in re.finditer(r'font-family\s*=\s*["\']([^"\']+)["\']', content):
-            val = m.group(1).strip()
+        for m in re.finditer(r'font-family\s*=\s*(["\'])(.*?)\1', content):
+            val = self._normalize_font_family(m.group(2).strip())
             if allowed_fonts and val not in allowed_fonts:
                 font_drifts.add(val)
 

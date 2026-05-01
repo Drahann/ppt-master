@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -41,6 +42,10 @@ from .planner import (
 from .project import RunResult, create_project, write_manifest, write_result, write_source
 from .svg_generator import deterministic_notes, generate_svg_files, write_prompt_files
 from .usage import UsageLogger
+
+SOURCE_HAN_SVG_DIRNAME = "svg_final_sourcehan"
+SOURCE_HAN_TITLE_FONT_FAMILY = "思源宋体"
+SOURCE_HAN_BODY_FONT_FAMILY = "思源黑体"
 
 
 @dataclass
@@ -242,7 +247,138 @@ def generate_notes(project_path: Path, options: GenerationOptions, logger: Usage
     logger.log(f"{options.notes_provider}_notes", usage=usage, input_chars=len(prompt), output_chars=len(text))
 
 
-def postprocess_and_export(project_path: Path) -> tuple[str | None, str | None]:
+def parse_float_value(raw: str | None) -> float | None:
+    if not raw:
+        return None
+    match = re.search(r"-?\d+(?:\.\d+)?", raw)
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
+def parse_inline_style(raw: str | None) -> dict[str, str]:
+    style: dict[str, str] = {}
+    if not raw:
+        return style
+    for item in raw.split(";"):
+        if ":" not in item:
+            continue
+        key, value = item.split(":", 1)
+        style[key.strip().lower()] = value.strip()
+    return style
+
+
+def text_element_uses_source_han_serif(element: ET.Element) -> bool:
+    style = parse_inline_style(element.get("style"))
+    font_size = parse_float_value(element.get("font-size") or style.get("font-size")) or 0.0
+    y = parse_float_value(element.get("y")) or 9999.0
+    text = "".join(element.itertext()).strip()
+    if not text:
+        return False
+
+    metric_like = re.fullmatch(r"[\d\s.,，:%％+\-–—~<>×xX/年月日亿元万千百十台套件项篇家个倍余超约]+", text) is not None
+    if metric_like:
+        return False
+
+    weight = (element.get("font-weight") or style.get("font-weight") or "").strip().lower()
+    is_bold = weight in {"bold", "600", "700", "800", "900"}
+    return font_size >= 42 or (font_size >= 28 and y <= 150) or (font_size >= 32 and is_bold)
+
+
+def set_text_font_family(element: ET.Element, family: str) -> None:
+    element.set("font-family", family)
+    style = element.get("style")
+    if not style or "font-family" not in style.lower():
+        return
+
+    parts: list[str] = []
+    replaced = False
+    for part in style.split(";"):
+        if not part.strip():
+            continue
+        if ":" in part and part.split(":", 1)[0].strip().lower() == "font-family":
+            parts.append(f"font-family:{family}")
+            replaced = True
+        else:
+            parts.append(part.strip())
+    if not replaced:
+        parts.append(f"font-family:{family}")
+    element.set("style", "; ".join(parts))
+
+
+def rewrite_svg_text_fonts_to_source_han(svg_text: str) -> tuple[str, int]:
+    ET.register_namespace("", "http://www.w3.org/2000/svg")
+    ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
+    root = ET.fromstring(svg_text)
+    changed = 0
+    for element in root.iter():
+        if element.tag.rsplit("}", 1)[-1] != "text":
+            continue
+        family = SOURCE_HAN_TITLE_FONT_FAMILY if text_element_uses_source_han_serif(element) else SOURCE_HAN_BODY_FONT_FAMILY
+        if element.get("font-family") != family:
+            changed += 1
+        set_text_font_family(element, family)
+        for child in element.iter():
+            if child is element:
+                continue
+            if child.tag.rsplit("}", 1)[-1] == "tspan":
+                set_text_font_family(child, family)
+    return ET.tostring(root, encoding="unicode"), changed
+
+
+def build_source_han_svg_export_variant(project_path: Path) -> Path:
+    source_dir = project_path / "svg_final"
+    if not source_dir.exists():
+        raise GenerationError(f"Cannot build Source Han export variant; missing {source_dir}")
+
+    target_dir = project_path / SOURCE_HAN_SVG_DIRNAME
+    project_root = project_path.resolve()
+    target_resolved = target_dir.resolve()
+    if project_root != target_resolved and project_root not in target_resolved.parents:
+        raise GenerationError(f"Refusing to replace SVG variant outside project directory: {target_dir}")
+
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+    shutil.copytree(source_dir, target_dir)
+
+    changed_files = 0
+    changed_text_nodes = 0
+    for svg_path in sorted(target_dir.glob("*.svg")):
+        original = svg_path.read_text(encoding="utf-8", errors="replace")
+        try:
+            updated, changed = rewrite_svg_text_fonts_to_source_han(original)
+        except ET.ParseError as exc:
+            raise GenerationError(f"Cannot rewrite fonts in {svg_path.name}: invalid XML ({exc})") from exc
+        if updated != original:
+            svg_path.write_text(updated, encoding="utf-8")
+            changed_files += 1
+            changed_text_nodes += changed
+
+    (project_path / "logs" / "source_han_font_variant.json").write_text(
+        json.dumps(
+            {
+                "source_dir": str(source_dir),
+                "target_dir": str(target_dir),
+                "changed_files": changed_files,
+                "changed_text_nodes": changed_text_nodes,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return target_dir
+
+
+def explicit_legacy_pptx_path(native_pptx_path: Path) -> Path:
+    return native_pptx_path.with_name(f"{native_pptx_path.stem}_svg{native_pptx_path.suffix}")
+
+
+def postprocess_and_export(project_path: Path) -> tuple[str | None, str | None, str | None, str | None]:
     run_command([sys.executable, str(TOOLS_DIR / "total_md_split.py"), str(project_path)], cwd=REPO_ROOT)
     run_command([sys.executable, str(TOOLS_DIR / "finalize_svg.py"), str(project_path)], cwd=REPO_ROOT)
     validate_svg_directory(project_path / "svg_final")
@@ -251,7 +387,31 @@ def postprocess_and_export(project_path: Path) -> tuple[str | None, str | None]:
     after = sorted(set((project_path / "exports").glob("*.pptx")) - before, key=lambda p: p.stat().st_mtime)
     native = [p for p in after if not p.stem.endswith("_svg")]
     legacy = [p for p in after if p.stem.endswith("_svg")]
-    return (str(native[-1]) if native else None, str(legacy[-1]) if legacy else None)
+    if not native:
+        return None, str(legacy[-1]) if legacy else None, None, None
+
+    source_han_dir = build_source_han_svg_export_variant(project_path)
+    validate_svg_directory(source_han_dir)
+    source_han_native = native[-1].with_name(f"{native[-1].stem}_sourcehan{native[-1].suffix}")
+    run_command(
+        [
+            sys.executable,
+            str(TOOLS_DIR / "svg_to_pptx.py"),
+            str(project_path),
+            "-s",
+            SOURCE_HAN_SVG_DIRNAME,
+            "-o",
+            str(source_han_native),
+        ],
+        cwd=REPO_ROOT,
+    )
+    source_han_legacy = explicit_legacy_pptx_path(source_han_native)
+    return (
+        str(native[-1]),
+        str(legacy[-1]) if legacy else None,
+        str(source_han_native) if source_han_native.exists() else None,
+        str(source_han_legacy) if source_han_legacy.exists() else None,
+    )
 
 
 def validate_svg_directory(svg_dir: Path) -> None:
@@ -348,12 +508,14 @@ def generate(options: GenerationOptions) -> RunResult:
             warnings = run_chart_scan(project_path)
             notes_future.result()
             logger.log("notes_parallel", event="finish")
-        pptx_path, svg_pptx_path = postprocess_and_export(project_path)
+        pptx_path, svg_pptx_path, source_han_pptx_path, source_han_svg_pptx_path = postprocess_and_export(project_path)
         result = RunResult(
-            ok=bool(pptx_path and svg_pptx_path),
+            ok=bool(pptx_path and svg_pptx_path and source_han_pptx_path and source_han_svg_pptx_path),
             project_path=str(project_path),
             pptx_path=pptx_path,
             svg_pptx_path=svg_pptx_path,
+            source_han_pptx_path=source_han_pptx_path,
+            source_han_svg_pptx_path=source_han_svg_pptx_path,
             quality_report_path=str(quality_report) if quality_report else None,
             quality=quality,
             slides=len(deck.slides),

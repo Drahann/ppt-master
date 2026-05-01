@@ -6,7 +6,7 @@ This file is project memory for Claude Code in this repository.
 
 PPT Master now defaults to automation mode:
 
-`Markdown/JSON input -> slide manifest -> design_plan/spec_lock -> per-slide SVG -> quality report -> PPTX export`
+`Markdown/JSON input -> slide manifest -> design_plan/spec_lock -> batch-generated per-slide SVG -> quality report -> PPTX export`
 
 Follow `skills/ppt-master/SKILL.md` for the current workflow. The old Strategist / Executor / Eight Confirmations workflow is legacy reference only and must not be used unless the caller explicitly asks for it.
 
@@ -15,7 +15,9 @@ Follow `skills/ppt-master/SKILL.md` for the current workflow. The old Strategist
 When invoked by `skills/ppt-master/scripts/api_ppt.py`:
 
 - Follow the stdin prompt exactly.
-- For SVG generation, return exactly one complete SVG document and no prose.
+- For single-slide SVG generation, return exactly one complete SVG document and no prose.
+- For batch SVG generation, return one complete SVG document per requested file, using the requested `FILE: ...` / `END_FILE` markers and no extra prose.
+- SVG/spec font choices are preserved for the primary editable PPTX export. Post-processing also builds a temporary `svg_final_sourcehan/` variant and exports a Source Han version (`思源宋体` titles, `思源黑体` body text) without changing `svg_final/`.
 - Do not output summaries, plans, explanations, markdown fences, or progress narration.
 - Do not inspect unrelated repository files or run tools unless the prompt explicitly asks for it.
 - Treat `design_plan.json` as soft visual guidance and `spec_lock.json` as the hard visual/token anchor.

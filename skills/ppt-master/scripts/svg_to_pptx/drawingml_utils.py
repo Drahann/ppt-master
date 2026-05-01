@@ -36,6 +36,7 @@ EA_FONTS = {
     'Noto Sans SC', 'Noto Sans TC', 'Noto Serif SC', 'Noto Serif TC',
     'Source Han Sans SC', 'Source Han Sans TC',
     'Source Han Serif SC', 'Source Han Serif TC',
+    '思源黑体', '思源宋体',
     'WenQuanYi Micro Hei', 'WenQuanYi Zen Hei',
     'YouYuan', 'LiSu', 'HuaWenKaiTi',
     'Songti SC', 'Songti TC',
@@ -62,10 +63,12 @@ FONT_FALLBACK_WIN = {
     'Noto Sans TC': 'Microsoft JhengHei',
     'Noto Serif SC': 'SimSun',
     'Noto Serif TC': 'SimSun',
-    'Source Han Sans SC': 'Microsoft YaHei',
-    'Source Han Sans TC': 'Microsoft JhengHei',
-    'Source Han Serif SC': 'SimSun',
-    'Source Han Serif TC': 'SimSun',
+    'Source Han Sans SC': 'Source Han Sans SC',
+    'Source Han Sans TC': 'Source Han Sans TC',
+    'Source Han Serif SC': 'Source Han Serif SC',
+    'Source Han Serif TC': 'Source Han Serif TC',
+    '思源黑体': '思源黑体',
+    '思源宋体': '思源宋体',
     'WenQuanYi Micro Hei': 'Microsoft YaHei',
     'WenQuanYi Zen Hei': 'Microsoft YaHei',
     # Latin fonts (macOS / Linux / Web -> Windows)
@@ -98,6 +101,7 @@ GENERIC_FONT_MAP = {
 _SERIF_LATIN = {
     'Times New Roman', 'Georgia', 'Garamond', 'Palatino', 'Palatino Linotype',
     'Book Antiqua', 'Cambria', 'SimSun', 'Liberation Serif', 'DejaVu Serif',
+    'Source Han Serif SC', 'Source Han Serif TC', '思源宋体',
 }
 
 # SVG stroke-dasharray -> DrawingML prstDash
