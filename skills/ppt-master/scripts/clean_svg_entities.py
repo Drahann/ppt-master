@@ -21,6 +21,28 @@ NAMED_ENTITY_RE = re.compile(r"&([A-Za-z][A-Za-z0-9]+);")
 BARE_AMP_RE = re.compile(r"&(?!amp;|lt;|gt;|quot;|apos;|#[0-9]+;|#x[0-9A-Fa-f]+;)")
 BARE_LT_RE = re.compile(r"<(?!/?[A-Za-z_][\w:.-]*(?:\s|/?>)|!--|\?xml|!\[CDATA\[)")
 COMMENT_RE = re.compile(r"<!--(.*?)-->", re.S)
+SPAN_OPEN_RE = re.compile(r"<span\b([^>]*)>", re.I)
+SPAN_CLOSE_RE = re.compile(r"</span\s*>", re.I)
+ATTR_PAIR_RE = re.compile(r"(?=\b([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(['\"])(.*?)\2)")
+CSS_PAIR_RE = re.compile(r"\b([A-Za-z][-A-Za-z0-9]*)\s*:\s*([^;\"'>\s]+)")
+TSPAN_SAFE_ATTRS = {
+    "baseline-shift",
+    "dx",
+    "dy",
+    "fill",
+    "fill-opacity",
+    "font-family",
+    "font-size",
+    "font-style",
+    "font-weight",
+    "letter-spacing",
+    "opacity",
+    "stroke",
+    "stroke-width",
+    "text-decoration",
+    "x",
+    "y",
+}
 
 
 def clean_xml_comments(text: str) -> str:
@@ -33,6 +55,39 @@ def clean_xml_comments(text: str) -> str:
         return f"<!--{body}-->"
 
     return COMMENT_RE.sub(replace_comment, text)
+
+
+def _clean_tspan_attr_value(value: str) -> str:
+    return value.strip().strip("\"'").rstrip(";")
+
+
+def _span_attrs_to_tspan_attrs(attr_text: str) -> str:
+    attrs: dict[str, str] = {}
+
+    for name, _quote, value in ATTR_PAIR_RE.findall(attr_text):
+        normalized_name = name.lower()
+        if normalized_name == "tspan":
+            continue
+        if normalized_name in TSPAN_SAFE_ATTRS:
+            attrs[normalized_name] = _clean_tspan_attr_value(value)
+
+    for name, value in CSS_PAIR_RE.findall(attr_text):
+        normalized_name = name.lower()
+        if normalized_name in TSPAN_SAFE_ATTRS:
+            attrs[normalized_name] = _clean_tspan_attr_value(value)
+
+    return " ".join(f'{name}="{value}"' for name, value in attrs.items() if value)
+
+
+def repair_span_tspan_tags(text: str) -> str:
+    """Convert model-written HTML span/tspan hybrids into valid SVG tspans."""
+
+    def replace_open(match: re.Match[str]) -> str:
+        attrs = _span_attrs_to_tspan_attrs(match.group(1))
+        return f"<tspan {attrs}>" if attrs else "<tspan>"
+
+    repaired = SPAN_OPEN_RE.sub(replace_open, text)
+    return SPAN_CLOSE_RE.sub("</tspan>", repaired)
 
 
 def _html_entity_value(name: str) -> str | None:
@@ -53,7 +108,7 @@ def clean_svg_entities(text: str) -> str:
             return f"&amp;{name};"
         return value
 
-    cleaned = clean_xml_comments(text)
+    cleaned = repair_span_tspan_tags(clean_xml_comments(text))
     cleaned = NAMED_ENTITY_RE.sub(replace_named, cleaned)
     cleaned = BARE_AMP_RE.sub("&amp;", cleaned)
     return BARE_LT_RE.sub("&lt;", cleaned)

@@ -279,7 +279,7 @@ Stable rules:
 - Light theme only: the root background must be `#FFFFFF` or near-white. Do not use dark theme, black/dark full-slide backgrounds, dark hero panels, GitHub-dark palette, or neon-on-black styling even if the model prefers a technology look.
 - Keep the deck theme continuous: the locked primary accent (`#1D4ED8` unless spec_lock says otherwise) must be the dominant non-neutral accent on every slide. Teal, amber, and extra colors may add richness, but they must not make one slide feel like a green/orange/other-theme page.
 - XML reserved characters in text must be escaped.
-- Text wrapping must use `<text>` and `<tspan>`.
+- Text wrapping and inline emphasis must use `<text>` and `<tspan>` only. Never use HTML `<span>`; write `<tspan fill="#..." font-weight="...">...</tspan>`.
 - Group related elements with plain `<g>`; never use `<g opacity>`.
 - Use the current page source Markdown as the source of visible content. The global manifest is only for deck context.
 - Follow the current slide's `layout_signature`, `visual_structure`, and `visual_guidance` from Design Plan JSON. These are soft structure instructions, not exact coordinates.
