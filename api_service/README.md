@@ -17,7 +17,7 @@ The DeepSeek/Claude account pool is job-level, not SVG-turn-level:
 
 - default account capacity: 2 concurrent jobs
 - default account capacity: 24 SVG slots
-- current production job request: 8 SVG workers
+- current production job request: 12 SVG workers
 
 With the current two-server deployment, each node normally carries 5 accounts
 and 10 concurrent jobs. The external load balancer spreads work across two
@@ -36,7 +36,7 @@ python skills/ppt-master/scripts/api_ppt.py generate <source.md> \
   --qwen-max-tokens 65536 \
   --qwen-timeout 900 \
   --cache-prime \
-  --svg-workers 8 \
+  --svg-workers 12 \
   --svg-batch-size 4 \
   --claude-effort max \
   --claude-timeout 1200 \

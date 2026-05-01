@@ -41,7 +41,7 @@ Default policy:
 - 5 DeepSeek/Claude accounts per server.
 - Each account allows 2 concurrent PPT jobs.
 - Each account has 24 SVG slots.
-- Each PPT job requests 8 SVG slots by default.
+- Each PPT job requests 12 SVG slots by default.
 
 That makes one server admit ten concurrent jobs. The two-server production
 deployment uses external load balancing and admits twenty concurrent jobs total.
