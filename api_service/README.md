@@ -10,15 +10,18 @@ Redis is used for:
 
 - async job queue and job status
 - DeepSeek/Claude account leases
+- runner start stagger
 - metrics snapshots
 
 The DeepSeek/Claude account pool is job-level, not SVG-turn-level:
 
 - default account capacity: 2 concurrent jobs
 - default account capacity: 24 SVG slots
-- default job request: 12 SVG workers
+- current production job request: 8 SVG workers
 
-With those defaults, one account carries two jobs and a 10-account pool carries twenty jobs.
+With the current two-server deployment, each node normally carries 5 accounts
+and 10 concurrent jobs. The external load balancer spreads work across two
+nodes for 20 total jobs.
 
 ## Runner
 
@@ -33,8 +36,8 @@ python skills/ppt-master/scripts/api_ppt.py generate <source.md> \
   --qwen-max-tokens 65536 \
   --qwen-timeout 900 \
   --cache-prime \
-  --svg-workers 12 \
-  --svg-batch-size 3 \
+  --svg-workers 8 \
+  --svg-batch-size 4 \
   --claude-effort max \
   --claude-timeout 1200 \
   --claude-retries 1

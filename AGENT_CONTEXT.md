@@ -9,6 +9,81 @@ Authoritative rule: for PPT generation or repair work, read
 `skills/ppt-master/SKILL.md` first. If any older README, role reference, or
 legacy AGENTS summary conflicts with `SKILL.md`, follow `SKILL.md`.
 
+## 0. Current Operating State
+
+Last updated: 2026-05-01.
+
+Active production branch:
+
+```text
+codex/automation-stress-20260429
+```
+
+Remote normally used for this branch:
+
+```text
+https://github.com/Drahann/ppt-master.git
+```
+
+Recent high-value commits on this branch:
+
+| Commit | Meaning |
+| --- | --- |
+| `020b1fc3` | Added the FastAPI production shell around Claude PPT generation. |
+| `6233a905` | Added Redis-backed runner start stagger and jitter. |
+| `01f76c21` | Made the Qwen planning/spec timeout configurable. |
+| `bd988487` | Restored Claude prompt-cache locality by sharing job-level Claude config. |
+| `59a376db` | Changed default SVG concurrency to `8 workers x batch size 4`. |
+| `ba2144d0` | Fixed API job image asset copying from `source_files/` into project `images/`. |
+| `b11d7ae4` | Changed one production node to a five-account pool and ten job workers. |
+| `ca7740bc` | Ignored split real account-pool JSON files. |
+
+Current production shape:
+
+- The old production PPT service and this Claude/DeepSeek service coexist.
+- Existing service keeps its own port, usually host `3001`.
+- This service maps container port `3000` to host `3003`.
+- `docker-compose.yml` starts both the API container and its own Redis container.
+- Redis default host port is `6380` unless overridden.
+- Two physical servers sit behind external load balancing.
+- Each server should use five DeepSeek/Claude accounts.
+- Each account allows two concurrent PPT jobs and has 24 SVG slots.
+- Per server capacity is therefore `5 accounts x 2 jobs = 10 jobs`.
+- Across two servers the intended total is 20 concurrent jobs.
+- Do not put the same five accounts on both servers.
+
+Current default generation policy for production:
+
+- Planner: Qwen via DashScope, model `qwen3.6-plus`.
+- Notes: Qwen via DashScope.
+- SVG renderer: Claude Code using DeepSeek Anthropic-compatible endpoint.
+- Claude model: `deepseek-v4-pro[1m]`.
+- Claude flash model: `deepseek-v4-flash`.
+- SVG concurrency: `PPT_API_SVG_WORKERS=8`.
+- SVG batch size: `PPT_API_SVG_BATCH_SIZE=4`.
+- Cache priming: enabled.
+- Claude effort: `max`.
+- Claude timeout: 1200 seconds.
+- Qwen timeout: 900 seconds.
+- Notes generation runs in parallel with SVG generation, so after SVG completes
+  the pipeline can proceed directly into post-processing once notes have also
+  finished.
+
+Important ignored local files:
+
+| Path | Meaning |
+| --- | --- |
+| `.env.api` | Real local/server API env. Ignored by git. |
+| `deploy/production/server-claude.env.api` | Real production env copy. Ignored by git. |
+| `deploy/production/deepseek_claude_account_pool.json` | Real first-server account pool, accounts 01-05. Ignored by git. |
+| `deploy/production/deepseek_claude_account_pool_06_10.json` | Real second-server account pool, accounts 06-10. Ignored by git. |
+| `secrets/deepseek_claude_account_pool.json` | Runtime account-pool file mounted into the container. Ignored by git. |
+
+Tracked examples should stay sanitized:
+
+- `deploy/production/server-claude.env.api.example`
+- `deploy/production/deepseek_claude_account_pool.example.json`
+
 ## 1. What This Repository Is
 
 PPT Master is a local-first AI presentation generation workflow package. It is
@@ -32,6 +107,9 @@ Markdown/JSON input
 -> exports/*.pptx
 ```
 
+Implementation note: in current production code, notes are generated in parallel
+with the per-slide SVG stage, then post-processing waits for both.
+
 The old Strategist -> Image_Generator -> Executor -> Eight Confirmations flow is
 legacy reference material only. Those files still contain useful design and SVG
 knowledge, but they are not the default execution path unless the user asks for
@@ -44,6 +122,8 @@ that older workflow.
 3. `skills/ppt-master/SKILL.md` - current workflow authority.
 4. `skills/ppt-master/workflows/api-automation.md` - automation details.
 5. Read these only when needed:
+   - `api_service/README.md`
+   - `deploy/production/README.md`
    - `skills/ppt-master/references/shared-standards.md`
    - `skills/ppt-master/references/canvas-formats.md`
    - `skills/ppt-master/templates/icons/README.md`
@@ -69,8 +149,8 @@ python skills/ppt-master/scripts/api_ppt.py generate postppt.json --project-name
 # Dry run: project, source, manifest, plan/lock, and prompts only
 python skills/ppt-master/scripts/api_ppt.py generate postppt.json --project-name demo --dry-run
 
-# Live run with cache priming and parallel SVG generation
-python skills/ppt-master/scripts/api_ppt.py generate postppt.json --project-name demo --cache-prime --svg-workers 6 --svg-batch-size 5
+# Live run with cache priming and current production SVG concurrency
+python skills/ppt-master/scripts/api_ppt.py generate postppt.json --project-name demo --cache-prime --svg-workers 8 --svg-batch-size 4
 ```
 
 Manual export pipeline for an existing generated project:
@@ -119,13 +199,25 @@ Important modules:
 | Path | Responsibility |
 | --- | --- |
 | `ppt_automation/parser.py` | Reads Markdown/JSON and builds `Deck` / `Slide`. |
-| `ppt_automation/assets.py` | Downloads Markdown images and rewrites image links into `images/`. |
+| `ppt_automation/assets.py` | Materializes Markdown images into project `images/`; handles HTTP(S), local relative images, and API job `source_files/`. |
 | `ppt_automation/project.py` | Creates timestamped projects and writes source, manifest, plan/lock mirrors, and `result.json`. |
 | `ppt_automation/planner.py` | Builds `design_plan` and `spec_lock`; supports DeepSeek, Qwen, and deterministic local mode. |
 | `ppt_automation/svg_generator.py` | Writes prompt files; local SVG smoke renderer; Claude Code per-slide SVG generation. |
 | `ppt_automation/pipeline.py` | End-to-end orchestration: assets, parsing, cache prime, plan, SVG, entity cleanup, quality check, chart scan, notes, export. |
 | `ppt_automation/usage.py` | Writes `logs/usage.jsonl`, `logs/api_ppt.log`, and full prompt/response transcripts. |
 | `ppt_automation/config.py` | Shared paths, canvas formats, default models, and provider endpoints. |
+
+Production API modules:
+
+| Path | Responsibility |
+| --- | --- |
+| `api_service/app.py` | FastAPI routes, sync/async request handling, Redis queue/status, account lease, callback trigger. |
+| `api_service/runner.py` | Converts API settings into the `api_ppt.py generate` child process command and environment. |
+| `api_service/account_pool.py` | Redis-backed DeepSeek/Claude account pool and per-job account leases. |
+| `api_service/job_store.py` | Redis-backed job records for queued/running/succeeded/failed/cancelled status. |
+| `api_service/markdown_assets.py` | API request preprocessor that downloads/copies incoming Markdown images to the job `source_files/` directory. |
+| `api_service/storage.py` | COS upload and report callback. |
+| `api_service/models.py` | API request/response schemas. |
 
 Provider behavior:
 
@@ -139,10 +231,95 @@ Provider behavior:
 - The shared prefix must be byte-stable: no project paths, timestamps, logs,
   random values, or current page numbers.
 - `--cache-prime` sends low-output ACK-style requests before live work.
+- In production, `PPT_MASTER_CLAUDE_CONFIG_SCOPE=job` is intentional. Cache
+  prime and all SVG batches for the same PPT job share the same job-level Claude
+  config directory. This avoids the poor cache hit rate seen when config was
+  isolated per batch.
+- Do not switch back to per-batch Claude config unless the user explicitly
+  chooses file-lock isolation over prompt-cache locality.
+- The old `C:\Users\...\ .claude.json` lock problem came from multiple jobs
+  sharing one global Claude config file. The current fix is job-scoped config:
+  each PPT job has its own Claude config directory, while batches inside that
+  same job share it.
 - API keys must come from CLI args or environment variables. Do not write them
   into docs, logs, project artifacts, or transcripts.
 
-## 6. Generated Project Anatomy
+## 6. Production API Shell
+
+The production API shell intentionally mirrors the existing production service
+interface closely.
+
+Routes:
+
+| Route | Meaning |
+| --- | --- |
+| `POST /api/report-to-ppt` | Existing production-compatible report request shape. |
+| `POST /api/generate-ppt` | Direct PPT generation request shape. |
+| `GET /api/jobs/{job_id}` | Redis job status. |
+| `GET /api/jobs/{job_id}/artifacts` | Completed artifact/result pointer. |
+| `POST /api/jobs/{job_id}/cancel` | Mark queued/running job as cancelled. |
+| `GET /healthz` | Health, Redis, and account pool status. |
+| `GET /metrics` | In-memory API metrics plus Redis job/account snapshots. |
+| `GET /dashboard` | Simple dashboard page. |
+
+Important runtime env:
+
+```env
+PPT_API_HOST_PORT=3003
+PPT_API_MAX_CONCURRENT_JOBS=10
+PPT_API_ASYNC_WORKERS=10
+PPT_REDIS_URL=redis://ppt-master-claude-redis:6379/0
+PPT_REDIS_KEY_PREFIX=ppt-claude
+PPT_API_DEEPSEEK_ACCOUNT_POOL_FILE=/app/secrets/deepseek_claude_account_pool.json
+PPT_API_REQUIRE_ACCOUNT_POOL=1
+PPT_API_SVG_WORKERS=8
+PPT_API_SVG_BATCH_SIZE=4
+PPT_MASTER_CLAUDE_CONFIG_ROOT=/app/tmp/claude-code-config
+PPT_MASTER_CLAUDE_CONFIG_SCOPE=job
+```
+
+Redis is used for:
+
+- API job queue/status.
+- Account-pool leases.
+- Runner start stagger.
+- Metrics snapshots.
+
+Account pool behavior:
+
+- The account lease is job-level, not SVG-batch-level.
+- A PPT job acquires one DeepSeek/Claude account before launching `api_ppt.py`.
+- The account's key and model settings are injected into the child process
+  environment by `api_service/runner.py`.
+- Each job requests `svg_workers` slots from the selected account.
+- With current defaults, each job requests 8 slots; each account has 24 slots,
+  but `max_concurrent_jobs=2` caps the account at two jobs.
+- Selection prefers the emptiest available account.
+
+Deployment shape:
+
+```bash
+docker compose --env-file .env.api build
+docker compose --env-file .env.api up -d
+curl http://127.0.0.1:3003/healthz
+curl http://127.0.0.1:3003/metrics
+```
+
+When cloning from GitHub is unavailable on a server, a safe fallback is to
+archive the branch locally and copy the tarball to the server. If GitHub access
+works, prefer normal `git pull` on `codex/automation-stress-20260429`.
+
+Two-server account split:
+
+- Server A: use accounts 01-05.
+- Server B: use accounts 06-10.
+- The second local file is
+  `deploy/production/deepseek_claude_account_pool_06_10.json`; copy it to the
+  server as `secrets/deepseek_claude_account_pool.json` or equivalent runtime
+  secret path.
+- Keep split real JSON files ignored. Do not commit real keys.
+
+## 7. Generated Project Anatomy
 
 Generated projects usually live under:
 
@@ -172,7 +349,7 @@ Core artifacts:
 | `exports/*.pptx` | Native editable PPTX and `_svg.pptx` visual reference deck. |
 | `result.json` | Run status, paths, quality summary, warnings, and error if failed. |
 
-## 7. SVG And PPT Hard Rules
+## 8. SVG And PPT Hard Rules
 
 Before writing or fixing SVG, use `shared-standards.md`.
 
@@ -199,7 +376,7 @@ Key rules:
 - For chart arcs, arrows, and coordinates, calculate precisely. Use
   `svg_position_calculator.py` when needed.
 
-## 8. Assets And Libraries
+## 9. Assets And Libraries
 
 - `skills/ppt-master/templates/layouts/`: legacy/optional template resources.
   Automation mode does not depend on them by default.
@@ -216,9 +393,9 @@ Key rules:
 - `projects/`: user workspace, usually ignored by git, can contain large
   intermediate outputs and logs.
 
-## 9. Current Workspace Snapshot
+## 10. Current Workspace Snapshot
 
-Last inspected: 2026-04-29.
+Last inspected: 2026-05-01.
 
 Most complete current run:
 
@@ -258,7 +435,34 @@ Current project caveats:
 - The IDE-open files mentioned in the user context belong to this run's
   prompt/spec/transcript debugging surface.
 
-## 10. How To Continue Work On The Current Project
+Recent production/stress observations:
+
+- `projects/postppt_qwen36plus_12w_b3_max_stress01_ppt169_20260429_141135`
+  is a useful local/stress comparison run. Its `sources/input.md` references
+  `../images/...`, and its `images/` directory contains the expected 10
+  business image assets.
+- `projects/longying..._ppt169_20260429_110326` and
+  `projects/longying..._ppt169_20260429_123630` were server/API runs before
+  the image-copy fix. Their `sources/input.md` kept `source_files/...`
+  references and their project `images/` directories were empty. The root cause
+  was container/job path resolution: API preprocessing put images under
+  `/app/tmp/api-jobs/<job>/source_files`, but the generation pipeline did not
+  resolve image paths relative to the input `source.md` directory.
+- The fix in `ba2144d0` changed `ppt_automation/assets.py` and
+  `ppt_automation/pipeline.py` so local relative images are copied from the
+  input file directory into project `images/` and rewritten to `../images/...`.
+  A dry-run against real job
+  `.tmp/api-jobs/job_1777466160982_50622fb60c/source.md` copied 10 images and
+  logged `copied=10, missing=0`.
+- The server run
+  `projects/longying..._ppt169_20260429_123630` showed the prompt-cache
+  locality fix working: observed cache ratio was about 89.83%, up from the
+  earlier poor server cache behavior around 40.20%.
+- That same run still had two SVG retries where Claude returned no complete
+  `<svg>` document. These were not script-washable incomplete SVGs; there was
+  no usable SVG tree to repair. Treat those as model/retry events.
+
+## 11. How To Continue Work On The Current Project
 
 If the user wants specific slides changed:
 
@@ -295,7 +499,7 @@ If the user wants a full regeneration:
 4. Verify `result.json`, `svg_quality_report.txt`, `logs/chart_scan.txt`, and
    the exported PPTX files.
 
-## 11. Verification Checklist
+## 12. Verification Checklist
 
 Before claiming a PPT task is complete, collect evidence:
 
@@ -304,36 +508,71 @@ Before claiming a PPT task is complete, collect evidence:
 - Count of `svg_output/*.svg` equals `slide_manifest.json.slide_count`.
 - Count of `svg_final/*.svg` equals `slide_manifest.json.slide_count`.
 - `exports/` contains both a new native `.pptx` and a new `_svg.pptx`.
+- If the request entered through the API and has images, `sources/input.md`
+  should reference `../images/...`, `images/` should contain the copied files,
+  and `logs/usage.jsonl` should include `input_images` with expected `copied`
+  or `downloaded` counts and `missing: 0`.
 - Image warnings are only size recommendations, not structural SVG failures.
 - If chart pages changed, check `logs/chart_scan.txt`; calibrate coordinates
   when needed.
 - If text or notes changed, spot-check the PPTX for editable text, correct
   grouping, and readable Chinese.
 
-## 12. Explicit v1 Limits
+For production/API work, also verify:
 
-- The HTTP `serve` command is still a placeholder. Do not implement a service
-  unless the user asks for it and provides protocol requirements.
+- `GET /healthz` shows Redis available.
+- `apiKeyPool.configured` is true.
+- On a single production node, `apiKeyPool.accounts` should normally have five
+  entries.
+- `GET /metrics` reflects queue/running/completed jobs and account-pool
+  snapshots.
+
+## 13. Explicit Limits
+
 - Quality errors are reported, not automatically retried.
 - Chart pages are scanned, not automatically calibrated.
 - AI image generation is not part of the default automation path.
 - Layout template selection/copying is not part of the default automation path.
 - `--renderer local` is a pipeline smoke test, not final design quality.
+- The API service exists and is production-shaped, but it is a shell around the
+  existing CLI pipeline. Do not bypass the CLI pipeline unless the user asks for
+  a deeper service refactor.
 - Do not add dependencies unless explicitly requested.
 - Do not write API keys, model tokens, or private URLs into tracked files,
   generated docs, or transcripts.
 
-## 13. Common Failure Entry Points
+## 14. Common Failure Entry Points
 
 - Missing DeepSeek/Qwen key: inspect CLI args and env vars; failures usually
   land in `result.json.error`.
 - Missing Claude Code CLI: install/update `@anthropic-ai/claude-code`; the
   script preflight reports this clearly.
+- Poor Claude cache hit rate in API runs: confirm
+  `PPT_MASTER_CLAUDE_CONFIG_SCOPE=job`. Per-batch config isolation improves
+  lock isolation but destroys useful cache locality.
+- `.claude.json` lock/file contention: should not recur with job-scoped Claude
+  config. If it does, inspect `PPT_MASTER_CLAUDE_CONFIG_ROOT`,
+  `PPT_MASTER_CLAUDE_CONFIG_SCOPE`, and runner logs before changing account
+  scheduling.
+- Empty image placeholders in API-generated PPTs: inspect
+  `sources/input.md`, project `images/`, and `logs/usage.jsonl`. If input still
+  references `source_files/...`, the image-copy fix is not present or the wrong
+  branch/container image is running.
+- `/root/rag-agent/media/mermaid/...` references are not the business images.
+  Those absolute local mermaid paths are intentionally ignored.
+- Qwen spec/planner timeout: production uses `PPT_API_QWEN_TIMEOUT=900`; older
+  300-second timeouts can fail on long spec generation.
 - SVG XML failure: run `clean_svg_entities.py --validate`; look for HTML named
   entities, bare `&`, or unescaped `<`.
+- Claude response without a complete `<svg>`: not script-washable unless there
+  is a complete SVG tree. Usually let the existing retry path handle it.
 - PPTX export failure: confirm export is from `svg_final/` and all SVG files
   parse as XML.
 - Chinese mojibake: inspect input file encoding and JSON field content first;
   generated filenames may already have inherited mojibake.
+- GitHub clone/fetch failure on a server: first distinguish protocol vs network.
+  HTTP/2 framing errors can be worked around with
+  `git -c http.version=HTTP/1.1 ...`; port 443 timeouts are network/proxy
+  problems, not git branch problems.
 - Too many files: use `rg`, `rg --files`, or targeted directory listings. Do
   not open the full icon library.

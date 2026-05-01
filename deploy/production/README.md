@@ -21,7 +21,7 @@ The business API paths stay the same:
 
 ## Account Pool
 
-Copy the example and replace the ten keys:
+Copy the example and replace the five keys for this server:
 
 ```bash
 mkdir -p secrets
@@ -34,15 +34,20 @@ This working tree also contains ignored ready-to-copy files when generated local
 - `secrets/deepseek_claude_account_pool.json`
 - `deploy/production/server-claude.env.api`
 - `deploy/production/deepseek_claude_account_pool.json`
+- `deploy/production/deepseek_claude_account_pool_06_10.json`
 
 Default policy:
 
-- 10 DeepSeek/Claude accounts.
+- 5 DeepSeek/Claude accounts per server.
 - Each account allows 2 concurrent PPT jobs.
 - Each account has 24 SVG slots.
-- Each PPT job requests 12 SVG slots by default.
+- Each PPT job requests 8 SVG slots by default.
 
-That makes one account naturally admit two concurrent jobs, and the full pool admits twenty concurrent jobs.
+That makes one server admit ten concurrent jobs. The two-server production
+deployment uses external load balancing and admits twenty concurrent jobs total.
+
+Use accounts 01-05 on the first server and accounts 06-10 on the second server.
+Do not deploy the same five-account pool to both servers.
 
 ## Runner Start Stagger
 
@@ -61,21 +66,23 @@ For `qwen3.6-plus` spec generation, the Qwen request timeout is intentionally lo
 PPT_API_QWEN_TIMEOUT=900
 ```
 
-## Start Redis
+## Start API And Redis
 
-```bash
-cd deploy/redis
-cp redis.env.example redis.env
-docker compose --env-file redis.env -f docker-compose.redis.yml up -d
-```
-
-## Start API
-
-From the repo root:
+The root `docker-compose.yml` starts both the API container and the dedicated
+Redis container for this service.
 
 ```bash
 cp deploy/production/server-claude.env.api.example .env.api
-docker compose up -d --build
+docker compose --env-file .env.api up -d --build
+```
+
+If you run Redis outside the root compose stack, make sure `.env.api` points to
+that external Redis URL instead of `ppt-master-claude-redis`.
+
+## Start API Only
+
+```bash
+docker compose --env-file .env.api up -d --build ppt-master-claude-api
 ```
 
 Then verify:
@@ -90,7 +97,7 @@ Expected checks:
 - `redis.available` is `true`.
 - `apiKeyPool.configured` is `true`.
 - `apiKeyPool.required` is `true`.
-- `apiKeyPool.accounts` has 10 entries.
+- `apiKeyPool.accounts` has 5 entries on a normal production node.
 
 ## Callback
 
