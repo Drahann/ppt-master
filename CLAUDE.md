@@ -36,7 +36,7 @@ The automation runner builds a byte-stable `PPT_MASTER_COMMON_PREFIX_V1` shared 
 
 ```bash
 python skills/ppt-master/scripts/api_ppt.py generate postppt.json --project-name demo --renderer local
-python skills/ppt-master/scripts/api_ppt.py generate postppt.json --project-name demo --cache-prime --svg-workers 6 --svg-batch-size 5
+python skills/ppt-master/scripts/api_ppt.py generate postppt.json --project-name demo --cache-prime --svg-workers 8 --svg-batch-size 4
 python skills/ppt-master/scripts/total_md_split.py <project_path>
 python skills/ppt-master/scripts/finalize_svg.py <project_path>
 python skills/ppt-master/scripts/svg_to_pptx.py <project_path> -s final

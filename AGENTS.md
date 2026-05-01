@@ -2,8 +2,6 @@
 
 This file is the project entry point for general AI agents.
 
-For local current-state onboarding, read `AGENT_CONTEXT.md` when it exists. It is a local-only ignored file for coding-session continuity. If this file's legacy summaries conflict with `skills/ppt-master/SKILL.md`, prefer `SKILL.md`.
-
 Before any PPT generation task, **you MUST first read [`skills/ppt-master/SKILL.md`](skills/ppt-master/SKILL.md)** — the authoritative workflow for project creation, role switching, serial execution, quality gates, post-processing, and export.
 
 ## Project Overview
