@@ -270,8 +270,7 @@ def build_svg_prompt_prefix(project_path: Path, deck: Deck, canvas_format: str, 
 Task family: SVG page generation.
 
 Stable rules:
-- For a single-page task, return exactly one complete SVG document and no prose.
-- For a batch task, return exactly one complete SVG document per requested slide using the batch markers specified by that task, and no extra prose.
+- Return exactly one complete SVG document and no prose.
 - Do not use layout templates.
 - Use `width="{canvas['viewbox'].split()[2]}" height="{canvas['viewbox'].split()[3]}" viewBox="{canvas['viewbox']}"`.
 - Use only colors, fonts, icon inventory, and image filenames listed in spec_lock.json.
@@ -731,11 +730,6 @@ def generate_claude_batch(
     claude_retries: int,
     logger: UsageLogger | None,
 ) -> None:
-    pending = [
-        slide
-        for slide in slides
-        if not ((project_path / "svg_output" / slide.svg_filename).exists() and (project_path / "svg_output" / slide.svg_filename).stat().st_size > 0)
-    ]
     if logger:
         logger.log(
             "claude_batch",
@@ -743,129 +737,8 @@ def generate_claude_batch(
             ok=True,
             event="start",
             slides=[slide.svg_filename for slide in slides],
-            pending=[slide.svg_filename for slide in pending],
         )
-
     for slide in slides:
-        if slide not in pending and logger:
-            logger.log("claude_svg", slide=slide.svg_filename, ok=True, skipped=True, batch=batch_index)
-
-    batch_prompt_dir = project_path / "prompts" / "svg_batches"
-    batch_prompt_dir.mkdir(parents=True, exist_ok=True)
-    batch_env = scoped_claude_env(env, f"batch_{batch_index:02d}")
-    attempts = max(1, claude_retries + 1)
-    repair_reason: str | None = None
-
-    for attempt in range(1, attempts + 1):
-        if not pending:
-            break
-        prompt = build_svg_batch_prompt(prefix, pending, repair_reason=repair_reason)
-        (batch_prompt_dir / f"batch_{batch_index:02d}.attempt{attempt}.md").write_text(prompt, encoding="utf-8")
-        stdout = ""
-        stderr = ""
-        returncode = 1
-        duration = 0.0
-        usage: dict[str, Any] = {}
-        text = ""
-        parsed: dict[str, str] = {}
-        parse_errors: dict[str, str] = {}
-        try:
-            stdout, stderr, returncode, duration = run_claude_print(
-                [
-                    claude_exe,
-                    "-p",
-                    "--output-format",
-                    "json",
-                    "--input-format",
-                    "text",
-                    "--tools=",
-                ],
-                prompt=prompt,
-                cwd=project_path,
-                env=batch_env,
-                timeout=claude_timeout,
-            )
-            text, usage = parse_claude_json_output(stdout)
-            if returncode != 0:
-                (project_path / "logs" / f"claude_batch_{batch_index:02d}.attempt{attempt}.stderr.txt").write_text(stderr, encoding="utf-8")
-                (project_path / "logs" / f"claude_batch_{batch_index:02d}.attempt{attempt}.stdout.txt").write_text(stdout, encoding="utf-8")
-                raise GenerationError(f"Claude batch SVG generation failed: {(stderr or stdout).strip()}")
-            parsed, parse_errors = parse_svg_batch_output(text, pending)
-        except Exception as exc:
-            parse_errors = {slide.svg_filename: str(exc) for slide in pending}
-
-        completed: list[str] = []
-        for slide in list(pending):
-            svg = parsed.get(slide.svg_filename)
-            if not svg:
-                continue
-            output_path = project_path / "svg_output" / slide.svg_filename
-            output_path.write_text(svg, encoding="utf-8")
-            completed.append(slide.svg_filename)
-            if logger:
-                logger.log(
-                    "claude_svg",
-                    slide=slide.svg_filename,
-                    ok=True,
-                    from_batch=True,
-                    usage_scope="batch",
-                    batch=batch_index,
-                    batch_attempt=attempt,
-                    output_chars=len(svg),
-                )
-
-        pending = [slide for slide in pending if slide.svg_filename not in completed]
-        missing_or_invalid = {slide.svg_filename: parse_errors.get(slide.svg_filename, "Batch output did not include this SVG document.") for slide in pending}
-        ok = not pending and returncode == 0
-        if logger:
-            logger.log_transcript(
-                "claude_batch_svg",
-                prompt=prompt,
-                response=text,
-                stdout=stdout,
-                stderr=stderr,
-                metadata={
-                    "batch": batch_index,
-                    "attempt": attempt,
-                    "ok": ok,
-                    "returncode": returncode,
-                    "duration_seconds": round(duration, 3),
-                    "usage": usage,
-                    "requested_slides": [slide.svg_filename for slide in slides],
-                    "completed_slides": completed,
-                    "pending_slides": [slide.svg_filename for slide in pending],
-                    "validation_errors": missing_or_invalid,
-                },
-            )
-            logger.log(
-                "claude_batch_svg",
-                batch=batch_index,
-                attempt=attempt,
-                ok=ok,
-                usage=usage,
-                duration_seconds=round(duration, 3),
-                prompt_chars=len(prompt),
-                output_chars=len(stdout),
-                requested_slides=[slide.svg_filename for slide in slides],
-                completed_slides=completed,
-                pending_slides=[slide.svg_filename for slide in pending],
-                validation_errors=missing_or_invalid,
-                retrying=bool(pending and attempt < attempts),
-            )
-        if pending and attempt < attempts:
-            repair_reason = "\n".join(f"- {name}: {reason}" for name, reason in missing_or_invalid.items())
-            time.sleep(min(30, 5 * attempt))
-
-    for slide in pending:
-        if logger:
-            logger.log(
-                "claude_svg",
-                slide=slide.svg_filename,
-                ok=False,
-                error="Batch generation did not produce a valid SVG; falling back to single-slide generation.",
-                batch=batch_index,
-                fallback=True,
-            )
         generate_claude_slide(
             slide=slide,
             project_path=project_path,
