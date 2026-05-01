@@ -80,6 +80,7 @@ tramp
 # *.svg
 
 # Working drafts and notes (root-level only — project notes/ subdirs are tracked)
+/AGENT_CONTEXT.md
 /drafts/
 /notes/
 /scratch/
