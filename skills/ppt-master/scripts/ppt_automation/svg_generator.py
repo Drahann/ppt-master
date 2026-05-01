@@ -318,44 +318,6 @@ Current page source Markdown:
 """
 
 
-def build_svg_batch_prompt(prefix: str, slides: list[Slide], *, repair_reason: str | None = None) -> str:
-    slide_blocks: list[str] = []
-    for slide in slides:
-        slide_blocks.append(
-            f"""FILE: {slide.svg_filename}
-Slide number: P{slide.index:02d}
-Slide title: {slide.title}
-Current page source Markdown:
-```markdown
-{slide.raw_markdown}
-```"""
-        )
-    repair_block = ""
-    if repair_reason:
-        repair_block = f"""
-
-Continuation/repair context:
-{repair_reason}
-Generate only the files listed below. Do not repeat files that already succeeded.
-"""
-    return f"""{prefix}
-
-Current batch task:
-- Write exactly {len(slides)} complete SVG documents, one for each requested file below.
-- Return no prose, no markdown fences, and no progress notes.
-- Use this exact repeated output format for each file:
-FILE: filename.svg
-<svg ...>...</svg>
-END_FILE
-- Each SVG must be complete, standalone, XML-valid, and must use the correct slide content.
-- Do not merge multiple slides into one SVG.
-{repair_block}
-Requested files:
-
-{chr(10).join(slide_blocks)}
-"""
-
-
 def write_prompt_files(project_path: Path, deck: Deck, canvas_format: str, style: str) -> None:
     prompt_dir = project_path / "prompts"
     prompt_dir.mkdir(parents=True, exist_ok=True)
@@ -399,77 +361,6 @@ def extract_svg(text: str) -> str:
     except ET.ParseError as exc:
         raise GenerationError(f"Claude output contained invalid SVG XML: {exc}") from exc
     return svg
-
-
-def extract_svg_documents(text: str) -> list[str]:
-    """Extract every complete SVG document from a model response."""
-
-    normalized_text = normalize_svg_text(text)
-    documents: list[str] = []
-    cursor = 0
-    while True:
-        start = normalized_text.find("<svg", cursor)
-        if start < 0:
-            break
-        end = normalized_text.find("</svg>", start)
-        if end < 0:
-            break
-        end += len("</svg>")
-        documents.append(extract_svg(normalized_text[start:end]))
-        cursor = end
-    return documents
-
-
-def normalize_svg_filename(value: str) -> str:
-    cleaned = value.strip().strip("`").strip()
-    cleaned = cleaned.replace("\\", "/").split("/")[-1]
-    return cleaned.strip()
-
-
-def parse_svg_batch_output(text: str, slides: list[Slide]) -> tuple[dict[str, str], dict[str, str]]:
-    """Parse a batch response into validated SVGs keyed by expected filename.
-
-    The preferred model contract uses `FILE: name.svg` markers. If the model
-    omits markers but returns the right number of SVG documents, fall back to
-    assigning documents by requested slide order.
-    """
-
-    expected = {slide.svg_filename: slide for slide in slides}
-    parsed: dict[str, str] = {}
-    errors: dict[str, str] = {}
-    marker_pattern = re.compile(r"(?im)^\s*FILE:\s*`?([^`\r\n]+?\.svg)`?\s*$")
-    matches = list(marker_pattern.finditer(text))
-
-    for index, match in enumerate(matches):
-        filename = normalize_svg_filename(match.group(1))
-        if filename not in expected:
-            continue
-        segment_end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-        segment = text[match.end() : segment_end]
-        try:
-            parsed[filename] = extract_svg(segment)
-        except Exception as exc:
-            errors[filename] = str(exc)
-
-    if not parsed and not matches:
-        try:
-            documents = extract_svg_documents(text)
-        except Exception as exc:
-            documents = []
-            errors["__batch__"] = str(exc)
-        if len(documents) == len(slides):
-            parsed = {slide.svg_filename: svg for slide, svg in zip(slides, documents)}
-        elif documents:
-            for slide, svg in zip(slides, documents):
-                parsed[slide.svg_filename] = svg
-            if len(documents) < len(slides):
-                for slide in slides[len(documents) :]:
-                    errors[slide.svg_filename] = "Batch output did not include this SVG document."
-
-    for slide in slides:
-        if slide.svg_filename not in parsed and slide.svg_filename not in errors:
-            errors[slide.svg_filename] = "Batch output did not include this SVG document."
-    return parsed, errors
 
 
 def parse_claude_json_output(stdout: str) -> tuple[str, dict[str, Any]]:

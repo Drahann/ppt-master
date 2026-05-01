@@ -8,7 +8,7 @@ description: >
 
 # PPT Master Skill
 
-> PPT Master now defaults to an automation-first pipeline: Markdown/JSON input → design plan → batch-generated per-slide SVG → quality report → PPTX export.
+> PPT Master now defaults to an automation-first pipeline: Markdown/JSON input → design plan → parallel per-slide SVG → quality report → PPTX export.
 
 ## Default Pipeline
 

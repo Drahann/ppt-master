@@ -82,20 +82,20 @@ def normalize_to_relative(url: str) -> str:
 
 
 def build_result_zip(
-    native_pptx_path: Path,
+    source_han_native_pptx_path: Path | None,
     notes_path: Path | None,
     title: str,
-    source_han_native_pptx_path: Path | None = None,
 ) -> bytes:
+    if not source_han_native_pptx_path or not source_han_native_pptx_path.exists():
+        raise RuntimeError(f"missing Source Han PPTX for result zip: {source_han_native_pptx_path}")
+
     safe_title = sanitize_title(title)
     notes_text = ""
     if notes_path and notes_path.exists():
         notes_text = notes_markdown_to_text(notes_path.read_text(encoding="utf-8", errors="replace"))
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(f"{safe_title}.pptx", native_pptx_path.read_bytes())
-        if source_han_native_pptx_path and source_han_native_pptx_path.exists():
-            archive.writestr(f"{safe_title}_思源版.pptx", source_han_native_pptx_path.read_bytes())
+        archive.writestr(f"{safe_title}_思源版.pptx", source_han_native_pptx_path.read_bytes())
         archive.writestr(f"{safe_title}_讲解文稿.txt", "\ufeff" + notes_text)
     return buffer.getvalue()
 
