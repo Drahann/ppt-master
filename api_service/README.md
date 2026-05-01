@@ -44,3 +44,7 @@ python skills/ppt-master/scripts/api_ppt.py generate <source.md> \
 ```
 
 DeepSeek keys are injected from the account lease into child process environment variables, not passed on the command line.
+
+SVG generation is scheduled per slide. `--svg-workers` is the actual concurrent
+Claude process limit; `--svg-batch-size` only keeps logical batch metadata in
+logs and does not bind a worker slot to a whole batch.

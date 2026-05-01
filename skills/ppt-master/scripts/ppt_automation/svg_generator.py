@@ -471,9 +471,16 @@ def run_claude_print(command: list[str], *, prompt: str, cwd: Path, env: dict[st
         time.sleep(min(8.0, 0.75 * lock_attempt) + random.uniform(0.1, 0.6))
 
 
-def chunk_slides(slides: list[Slide], batch_size: int) -> list[list[Slide]]:
+def group_slide_jobs(slides: list[Slide], batch_size: int) -> list[tuple[int, Slide]]:
     size = max(1, batch_size)
-    return [slides[index : index + size] for index in range(0, len(slides), size)]
+    return [((index // size) + 1, slide) for index, slide in enumerate(slides)]
+
+
+def group_jobs_by_batch(jobs: list[tuple[int, Slide]]) -> dict[int, list[Slide]]:
+    grouped: dict[int, list[Slide]] = {}
+    for batch_index, slide in jobs:
+        grouped.setdefault(batch_index, []).append(slide)
+    return grouped
 
 
 def generate_claude_slide(
@@ -487,6 +494,7 @@ def generate_claude_slide(
     claude_retries: int,
     logger: UsageLogger | None,
     batch_index: int | None = None,
+    scope_id: str | None = None,
 ) -> None:
     output_path = project_path / "svg_output" / slide.svg_filename
     if output_path.exists() and output_path.stat().st_size > 0:
@@ -494,7 +502,7 @@ def generate_claude_slide(
             logger.log("claude_svg", slide=slide.svg_filename, ok=True, skipped=True, batch=batch_index)
         return
     prompt = build_svg_prompt(prefix, slide)
-    claude_env = scoped_claude_env(env, f"batch_{batch_index or 0:02d}")
+    claude_env = scoped_claude_env(env, scope_id or f"slide_{slide.index:02d}_{slide.stem}")
     attempts = max(1, claude_retries + 1)
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
@@ -609,42 +617,6 @@ def generate_claude_slide(
             raise last_error
 
 
-def generate_claude_batch(
-    *,
-    slides: list[Slide],
-    batch_index: int,
-    project_path: Path,
-    prefix: str,
-    claude_exe: str,
-    env: dict[str, str],
-    claude_timeout: int,
-    claude_retries: int,
-    logger: UsageLogger | None,
-) -> None:
-    if logger:
-        logger.log(
-            "claude_batch",
-            batch=batch_index,
-            ok=True,
-            event="start",
-            slides=[slide.svg_filename for slide in slides],
-        )
-    for slide in slides:
-        generate_claude_slide(
-            slide=slide,
-            project_path=project_path,
-            prefix=prefix,
-            claude_exe=claude_exe,
-            env=env,
-            claude_timeout=claude_timeout,
-            claude_retries=claude_retries,
-            logger=logger,
-            batch_index=batch_index,
-        )
-    if logger:
-        logger.log("claude_batch", batch=batch_index, ok=True, event="finish", slides=len(slides))
-
-
 def generate_svg_files(
     *,
     project_path: Path,
@@ -747,30 +719,35 @@ def generate_svg_files(
             if logger:
                 logger.log("claude_cache_prime", ok=False, error=str(exc), prompt_chars=len(prime_prompt), scope="common_prefix")
     workers = max(1, svg_workers)
-    batches = chunk_slides(deck.slides, svg_batch_size)
-    if logger:
-        logger.log("claude_parallel", workers=workers, batch_size=svg_batch_size, batches=len(batches), slides=len(deck.slides))
-    if workers == 1 or len(batches) <= 1:
-        for batch_index, slides in enumerate(batches, start=1):
-            generate_claude_batch(
-                slides=slides,
-                batch_index=batch_index,
-                project_path=project_path,
-                prefix=prefix,
-                claude_exe=claude_exe,
-                env=env,
-                claude_timeout=claude_timeout,
-                claude_retries=claude_retries,
-                logger=logger,
-            )
+    jobs = group_slide_jobs(deck.slides, svg_batch_size)
+    if not jobs:
         return
+    batches = group_jobs_by_batch(jobs)
+    if logger:
+        logger.log(
+            "claude_parallel",
+            workers=workers,
+            batch_size=svg_batch_size,
+            batches=len(batches),
+            slides=len(deck.slides),
+            scheduler="slide",
+        )
+        for batch_index, slides in batches.items():
+            logger.log(
+                "claude_batch",
+                batch=batch_index,
+                ok=True,
+                event="scheduled",
+                scheduler="slide",
+                slides=[slide.svg_filename for slide in slides],
+            )
 
-    with ThreadPoolExecutor(max_workers=min(workers, len(batches))) as executor:
-        futures = [
+    remaining_by_batch = {batch_index: len(slides) for batch_index, slides in batches.items()}
+    with ThreadPoolExecutor(max_workers=min(workers, len(jobs))) as executor:
+        futures = {
             executor.submit(
-                generate_claude_batch,
-                slides=slides,
-                batch_index=batch_index,
+                generate_claude_slide,
+                slide=slide,
                 project_path=project_path,
                 prefix=prefix,
                 claude_exe=claude_exe,
@@ -778,8 +755,21 @@ def generate_svg_files(
                 claude_timeout=claude_timeout,
                 claude_retries=claude_retries,
                 logger=logger,
-            )
-            for batch_index, slides in enumerate(batches, start=1)
-        ]
+                batch_index=batch_index,
+                scope_id=f"slide_{slide.index:02d}_{slide.stem}",
+            ): batch_index
+            for batch_index, slide in jobs
+        }
         for future in as_completed(futures):
+            batch_index = futures[future]
             future.result()
+            remaining_by_batch[batch_index] -= 1
+            if logger and remaining_by_batch[batch_index] == 0:
+                logger.log(
+                    "claude_batch",
+                    batch=batch_index,
+                    ok=True,
+                    event="finish",
+                    scheduler="slide",
+                    slides=len(batches[batch_index]),
+                )
