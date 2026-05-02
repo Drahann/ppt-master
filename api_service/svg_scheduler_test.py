@@ -37,6 +37,7 @@ from qwen_ppt_runner import (  # type: ignore  # noqa: E402
     rewrite_svg_text_fonts_to_source_han,
     select_export_font_profile,
     split_plan_into_batches,
+    svg_contains_pie_or_donut_chart,
     validate_design_spec,
     validate_svg_outputs,
 )
@@ -669,6 +670,31 @@ class PieChartReviewIssueTests(unittest.TestCase):
             self.assertEqual([item["file"] for item in issues], ["slide_01.svg"])
             self.assertTrue(any("sector" in error.lower() for error in issues[0]["errors"]))
 
+    def test_collects_pie_chart_for_visual_review_even_without_checker_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            svg_dir = project / "svg_output"
+            runner_dir = project / "runner"
+            svg_dir.mkdir(parents=True)
+            runner_dir.mkdir(parents=True)
+            (svg_dir / "slide_01.svg").write_text(
+                """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+<g id="donut-chart-area">
+  <path d="M 0,-100 A 100,100 0 0,1 86.6,50 L 43.3,25 A 50,50 0 0,0 0,-50 Z"/>
+  <path d="M 86.6,50 A 100,100 0 0,1 -86.6,50 L -43.3,25 A 50,50 0 0,0 43.3,25 Z"/>
+</g>
+</svg>
+""",
+                encoding="utf-8",
+            )
+
+            issues = collect_pie_chart_review_issues(project, runner_dir)
+
+            self.assertEqual([item["file"] for item in issues], ["slide_01.svg"])
+            self.assertEqual(issues[0]["errors"], [])
+            self.assertEqual(issues[0]["review_reason"], "pie_or_donut_chart_detected_visual_review_required")
+            self.assertTrue(svg_contains_pie_or_donut_chart((svg_dir / "slide_01.svg").read_text(encoding="utf-8")))
+
     def test_pie_chart_review_state_accepts_valid_report_without_spec_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp) / "project"
@@ -868,6 +894,44 @@ workflows, and immersive interaction scenarios with enough English source text.
 
             self.assertEqual(plan[0].heading, "Cover")
             self.assertEqual(plan[-1].heading, "Ending")
+
+    def test_english_innovation_technology_expands_h3_slides(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            markdown_path = Path(tmp) / "source.md"
+            markdown_path.write_text(
+                """# Longying Data Glove
+
+## Innovation Technology
+Introductory context that should be absorbed into the first child slide.
+
+### Flexible Sensing Stack
+This section explains the hybrid fiber optic strain detection and IMU fusion architecture.
+
+### Hierarchical Gesture Model
+This section explains the robust multi-window segmentation and context-aware recognition model.
+
+## Business Model
+This section explains platform licensing and enterprise deployment.
+""",
+                encoding="utf-8",
+            )
+            request = {
+                "rules": {
+                    "include_cover": False,
+                    "include_ending": False,
+                    "pagination": {"expand_h2_titles": ["创新技术", "产业验证"]},
+                }
+            }
+
+            plan = build_slide_plan(request, markdown_path)
+
+            self.assertEqual(
+                [entry.heading for entry in plan],
+                ["Flexible Sensing Stack", "Hierarchical Gesture Model", "Business Model"],
+            )
+            self.assertEqual(plan[0].source_h2, "Innovation Technology")
+            self.assertEqual(plan[0].source_h3, "Flexible Sensing Stack")
+            self.assertTrue(plan[0].absorb_parent_intro)
 
 
 class FontExportTests(unittest.TestCase):

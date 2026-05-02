@@ -236,8 +236,32 @@ DEFAULT_RULES: dict[str, Any] = {
     "highlight_key_points": True,
     "pagination": {
         "default": "each_h2_one_slide",
-        "expand_h2_titles": ["创新技术", "产业验证"],
+        "expand_h2_titles": ["创新技术", "Innovation Technology", "产业验证", "Industry Validation"],
         "expand_rule": "each_h3_one_slide_no_parent_h2_slide",
+    },
+}
+
+EXPAND_H2_TITLE_ALIASES = {
+    "创新技术": {
+        "创新技术",
+        "创新科技",
+        "innovation technology",
+        "innovative technology",
+        "innovation technologies",
+        "innovation tech",
+        "technology innovation",
+        "technical innovation",
+        "technological innovation",
+    },
+    "产业验证": {
+        "产业验证",
+        "行业验证",
+        "industrial validation",
+        "industry validation",
+        "industry verification",
+        "industry proof",
+        "market validation",
+        "commercial validation",
     },
 }
 
@@ -3022,6 +3046,26 @@ def get_content_slides(plan: list[SlidePlanEntry]) -> list[SlidePlanEntry]:
     return [entry for entry in plan if entry.kind == "content"]
 
 
+def normalize_heading_for_matching(value: str) -> str:
+    lowered = value.strip().lower()
+    lowered = re.sub(r"[\s_\-–—/:：|]+", " ", lowered)
+    lowered = re.sub(r"[^\w\u3400-\u4dbf\u4e00-\u9fff\s]+", "", lowered)
+    return re.sub(r"\s+", " ", lowered).strip()
+
+
+def build_expand_heading_match_set(expand_titles: set[str]) -> set[str]:
+    normalized = {normalize_heading_for_matching(title) for title in expand_titles if title}
+    for canonical, aliases in EXPAND_H2_TITLE_ALIASES.items():
+        alias_keys = {normalize_heading_for_matching(alias) for alias in aliases}
+        if normalize_heading_for_matching(canonical) in normalized or normalized.intersection(alias_keys):
+            normalized.update(alias_keys)
+    return normalized
+
+
+def section_should_expand_by_h3(section_title: str, expand_heading_keys: set[str]) -> bool:
+    return normalize_heading_for_matching(section_title) in expand_heading_keys
+
+
 def build_slide_plan(request: dict[str, Any], markdown_path: Path) -> list[SlidePlanEntry]:
     sections = parse_markdown_structure(markdown_path)
     if not sections:
@@ -3033,6 +3077,7 @@ def build_slide_plan(request: dict[str, Any], markdown_path: Path) -> list[Slide
     ending_heading = "Ending" if source_is_english else "结尾页"
     rules = request["rules"]
     expand_titles = set(rules["pagination"]["expand_h2_titles"])
+    expand_heading_keys = build_expand_heading_match_set(expand_titles)
     include_cover = bool(rules["include_cover"])
     include_ending = bool(rules["include_ending"])
 
@@ -3053,7 +3098,7 @@ def build_slide_plan(request: dict[str, Any], markdown_path: Path) -> list[Slide
     for section in sections:
         if is_resource_only_heading(section.title):
             continue
-        should_expand = section.title in expand_titles and section.children
+        should_expand = section_should_expand_by_h3(section.title, expand_heading_keys) and section.children
         if should_expand:
             for idx, child in enumerate(section.children):
                 content_counter += 1
@@ -3969,6 +4014,22 @@ def is_chart_geometry_issue(error_msg: str) -> bool:
     )
 
 
+PIE_DONUT_ATTR_RE = re.compile(
+    r'\b(?:id|class|data-[\w:-]+|aria-label)="[^"]*(?:pie|donut|chart-pie)[^"]*"',
+    re.IGNORECASE,
+)
+PIE_DONUT_WEDGE_PATH_RE = re.compile(
+    r"<path\b[^>]*\bd=[\"'][^\"']*\bA\b[^\"']*\bL\b[^\"']*\bZ\b[^\"']*[\"']",
+    re.IGNORECASE,
+)
+
+
+def svg_contains_pie_or_donut_chart(svg_text: str) -> bool:
+    if "chart-pie" in svg_text.lower() or PIE_DONUT_ATTR_RE.search(svg_text):
+        return True
+    return len(PIE_DONUT_WEDGE_PATH_RE.findall(svg_text)) >= 2
+
+
 def collect_svg_quality_results(
     project_path: Path,
     *,
@@ -4001,7 +4062,7 @@ def collect_svg_quality_results(
     return list(checker.results)
 
 
-def collect_pie_chart_review_issues(
+def collect_pie_chart_review_targets(
     project_path: Path,
     runner_dir: Path,
     *,
@@ -4009,7 +4070,13 @@ def collect_pie_chart_review_issues(
     log_path: Path | None = None,
     target_files: set[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return SVG C7 pie/donut chart geometry issues for the AI review gate."""
+    """Return SVG files that need pie/donut AI review.
+
+    Deterministic C7 errors are included when present. If the checker sees no
+    error but the SVG contains a pie/donut chart, the file is still returned for
+    visual AI review because pie geometry can be visually wrong while passing
+    the structural checker.
+    """
     quality_report_path = report_path or (runner_dir / SVG_QUALITY_REPORT_FILENAME)
     try:
         results = collect_svg_quality_results(
@@ -4022,26 +4089,51 @@ def collect_pie_chart_review_issues(
             append_log(log_path, f"Pie chart review issue scan failed: {exc}")
         raise
 
-    issues: list[dict[str, Any]] = []
+    targets: list[dict[str, Any]] = []
     for result in results:
         errors = result.get("errors") if isinstance(result, dict) else None
-        if not isinstance(errors, list):
-            continue
-        chart_errors = [str(item) for item in errors if is_chart_geometry_issue(str(item))]
-        if not chart_errors:
-            continue
+        chart_errors = [str(item) for item in errors if is_chart_geometry_issue(str(item))] if isinstance(errors, list) else []
         file_name = str(result.get("file") or "")
-        svg_path = result.get("path")
-        if not svg_path:
-            svg_path = str(project_path / "svg_output" / file_name)
-        issues.append(
+        svg_path_raw = result.get("path")
+        svg_path = Path(str(svg_path_raw)) if svg_path_raw else project_path / "svg_output" / file_name
+        try:
+            svg_text = svg_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            svg_text = ""
+        contains_pie_chart = svg_contains_pie_or_donut_chart(svg_text)
+        if not chart_errors and not contains_pie_chart:
+            continue
+        targets.append(
             {
                 "file": file_name,
                 "path": str(svg_path),
                 "errors": chart_errors,
+                "review_reason": (
+                    "deterministic_c7_geometry_error"
+                    if chart_errors
+                    else "pie_or_donut_chart_detected_visual_review_required"
+                ),
             }
         )
-    return issues
+    return targets
+
+
+def collect_pie_chart_review_issues(
+    project_path: Path,
+    runner_dir: Path,
+    *,
+    report_path: Path | None = None,
+    log_path: Path | None = None,
+    target_files: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Compatibility wrapper for the pie/donut review target collector."""
+    return collect_pie_chart_review_targets(
+        project_path,
+        runner_dir,
+        report_path=report_path,
+        log_path=log_path,
+        target_files=target_files,
+    )
 
 
 def build_pie_chart_review_input(
@@ -4080,7 +4172,7 @@ def check_pie_chart_review_state(
     log_path: Path | None = None,
 ) -> tuple[bool, list[str]]:
     errors: list[str] = []
-    issues = collect_pie_chart_review_issues(
+    issues = collect_pie_chart_review_targets(
         project_path,
         runner_dir,
         report_path=quality_report_path,
@@ -4451,7 +4543,7 @@ Hard constraints:
 - Stay faithful to the source markdown and emphasize key points
 {LANGUAGE_CONSISTENCY_RULE}
 {SPEC_FONT_POLICY_RULE}
-- For H2 `创新技术` and `产业验证`, do not create a parent H2 slide; create one slide per H3 instead.
+- For H2 `创新技术` / `Innovation Technology` and `产业验证` / `Industry Validation`, do not create a parent H2 slide; create one slide per H3 instead.
 - If those H2 sections contain intro text before the first H3, absorb that intro into the first child slide.
 - For all other H2 sections, create one slide per H2 and absorb H3 details into that slide.
 
@@ -4932,7 +5024,9 @@ Review boundaries:
 - Do NOT run `svg_auto_repair.py` for pie/donut geometry; this gate exists because script-based pie repair is disabled
 
 Repair goal:
-- Fix only the C7 pie/donut chart geometry errors listed in `{review_input_path.name}`
+- Review every target SVG listed in `{review_input_path.name}`. Some targets may have deterministic C7 errors; others are included because they contain a pie/donut chart that needs visual AI review even though the script did not flag it.
+- For targets with listed C7 pie/donut chart geometry errors, fix those errors.
+- For targets without listed errors, inspect the pie/donut chart for likely visual problems: overlapping or detached sectors, wrong arc direction, missing/incorrect inner hole, label-line mismatch, impossible proportions, clipping, and unreadable label placement. Fix concrete issues; if the chart is visually sound, leave the SVG unchanged and record that decision.
 - Preserve the existing page composition, text, color roles, header/footer anchors, and source language
 - Preserve existing font-family values unless a font edit is required by the target geometry fix
 - Recompute arc endpoints and mask radii carefully; use the checker-provided corrected coordinates as evidence, but keep the SVG visually coherent
@@ -4951,7 +5045,7 @@ Output requirements:
 - After writing the required files, do not output any explanation, summary, file list, or confirmation text.
 - The only allowed final assistant output is the sentinel line below.
 
-When all listed pie/donut chart geometry issues are fixed, print exactly:
+When every target pie/donut chart has been reviewed and any concrete issues have been fixed, print exactly:
 {PIE_CHART_REVIEW_COMPLETION_SENTINEL_PREFIX} {project_path}
 """
 
@@ -4976,7 +5070,8 @@ Repair only:
 Keep the existing layout and visible text. Do not edit notes, design_spec.md, slide plan, or non-target SVGs.
 Preserve existing font-family values unless a font edit is required by the target geometry fix.
 Do not run `svg_auto_repair.py` for pie/donut geometry.
-When all listed C7 chart geometry issues are fixed and `{review_report_path.name}` is valid JSON, print exactly one line:
+If a target has no deterministic C7 error, still visually inspect the pie/donut chart and either fix concrete defects or record that no defect was found.
+When all target chart issues are reviewed/fixed and `{review_report_path.name}` is valid JSON, print exactly one line:
 {PIE_CHART_REVIEW_COMPLETION_SENTINEL_PREFIX} {project_path}
 """
 
@@ -6753,15 +6848,15 @@ def execute_pie_chart_review_stage(
             review_report_path,
             {
                 "status": "skipped",
-                "summary": "No C7 pie/donut chart geometry issues found after SVG generation.",
+                "summary": "No pie/donut chart targets found after SVG generation.",
                 "files_reviewed": [],
                 "issues_found": [],
                 "issues_fixed": [],
                 "remaining_risks": [],
             },
         )
-        append_log(log_path, f"Pie chart SVG review skipped ({safe_label}): no C7 chart geometry issues")
-        return f"skipped_no_pie_chart_issues_{safe_label}"
+        append_log(log_path, f"Pie chart SVG review skipped ({safe_label}): no pie/donut chart targets")
+        return f"skipped_no_pie_chart_targets_{safe_label}"
 
     prompt = build_pie_chart_review_prompt(
         project_path=project_path,
@@ -6780,7 +6875,10 @@ def execute_pie_chart_review_stage(
     append_log(
         log_path,
         f"Starting pie chart SVG review gate ({safe_label}) for files: "
-        + ", ".join(str(item.get("file")) for item in issues),
+        + ", ".join(
+            f"{item.get('file')}[{item.get('review_reason')}]"
+            for item in issues
+        ),
     )
     return execute_qwen_stage(
         stage_name=f"pie_chart_review_{safe_label}",
