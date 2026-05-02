@@ -42,6 +42,7 @@ from qwen_ppt_runner import (  # type: ignore  # noqa: E402
     validate_svg_outputs,
 )
 from svg_auto_repair import repair_svg_file  # type: ignore  # noqa: E402
+from svg_to_pptx.drawingml_elements import _build_run_xml  # type: ignore  # noqa: E402
 from svg_to_pptx.drawingml_utils import parse_font_family  # type: ignore  # noqa: E402
 
 
@@ -1027,6 +1028,39 @@ integration. The output presentation should remain in English.
         self.assertEqual(body_fonts, {"latin": "思源黑体", "ea": "思源黑体"})
         self.assertEqual(generic_fonts, {"latin": "Arial", "ea": "Microsoft YaHei"})
         self.assertEqual(default_fonts, {"latin": "Segoe UI", "ea": "Microsoft YaHei"})
+
+    def test_english_export_fonts_do_not_write_yahei_ea_for_latin_text(self) -> None:
+        xml = _build_run_xml(
+            {
+                "text": "Product Overview",
+                "fill": "000000",
+                "font_weight": "400",
+                "font_size": 18,
+                "font_family": "Inter, Open Sans, Arial, sans-serif",
+                "font_style": "",
+            },
+            {"latin": "Segoe UI", "ea": "Microsoft YaHei"},
+        )
+
+        self.assertIn('<a:latin typeface="Inter"/>', xml)
+        self.assertIn('<a:ea typeface="Inter"/>', xml)
+        self.assertNotIn("Microsoft YaHei", xml)
+
+    def test_english_export_fonts_keep_cjk_fallback_for_cjk_text(self) -> None:
+        xml = _build_run_xml(
+            {
+                "text": "产品概览",
+                "fill": "000000",
+                "font_weight": "400",
+                "font_size": 18,
+                "font_family": "Inter, Open Sans, Arial, sans-serif",
+                "font_style": "",
+            },
+            {"latin": "Segoe UI", "ea": "Microsoft YaHei"},
+        )
+
+        self.assertIn('<a:latin typeface="Inter"/>', xml)
+        self.assertIn('<a:ea typeface="Microsoft YaHei"/>', xml)
 
 
 class ResultPackagingTests(unittest.TestCase):

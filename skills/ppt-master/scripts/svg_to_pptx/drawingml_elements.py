@@ -28,6 +28,15 @@ from .drawingml_paths import (
 )
 
 
+ENGLISH_EXPORT_FONTS = {
+    'Montserrat',
+    'Inter',
+    'Roboto',
+    'Poppins',
+    'Open Sans',
+}
+
+
 def _wrap_shape(
     shape_id: int, name: str,
     off_x: int, off_y: int,
@@ -708,6 +717,8 @@ def _build_run_xml(
     strike_attr = ' strike="sngStrike"' if 'line-through' in text_dec else ''
 
     fonts = parse_font_family(ff) if ff else default_fonts
+    if fonts['latin'] in ENGLISH_EXPORT_FONTS and not any(is_cjk_char(ch) for ch in text):
+        fonts = {**fonts, 'ea': fonts['latin']}
 
     # Build fill XML - gradient or solid
     grad_id = resolve_url_id(fill_raw)
