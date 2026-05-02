@@ -23,6 +23,9 @@ class RunnerResult:
     project_path: Path
     native_pptx_path: Path
     svg_pptx_path: Path | None
+    mapped_native_pptx_path: Path | None
+    mapped_svg_pptx_path: Path | None
+    mapped_font_profile: str | None
     source_han_native_pptx_path: Path | None
     source_han_svg_pptx_path: Path | None
     log_path: Path | None
@@ -120,6 +123,11 @@ def execute_runner(
     native_pptx_path = Path(payload["native_pptx_path"])
     svg_pptx_raw = payload.get("svg_pptx_path")
     svg_pptx_path = Path(svg_pptx_raw) if svg_pptx_raw else None
+    mapped_native_raw = payload.get("mapped_native_pptx_path") or payload.get("source_han_native_pptx_path")
+    mapped_native_pptx_path = Path(mapped_native_raw) if mapped_native_raw else None
+    mapped_svg_raw = payload.get("mapped_svg_pptx_path") or payload.get("source_han_svg_pptx_path")
+    mapped_svg_pptx_path = Path(mapped_svg_raw) if mapped_svg_raw else None
+    mapped_font_profile = payload.get("mapped_font_profile")
     source_han_native_raw = payload.get("source_han_native_pptx_path")
     source_han_native_pptx_path = Path(source_han_native_raw) if source_han_native_raw else None
     source_han_svg_raw = payload.get("source_han_svg_pptx_path")
@@ -133,6 +141,9 @@ def execute_runner(
         project_path=project_path,
         native_pptx_path=native_pptx_path,
         svg_pptx_path=svg_pptx_path,
+        mapped_native_pptx_path=mapped_native_pptx_path,
+        mapped_svg_pptx_path=mapped_svg_pptx_path,
+        mapped_font_profile=str(mapped_font_profile) if mapped_font_profile else None,
         source_han_native_pptx_path=source_han_native_pptx_path,
         source_han_svg_pptx_path=source_han_svg_pptx_path,
         log_path=log_path,

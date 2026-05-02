@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import sys
 import tempfile
 import time
 import unittest
+import zipfile
 from pathlib import Path
 
 from api_service.account_pool import (
@@ -16,6 +18,7 @@ from api_service.account_pool import (
 )
 from api_service.svg_scheduler import RedisSvgSchedulerStore, SvgBatchTask, SvgScheduler, compute_scheduler_grants
 from api_service.svg_scheduler import _merge_worker_request_credentials
+from api_service.storage import build_result_zip
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -25,12 +28,17 @@ if str(RUNNER_SCRIPTS_DIR) not in sys.path:
 
 from qwen_ppt_runner import (  # type: ignore  # noqa: E402
     SlidePlanEntry,
+    build_mapped_font_svg_export_variant,
+    build_slide_plan,
     build_source_han_svg_export_variant,
     check_pie_chart_review_state,
     collect_pie_chart_review_issues,
     is_chart_geometry_issue,
     rewrite_svg_text_fonts_to_source_han,
+    select_export_font_profile,
     split_plan_into_batches,
+    validate_design_spec,
+    validate_svg_outputs,
 )
 from svg_auto_repair import repair_svg_file  # type: ignore  # noqa: E402
 from svg_to_pptx.drawingml_utils import parse_font_family  # type: ignore  # noqa: E402
@@ -704,7 +712,180 @@ class PieChartReviewIssueTests(unittest.TestCase):
             self.assertFalse(report["modified"])
 
 
+class LanguageAndTypographyGuardTests(unittest.TestCase):
+    def _write_english_source(self, project_path: Path) -> None:
+        source_dir = project_path / "sources"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        source_dir.joinpath("source.md").write_text(
+            """# Longying Metaverse Multimodal Intelligent Data Glove
+
+## Product Overview
+The Longying Metaverse Multimodal Intelligent Data Glove combines flexible sensing,
+gesture recognition, tactile feedback, and low-latency wireless communication for
+industrial simulation, rehabilitation training, virtual production, and immersive
+human-computer interaction workflows.
+
+## Technical Architecture
+The product integrates a multi-sensor array, embedded signal processing, calibration
+algorithms, and a cloud-ready data interface. The presentation must keep the same
+English content language throughout the deck and should not translate visible slide
+copy into another language.
+""",
+            encoding="utf-8",
+        )
+
+    def _plan(self) -> list[SlidePlanEntry]:
+        return [
+            SlidePlanEntry(1, "slide_01_cover.svg", "Cover", "cover", None, None),
+            SlidePlanEntry(2, "slide_02_content_01.svg", "Product Overview", "content", "Product Overview", None),
+            SlidePlanEntry(3, "slide_03_ending.svg", "Ending", "ending", None, None),
+        ]
+
+    def _design_spec_text(self, outline: str, typography: str = "Use clean enterprise sans-serif fonts.") -> str:
+        return f"""## I. Project Information
+Project: Longying Metaverse Multimodal Intelligent Data Glove
+
+## II. Canvas Specification
+Format: ppt169
+
+## III. Visual Theme
+Light enterprise technology theme.
+
+## IV. Typography System
+{typography}
+
+## V. Layout Principles
+Stable header, clear title zone, and dense content layouts.
+
+## VI. Icon Usage
+| Slide | Icon Path |
+| --- | --- |
+| slide_02_content_01.svg | `chunk/activity` |
+| slide_02_content_01.svg | `chunk/accessibility` |
+| slide_02_content_01.svg | `chunk/anchor` |
+| slide_02_content_01.svg | `chunk/alarm-clock` |
+| slide_02_content_01.svg | `chunk/address-card` |
+| slide_02_content_01.svg | `chunk/angle-right` |
+
+## VII. Visualization Reference List
+No chart template is required.
+
+## VIII. Image Resource List
+No source images.
+
+## IX. Content Outline
+{outline}
+
+## X. Speaker Notes Requirements
+Use concise English speaker notes.
+
+## XI. Technical Constraints Reminder
+All SVG must be valid XML.
+"""
+
+    def test_design_spec_allows_arbitrary_font_mentions_for_english_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "project"
+            project_path.mkdir()
+            self._write_english_source(project_path)
+            typography = (
+                "Typography is advisory only. The spec may mention Microsoft YaHei, SimHei, "
+                "SimSun, Arial, Calibri, Consolas, Monaco, Source Han Sans SC, or any other "
+                "font family without causing spec rejection."
+            )
+            outline = """### Part 1: Product Overview
+- slide_02_content_01.svg: Explain the multimodal data glove, sensing stack, tactile feedback, and target use cases in English.
+"""
+            project_path.joinpath("design_spec.md").write_text(
+                self._design_spec_text(outline, typography),
+                encoding="utf-8",
+            )
+
+            errors = validate_design_spec(project_path, self._plan(), set(), strict_icons=False)
+
+            self.assertEqual(errors, [])
+
+    def test_design_spec_rejects_cjk_drift_for_english_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "project"
+            project_path.mkdir()
+            self._write_english_source(project_path)
+            chinese_outline = """### Part 1: 产品概览
+- slide_02_content_01.svg: 介绍龙颖元宇宙多模态智能数据手套的柔性传感、手势识别、触觉反馈、无线通信、工业仿真、康复训练、虚拟制作和沉浸式交互能力。
+- slide_02_content_01.svg: 强调产品通过多传感器阵列、嵌入式信号处理、校准算法和云端数据接口形成完整方案，适合高精度、低延迟和多场景部署。
+- slide_02_content_01.svg: 说明核心价值包括自然交互、实时反馈、开放集成、数据采集、平台兼容、商业落地和生态合作。
+"""
+            project_path.joinpath("design_spec.md").write_text(
+                self._design_spec_text(chinese_outline),
+                encoding="utf-8",
+            )
+
+            errors = validate_design_spec(project_path, self._plan(), set(), strict_icons=False)
+
+            self.assertTrue(any("language drift" in error for error in errors), errors)
+
+    def test_svg_visible_text_rejects_cjk_drift_for_english_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "project"
+            svg_dir = project_path / "svg_output"
+            svg_dir.mkdir(parents=True)
+            self._write_english_source(project_path)
+            svg_dir.joinpath("slide_02_content_01.svg").write_text(
+                """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+  <g data-icon="chunk/activity"></g>
+  <text x="80" y="100">产品概览与核心能力</text>
+  <text x="80" y="180">柔性传感、手势识别、触觉反馈、无线通信、工业仿真、康复训练、虚拟制作和沉浸式交互。</text>
+</svg>""",
+                encoding="utf-8",
+            )
+
+            errors = validate_svg_outputs(project_path, [self._plan()[1]], emoji_as_error=True)
+
+            self.assertTrue(any("language drift" in error for error in errors), errors)
+
+    def test_slide_plan_uses_english_cover_and_ending_for_english_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            markdown_path = Path(tmp) / "source.md"
+            markdown_path.write_text(
+                """# Longying Data Glove
+
+## Product Overview
+This English section describes the glove, sensing architecture, tactile feedback,
+wireless integration, software interface, industrial training use cases, rehabilitation
+workflows, and immersive interaction scenarios with enough English source text.
+""",
+                encoding="utf-8",
+            )
+            request = {
+                "rules": {
+                    "include_cover": True,
+                    "include_ending": True,
+                    "pagination": {"expand_h2_titles": []},
+                }
+            }
+
+            plan = build_slide_plan(request, markdown_path)
+
+            self.assertEqual(plan[0].heading, "Cover")
+            self.assertEqual(plan[-1].heading, "Ending")
+
+
 class FontExportTests(unittest.TestCase):
+    def _write_english_source(self, project_path: Path) -> None:
+        source_dir = project_path / "sources"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        source_dir.joinpath("source.md").write_text(
+            """# English Product Deck
+
+## Overview
+This English source describes a multimodal intelligent data glove, its sensing
+architecture, calibration workflow, tactile feedback loop, industrial simulation
+deployment, rehabilitation usage, virtual production scenario, and software platform
+integration. The output presentation should remain in English.
+""",
+            encoding="utf-8",
+        )
+
     def test_source_han_variant_is_built_from_svg_final_without_mutating_original(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             project_path = Path(temp_dir) / "deck"
@@ -727,6 +908,35 @@ class FontExportTests(unittest.TestCase):
             variant_svg = (variant_dir / "slide_01.svg").read_text(encoding="utf-8")
             self.assertIn('font-family="思源宋体, Source Han Serif SC"', variant_svg)
             self.assertIn('font-family="思源黑体, Source Han Sans SC"', variant_svg)
+
+    def test_english_export_variant_maps_four_font_roles(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_path = Path(temp_dir) / "deck"
+            svg_final = project_path / "svg_final"
+            svg_final.mkdir(parents=True)
+            self._write_english_source(project_path)
+            (svg_final / "slide_01.svg").write_text(
+                """<svg xmlns="http://www.w3.org/2000/svg">
+  <text x="60" y="80" font-family="Arial" font-size="44" font-weight="700">Product Overview</text>
+  <text x="60" y="180" font-family="Arial" font-size="20">Flexible sensing and tactile feedback</text>
+  <text x="60" y="250" font-family="Consolas" font-size="16">SDK.connect()</text>
+  <text x="60" y="320" font-family="Arial" font-size="28" font-weight="700">Low-latency interaction</text>
+</svg>""",
+                encoding="utf-8",
+            )
+            log_path = project_path / "runner.log"
+
+            profile = select_export_font_profile(project_path)
+            variant_dir = build_mapped_font_svg_export_variant(project_path, log_path, profile)
+
+            self.assertEqual(profile.key, "englishfonts")
+            self.assertEqual(variant_dir.name, "svg_final_englishfonts")
+            variant_svg = (variant_dir / "slide_01.svg").read_text(encoding="utf-8")
+            self.assertIn('font-family="Montserrat, Arial, sans-serif"', variant_svg)
+            self.assertIn('font-family="Inter, Open Sans, Arial, sans-serif"', variant_svg)
+            self.assertIn('font-family="Roboto, Consolas, Monaco, monospace"', variant_svg)
+            self.assertIn('font-family="Poppins, Inter, Arial, sans-serif"', variant_svg)
+            self.assertIn("Arial", (svg_final / "slide_01.svg").read_text(encoding="utf-8"))
 
     def test_source_han_svg_variant_rewrites_text_fonts(self) -> None:
         svg = """<svg xmlns="http://www.w3.org/2000/svg">
@@ -753,6 +963,26 @@ class FontExportTests(unittest.TestCase):
         self.assertEqual(body_fonts, {"latin": "思源黑体", "ea": "思源黑体"})
         self.assertEqual(generic_fonts, {"latin": "Arial", "ea": "Microsoft YaHei"})
         self.assertEqual(default_fonts, {"latin": "Segoe UI", "ea": "Microsoft YaHei"})
+
+
+class ResultPackagingTests(unittest.TestCase):
+    def test_result_zip_packages_only_mapped_pptx_when_available(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            native_pptx = base / "native.pptx"
+            mapped_pptx = base / "mapped.pptx"
+            notes_path = base / "notes.md"
+            native_pptx.write_bytes(b"native")
+            mapped_pptx.write_bytes(b"mapped")
+            notes_path.write_text("# slide_01\nSpeaker notes", encoding="utf-8")
+
+            zip_bytes = build_result_zip(native_pptx, notes_path, "Deck", mapped_pptx)
+
+            with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
+                names = archive.namelist()
+                self.assertIn("Deck.pptx", names)
+                self.assertNotIn("Deck_思源版.pptx", names)
+                self.assertEqual(archive.read("Deck.pptx"), b"mapped")
 
 
 if __name__ == "__main__":

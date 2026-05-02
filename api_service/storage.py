@@ -87,6 +87,8 @@ def build_result_zip(
     native_pptx_path: Path,
     notes_path: Path | None,
     title: str,
+    mapped_native_pptx_path: Path | None = None,
+    *,
     source_han_native_pptx_path: Path | None = None,
 ) -> bytes:
     safe_title = sanitize_title(title)
@@ -94,11 +96,11 @@ def build_result_zip(
     if notes_path and notes_path.exists():
         notes_text = notes_markdown_to_text(notes_path.read_text(encoding="utf-8", errors="replace"))
 
+    mapped_native_pptx_path = mapped_native_pptx_path or source_han_native_pptx_path
+    pptx_path = mapped_native_pptx_path if mapped_native_pptx_path and mapped_native_pptx_path.exists() else native_pptx_path
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(f"{safe_title}.pptx", native_pptx_path.read_bytes())
-        if source_han_native_pptx_path and source_han_native_pptx_path.exists():
-            archive.writestr(f"{safe_title}_\u601d\u6e90\u7248.pptx", source_han_native_pptx_path.read_bytes())
+        archive.writestr(f"{safe_title}.pptx", pptx_path.read_bytes())
         archive.writestr(f"{safe_title}_\u8bb2\u89e3\u6587\u7a3f.txt", "\ufeff" + notes_text)
     return buffer.getvalue()
 

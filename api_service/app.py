@@ -344,7 +344,7 @@ def _process_request(request: NormalizedRequest, job_id: str | None = None) -> d
                 runner_result.native_pptx_path,
                 notes_path,
                 runner_result.title,
-                runner_result.source_han_native_pptx_path,
+                runner_result.mapped_native_pptx_path or runner_result.source_han_native_pptx_path,
             )
 
             safe_title = sanitize_title(runner_result.title)
