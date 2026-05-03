@@ -6966,6 +6966,72 @@ def collect_pie_chart_review_futures(futures: list[Any], log_path: Path) -> list
     return session_ids
 
 
+def _pie_chart_review_files_from_payload(payload: Any) -> set[str]:
+    if not isinstance(payload, dict):
+        return set()
+    status = str(payload.get("status") or "").lower()
+    if status.startswith("skip"):
+        return set()
+    files_reviewed = payload.get("files_reviewed")
+    if not isinstance(files_reviewed, list):
+        return set()
+    reviewed: set[str] = set()
+    for item in files_reviewed:
+        if isinstance(item, str) and item:
+            reviewed.add(item)
+        elif isinstance(item, dict) and item.get("file"):
+            reviewed.add(str(item["file"]))
+    return reviewed
+
+
+def collect_async_pie_chart_review_summary(runner_dir: Path) -> tuple[set[str], dict[str, Any] | None]:
+    reviewed_files: set[str] = set()
+    summaries: list[dict[str, Any]] = []
+    issues_found: list[Any] = []
+    issues_fixed: list[Any] = []
+    remaining_risks: list[Any] = []
+    files_reviewed: list[Any] = []
+    for report_path in sorted(runner_dir.glob("pie_chart_review_batch_*_report.json")):
+        try:
+            payload = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        batch_reviewed = _pie_chart_review_files_from_payload(payload)
+        if not batch_reviewed:
+            continue
+        reviewed_files.update(batch_reviewed)
+        summaries.append(
+            {
+                "report": report_path.name,
+                "status": payload.get("status"),
+                "summary": payload.get("summary"),
+            }
+        )
+        if isinstance(payload.get("files_reviewed"), list):
+            files_reviewed.extend(payload["files_reviewed"])
+        if isinstance(payload.get("issues_found"), list):
+            issues_found.extend(payload["issues_found"])
+        if isinstance(payload.get("issues_fixed"), list):
+            issues_fixed.extend(payload["issues_fixed"])
+        if isinstance(payload.get("remaining_risks"), list):
+            remaining_risks.extend(payload["remaining_risks"])
+
+    if not reviewed_files:
+        return reviewed_files, None
+    return reviewed_files, {
+        "status": "completed",
+        "summary": (
+            f"Async batch pie/donut review covered {len(reviewed_files)} target SVG file(s); "
+            "final AI review was skipped because no unreviewed pie/donut targets remained."
+        ),
+        "files_reviewed": files_reviewed,
+        "issues_found": issues_found,
+        "issues_fixed": issues_fixed,
+        "remaining_risks": remaining_risks,
+        "batch_reports": summaries,
+    }
+
+
 def usage_summary_for_stage(runner_dir: Path, stage_name: str) -> dict[str, Any] | None:
     usage_path = runner_dir / USAGE_SUMMARY_FILENAME
     if not usage_path.exists():
@@ -7423,16 +7489,35 @@ def execute_generation(
     else:
         pie_chart_executor.shutdown(wait=True)
 
-    pie_chart_review_session_id = execute_pie_chart_review_stage(
-        request=request,
-        project_path=project_path,
-        plan=plan,
-        review_label="final",
-        svg_anchor_context_path=svg_anchor_context_path,
-        executor_skill_pack_path=executor_skill_pack_path,
-        runner_dir=runner_dir,
+    async_reviewed_files, async_review_summary = collect_async_pie_chart_review_summary(runner_dir)
+    remaining_review_plan = [entry for entry in plan if entry.filename not in async_reviewed_files]
+    remaining_target_files = collect_expected_svg_names(remaining_review_plan)
+    remaining_issues = collect_pie_chart_review_issues(
+        project_path,
+        runner_dir,
+        report_path=runner_dir / SVG_QUALITY_REPORT_FILENAME,
         log_path=log_path,
+        target_files=remaining_target_files,
     )
+    if async_review_summary is not None and not remaining_issues:
+        write_json(runner_dir / PIE_CHART_REVIEW_REPORT_FILENAME, async_review_summary)
+        pie_chart_review_session_id = "skipped_final_already_reviewed"
+        append_log(
+            log_path,
+            "Pie chart SVG final review skipped: async batch reviews already covered all pie/donut targets",
+        )
+    else:
+        pie_chart_review_session_id = execute_pie_chart_review_stage(
+            request=request,
+            project_path=project_path,
+            plan=plan,
+            target_plan=remaining_review_plan if async_review_summary is not None else None,
+            review_label="final",
+            svg_anchor_context_path=svg_anchor_context_path,
+            executor_skill_pack_path=executor_skill_pack_path,
+            runner_dir=runner_dir,
+            log_path=log_path,
+        )
     pie_chart_review_session_ids.append(pie_chart_review_session_id)
 
     notes_prompt = build_notes_bootstrap_prompt(

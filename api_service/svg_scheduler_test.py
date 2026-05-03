@@ -32,6 +32,7 @@ from qwen_ppt_runner import (  # type: ignore  # noqa: E402
     build_slide_plan,
     build_source_han_svg_export_variant,
     check_pie_chart_review_state,
+    collect_async_pie_chart_review_summary,
     collect_pie_chart_review_issues,
     is_chart_geometry_issue,
     rewrite_svg_text_fonts_to_source_han,
@@ -714,6 +715,45 @@ class PieChartReviewIssueTests(unittest.TestCase):
 
             self.assertEqual(issues, [])
             self.assertFalse(svg_contains_pie_or_donut_chart(icon_only_svg))
+
+    def test_async_pie_review_summary_collects_batch_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runner_dir = Path(tmp) / "runner"
+            runner_dir.mkdir(parents=True)
+            (runner_dir / "pie_chart_review_batch_01_report.json").write_text(
+                json.dumps(
+                    {
+                        "status": "skipped",
+                        "files_reviewed": [],
+                        "issues_found": [],
+                        "issues_fixed": [],
+                        "remaining_risks": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (runner_dir / "pie_chart_review_batch_02_report.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Reviewed and fixed donut.",
+                        "files_reviewed": [{"file": "slide_10.svg"}],
+                        "issues_found": [{"file": "slide_10.svg", "issue": "label mismatch"}],
+                        "issues_fixed": [{"file": "slide_10.svg", "fix": "moved label"}],
+                        "remaining_risks": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            reviewed_files, summary = collect_async_pie_chart_review_summary(runner_dir)
+
+            self.assertEqual(reviewed_files, {"slide_10.svg"})
+            self.assertIsNotNone(summary)
+            assert summary is not None
+            self.assertEqual(summary["status"], "completed")
+            self.assertEqual(summary["files_reviewed"], [{"file": "slide_10.svg"}])
+            self.assertEqual(len(summary["batch_reports"]), 1)
 
     def test_pie_chart_review_state_accepts_valid_report_without_spec_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
