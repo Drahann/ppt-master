@@ -4014,8 +4014,8 @@ def is_chart_geometry_issue(error_msg: str) -> bool:
     )
 
 
-PIE_DONUT_ATTR_RE = re.compile(
-    r'\b(?:id|class|data-[\w:-]+|aria-label)="[^"]*(?:pie|donut|chart-pie)[^"]*"',
+PIE_DONUT_NON_ICON_ATTR_RE = re.compile(
+    r'\b(?:id|class|aria-label)="[^"]*(?:pie|donut|chart-pie)[^"]*"',
     re.IGNORECASE,
 )
 PIE_DONUT_WEDGE_PATH_RE = re.compile(
@@ -4025,7 +4025,7 @@ PIE_DONUT_WEDGE_PATH_RE = re.compile(
 
 
 def svg_contains_pie_or_donut_chart(svg_text: str) -> bool:
-    if "chart-pie" in svg_text.lower() or PIE_DONUT_ATTR_RE.search(svg_text):
+    if PIE_DONUT_NON_ICON_ATTR_RE.search(svg_text):
         return True
     return len(PIE_DONUT_WEDGE_PATH_RE.findall(svg_text)) >= 2
 

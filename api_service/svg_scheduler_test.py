@@ -696,6 +696,25 @@ class PieChartReviewIssueTests(unittest.TestCase):
             self.assertEqual(issues[0]["review_reason"], "pie_or_donut_chart_detected_visual_review_required")
             self.assertTrue(svg_contains_pie_or_donut_chart((svg_dir / "slide_01.svg").read_text(encoding="utf-8")))
 
+    def test_chart_pie_icon_does_not_trigger_visual_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            svg_dir = project / "svg_output"
+            runner_dir = project / "runner"
+            svg_dir.mkdir(parents=True)
+            runner_dir.mkdir(parents=True)
+            icon_only_svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+<use data-icon="chunk/chart-pie" x="10" y="10" width="24" height="24"/>
+<text x="40" y="30">Market Analysis</text>
+</svg>
+"""
+            (svg_dir / "slide_01.svg").write_text(icon_only_svg, encoding="utf-8")
+
+            issues = collect_pie_chart_review_issues(project, runner_dir)
+
+            self.assertEqual(issues, [])
+            self.assertFalse(svg_contains_pie_or_donut_chart(icon_only_svg))
+
     def test_pie_chart_review_state_accepts_valid_report_without_spec_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp) / "project"
