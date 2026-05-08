@@ -344,16 +344,18 @@ Current page source Markdown:
 
 
 def claude_tool_mode() -> str:
-    raw = os.environ.get("PPT_MASTER_CLAUDE_TOOLS", "").strip().lower()
+    raw = os.environ.get("PPT_MASTER_CLAUDE_TOOLS", "readwrite").strip().lower()
     if raw in {"1", "true", "yes", "on"}:
-        return "readonly"
+        return "readwrite"
     if raw in {"read", "readonly"}:
         return "readonly"
     if raw in {"readwrite", "read-write", "rw"}:
         return "readwrite"
-    if raw in {"", "0", "false", "no", "off", "none", "disabled"}:
+    if raw in {"0", "false", "no", "off", "none", "disabled"}:
         return "disabled"
-    return "disabled"
+    if raw == "":
+        return "readwrite"
+    return "readwrite"
 
 
 def claude_tool_args(mode: str) -> list[str]:
@@ -970,6 +972,10 @@ def generate_claude_slide(
                     prompt_chars=len(prompt),
                     batch=batch_index,
                     attempt=attempt,
+                    tool_mode=tool_mode,
+                    output_format=output_format,
+                    stream_log=str(stream_log_path.relative_to(project_path)) if stream_log_path else None,
+                    tool_audit=f"logs/{tool_audit_filename(slide)}" if tool_mode != "disabled" else None,
                     retrying=attempt < attempts,
                 )
             if attempt < attempts:
@@ -1032,6 +1038,8 @@ def generate_svg_files(
     if not truthy_env(os.environ.get("PPT_MASTER_CLAUDE_SHARE_CONFIG")):
         env["PPT_MASTER_CLAUDE_CONFIG_BASE"] = str(claude_config_base(project_path))
     prefix = build_svg_prompt_prefix(project_path, deck, canvas_format, style, cookbook)
+    tool_mode = claude_tool_mode()
+    tool_args = claude_tool_args(tool_mode)
     if cache_prime:
         prime_prompt = build_deck_context_prefix(deck, canvas_format, style, cookbook)
         try:
@@ -1044,7 +1052,7 @@ def generate_svg_files(
                     "json",
                     "--input-format",
                     "text",
-                    "--tools=",
+                    *tool_args,
                 ],
                 prompt=prime_prompt,
                 cwd=project_path,
@@ -1065,6 +1073,9 @@ def generate_svg_files(
                         "duration_seconds": round(duration, 3),
                         "usage": usage,
                         "scope": "common_prefix",
+                        "tool_mode": tool_mode,
+                        "tool_args": tool_args,
+                        "output_format": "json",
                     },
                 )
                 logger.log(
@@ -1076,6 +1087,8 @@ def generate_svg_files(
                     output_chars=len(stdout),
                     stderr_chars=len(stderr),
                     scope="common_prefix",
+                    tool_mode=tool_mode,
+                    output_format="json",
                 )
         except Exception as exc:
             if logger:
