@@ -35,6 +35,7 @@ def add_generate_parser(subparsers: argparse._SubParsersAction[argparse.Argument
     parser.add_argument("--projects-dir", default=str(REPO_ROOT / "projects"), help="Output projects directory.")
     parser.add_argument("--format", default="ppt169", help="Canvas format (default: ppt169).")
     parser.add_argument("--style", default="general", choices=["general", "consultant", "consultant-top"], help="Design style.")
+    parser.add_argument("--cookbook", default=None, help="Theme cookbook name or path. Also reads PPT_MASTER_COOKBOOK if omitted.")
     parser.add_argument("--renderer", default="claude", choices=["claude", "local"], help="SVG renderer: claude uses DeepSeek-backed Claude Code; local is deterministic smoke mode.")
     parser.add_argument("--dry-run", action="store_true", help="Create project structure, source, manifests, plan, and prompts only.")
     parser.add_argument("--max-slides", type=int, default=None, help="Limit parsed slides for smoke runs.")

@@ -23,6 +23,9 @@ BARE_LT_RE = re.compile(r"<(?!/?[A-Za-z_][\w:.-]*(?:\s|/?>)|!--|\?xml|!\[CDATA\[
 COMMENT_RE = re.compile(r"<!--(.*?)-->", re.S)
 SPAN_OPEN_RE = re.compile(r"<span\b([^>]*)>", re.I)
 SPAN_CLOSE_RE = re.compile(r"</span\s*>", re.I)
+BROKEN_INLINE_OPEN_RE = re.compile(r"<\s+(text|tspan)\b", re.I)
+BROKEN_INLINE_QUESTION_OPEN_RE = re.compile(r"\?\s+(tspan\b(?=[^<>]*>))", re.I)
+BROKEN_INLINE_CLOSE_RE = re.compile(r"(?<!<)/\s*(text|tspan)\s*>", re.I)
 ATTR_PAIR_RE = re.compile(r"(?=\b([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(['\"])(.*?)\2)")
 CSS_PAIR_RE = re.compile(r"\b([A-Za-z][-A-Za-z0-9]*)\s*:\s*([^;\"'>\s]+)")
 TSPAN_SAFE_ATTRS = {
@@ -90,6 +93,14 @@ def repair_span_tspan_tags(text: str) -> str:
     return SPAN_CLOSE_RE.sub("</tspan>", repaired)
 
 
+def repair_broken_inline_svg_tags(text: str) -> str:
+    """Repair common model damage around SVG text/tspan tag delimiters."""
+
+    repaired = BROKEN_INLINE_OPEN_RE.sub(lambda match: f"<{match.group(1)}", text)
+    repaired = BROKEN_INLINE_QUESTION_OPEN_RE.sub(lambda match: f"?<{match.group(1)}", repaired)
+    return BROKEN_INLINE_CLOSE_RE.sub(lambda match: f"</{match.group(1)}>", repaired)
+
+
 def _html_entity_value(name: str) -> str | None:
     if name == "nbsp":
         return " "
@@ -108,7 +119,7 @@ def clean_svg_entities(text: str) -> str:
             return f"&amp;{name};"
         return value
 
-    cleaned = repair_span_tspan_tags(clean_xml_comments(text))
+    cleaned = repair_span_tspan_tags(repair_broken_inline_svg_tags(clean_xml_comments(text)))
     cleaned = NAMED_ENTITY_RE.sub(replace_named, cleaned)
     cleaned = BARE_AMP_RE.sub("&amp;", cleaned)
     return BARE_LT_RE.sub("&lt;", cleaned)

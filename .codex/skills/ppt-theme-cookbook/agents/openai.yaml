@@ -1,0 +1,4 @@
+interface:
+  display_name: "PPT Theme Cookbook"
+  short_description: "Extract strong PPT theme cookbooks from reference decks."
+  default_prompt: "Use $ppt-theme-cookbook to create a strong theme cookbook from these Figma or PPT reference files."

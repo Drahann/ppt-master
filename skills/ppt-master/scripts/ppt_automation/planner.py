@@ -9,7 +9,8 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from .config import DEFAULT_BASE_URL, DEFAULT_MODEL, QWEN_BASE_URL, QWEN_MAX_TOKENS, QWEN_MODEL, QWEN_TIMEOUT
+from .config import DEFAULT_BASE_URL, DEFAULT_MODEL, QWEN_BASE_URL, QWEN_MAX_TOKENS, QWEN_MODEL, QWEN_TIMEOUT, SKILL_DIR
+from .cookbook import Cookbook, render_cookbook_context
 from .errors import GenerationError
 from .parser import Deck
 from .project import basic_canvas_dict, write_plan_artifacts
@@ -108,6 +109,49 @@ LAYOUT_ARCHETYPE_LIBRARY = [
     "closing_centered",
 ]
 
+CHARTS_INDEX_PATH = SKILL_DIR / "templates" / "charts" / "charts_index.json"
+
+
+def build_chart_template_reference() -> list[dict[str, Any]]:
+    """Return the chart/diagram template catalog as a compact prompt vocabulary."""
+
+    if not CHARTS_INDEX_PATH.exists():
+        return []
+    try:
+        index = json.loads(CHARTS_INDEX_PATH.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return []
+
+    categories = index.get("categories", {}) if isinstance(index, dict) else {}
+    charts = index.get("charts", {}) if isinstance(index, dict) else {}
+    if not isinstance(categories, dict) or not isinstance(charts, dict):
+        return []
+
+    category_lookup: dict[str, str] = {}
+    for category_key, category_value in categories.items():
+        if not isinstance(category_value, dict):
+            continue
+        label = str(category_value.get("label") or category_key)
+        for chart_name in category_value.get("charts") or []:
+            category_lookup[str(chart_name)] = label
+
+    reference: list[dict[str, Any]] = []
+    for key in sorted(charts):
+        item = charts.get(key)
+        if not isinstance(item, dict):
+            continue
+        reference.append(
+            {
+                "key": key,
+                "label": item.get("label", key),
+                "category": category_lookup.get(key, "Uncategorized"),
+                "summary": item.get("summary", ""),
+                "keywords": item.get("keywords", []),
+                "template_path": f"templates/charts/{key}.svg",
+            }
+        )
+    return reference
+
 
 def deck_source_markdown(deck: Deck) -> str:
     parts: list[str] = []
@@ -136,16 +180,19 @@ def compact_slide_manifest(deck: Deck) -> dict[str, Any]:
     }
 
 
-def build_deck_context_prefix(deck: Deck, canvas_format: str, style: str) -> str:
+def build_deck_context_prefix(deck: Deck, canvas_format: str, style: str, cookbook: Cookbook | None = None) -> str:
     """Shared byte-stable prefix for planning, notes, and SVG requests."""
     canvas = basic_canvas_dict(canvas_format)
     manifest = compact_slide_manifest(deck)
+    cookbook_context = render_cookbook_context(cookbook)
     return f"""PPT_MASTER_COMMON_PREFIX_V1
 
 Fixed generation contract:
 - Output is for an editable PPTX built from PPT-safe SVG.
 - Use a light visual system only; never use a dark full-slide theme.
-- Keep theme color continuity: the locked primary blue (`#1D4ED8` by default) must remain the dominant non-neutral accent on every slide. Teal, amber, and derived colors are supporting accents, not alternate page themes.
+- If a Theme Cookbook is present, it is the visual authority for colors, typography, component geometry, decorative assets, chart skin, layout grammar, and page chrome. Generic defaults are only fallbacks.
+- A Theme Cookbook is not a chart/template whitelist: choose chart and diagram semantics from the source content and full chart catalog first, then apply the cookbook's visual grammar.
+- Keep theme color continuity: the locked primary accent must remain dominant on every slide. Without a Theme Cookbook, use `#1D4ED8` as the default primary accent; with a Theme Cookbook, use the cookbook/spec_lock primary instead.
 - Use concise, audience-facing Chinese slide text.
 - Keep visible content faithful to the source Markdown; summarize dense details instead of dumping paragraphs.
 - If source Markdown contains project images, reference local files with PPT-safe `<image href="../images/filename.ext" ... preserveAspectRatio="xMidYMid meet"/>` or `slice` for deliberate image fills.
@@ -170,6 +217,8 @@ Source Markdown:
 
 Slide Manifest JSON:
 {json.dumps(manifest, ensure_ascii=False, indent=2)}
+
+{cookbook_context}
 """
 
 
@@ -273,6 +322,7 @@ def deterministic_plan(project_name: str, canvas_format: str, style: str, deck: 
             "cards": "near-white fills, 8-12px radius, 1px border, no heavy shadows",
             "icons": "chunk-filled placeholders, 20-40px, one accent color per group",
             "charts": "prefer simplified SVG chart motifs; reserve chart templates for explicit data-heavy pages",
+            "chart_template_policy": "choose real template keys from templates/charts/charts_index.json as semantic vocabulary, then redraw/restyle in the locked theme",
             "callouts": "short conclusion phrases with accent bars or small badges, never long paragraphs",
         },
         "assets": {
@@ -304,14 +354,20 @@ def deterministic_plan(project_name: str, canvas_format: str, style: str, deck: 
             "allowed": "layout may adapt to page content as long as palette, typography, spacing, and shape language stay consistent",
             "not_allowed": "dark pages, one-off palettes, invented icon styles, dense paragraph dumps, exact visual clones on every page",
         },
-        "chart_rules": {"style": "light, minimal axes, restrained labels", "auto_calibration": "scan-only"},
+        "chart_rules": {
+            "style": "light, minimal axes, restrained labels",
+            "auto_calibration": "scan-only",
+            "catalog_source": "templates/charts/charts_index.json",
+            "available_templates": [item["key"] for item in build_chart_template_reference()],
+            "selection_policy": "choose real catalog keys as chart_or_diagram values; redraw/restyle in the locked theme",
+        },
         "page_rhythm": page_rhythm,
         "forbidden": FORBIDDEN,
     }
     return plan, lock
 
 
-def build_design_plan_prompt(deck: Deck, canvas_format: str, style: str) -> str:
+def build_design_plan_prompt(deck: Deck, canvas_format: str, style: str, cookbook: Cookbook | None = None) -> str:
     slide_briefs = []
     for slide in deck.slides:
         body = re.sub(r"\s+", " ", slide.body).strip()
@@ -325,7 +381,21 @@ def build_design_plan_prompt(deck: Deck, canvas_format: str, style: str) -> str:
                 "content_excerpt": body[:700],
             }
         )
-    common_prefix = build_deck_context_prefix(deck, canvas_format, style)
+    chart_reference = build_chart_template_reference()
+    common_prefix = build_deck_context_prefix(deck, canvas_format, style, cookbook)
+    cookbook_rules = ""
+    if cookbook is not None:
+        cookbook_rules = f"""
+Theme Cookbook application rules:
+- Treat cookbook `{cookbook.id}` as a hard art-direction system, not a loose inspiration paragraph.
+- Convert cookbook tokens into `theme`, `art_direction`, `layout_system`, `component_system`, `assets`, and `spec_lock`.
+- Treat cookbook recipes as reference exemplars unless the cookbook explicitly says otherwise. Do not force every slide into one of the named recipes.
+- Choose each slide's semantic structure from source content first. If a named cookbook recipe fits, use it. If not, create a cookbook-compatible `layout_family` such as `g08_adapted_funnel`, `g08_adapted_sankey`, or `g08_adapted_dense_table`.
+- If the slide needs a chart, diagram, framework, table, process, architecture visual, or infographic, choose `chart_or_diagram` from the full chart catalog before consulting cookbook recipe examples.
+- If the cookbook specifies fixed chrome, spacing, card geometry, decorative assets, or chart restyling rules, materialize those values in `spec_lock` so SVG workers do not have to infer them.
+- If generic defaults conflict with the cookbook, the cookbook wins, except for PPT-safe SVG forbiddens and source-content faithfulness.
+- `spec_lock.cookbook` should record cookbook id, priority, required repeats, recipe reference vocabulary, adaptation policy, decorative asset policy, chart catalog precedence, and forbidden drift.
+"""
     return f"""{common_prefix}
 
 Task: design the automation plan and execution lock.
@@ -339,7 +409,7 @@ Rules:
 - Normal level-2 Markdown headings are content slides. The `创新技术` section is split into level-3 content slides.
 - Keep the schema compact and deterministic.
 - Use PPT-safe fonts and HEX colors only.
-- Design for a polished Chinese innovation/venture presentation: clear hierarchy, generous whitespace, light modern technology palette, restrained accent color, diagram/card/chart-friendly layouts.
+- Design for a polished Chinese presentation: clear hierarchy, generous whitespace, cookbook-aligned art direction, restrained accent color, diagram/card/chart-friendly layouts.
 - Light theme only. Backgrounds must be white or near-white (`#FFFFFF`, `#F8FAFC`, `#F1F5F9`, `#EEF2FF`, `#E0F2FE`). Do not use dark theme, dark canvas, black hero background, GitHub-dark palette, neon-on-black, or large dark panels.
 - Avoid monotonous single-column bullet pages. Vary rhythm across cover-like, two-column, metric/card, timeline/process, evidence grid, and conclusion layouts where appropriate.
 - `spec_lock` must be a strict visual anchor: include canvas, colors, typography, spacing, shape_language, icon_rules, chart_rules, svg_rules, page_rhythm, and forbidden.
@@ -356,9 +426,19 @@ Rules:
 - Prefer specific layout archetypes over generic containers. Avoid repeating generic `two_column_left_right`; if a split layout is genuinely best, make `layout_signature` specific, e.g. `left narrative + right market growth bars`, `left product exploded view + right metric cards`, or `left quotes + right credibility badges`.
 - Avoid adjacent slides with the same layout_family unless their visual_structure is materially different.
 - Every slide must include `layout_family`, `layout_signature`, `visual_structure`, and `why_this_layout` so SVG generation has concrete structure guidance.
+- Use the chart template catalog below as semantic visualization vocabulary. The model does not need to read SVG template code; choose real template names from the catalog, then restyle/redraw them according to spec_lock and cookbook.
+- For every slide that needs a chart, diagram, framework, table, process, architecture visual, or infographic, set `chart_or_diagram` to one catalog `key`. Leave it empty only when the recipe is purely text/image/quote/team.
+- Do not invent chart/template names. If no catalog item fits, write a cookbook-compatible adapted layout in `layout_family` and leave `chart_or_diagram` empty.
+- Do not over-select chart types merely because the cookbook describes them in detail; detailed cookbook recipes are examples of style execution, not priority rankings.
+- Put the catalog source and selected template keys in `spec_lock.chart_rules`.
+
+{cookbook_rules}
 
 Layout archetype library:
 {json.dumps(LAYOUT_ARCHETYPE_LIBRARY, ensure_ascii=False, indent=2)}
+
+Available chart/diagram template catalog:
+{json.dumps(chart_reference, ensure_ascii=False, indent=2)}
 
 Slide briefs JSON:
 {json.dumps(slide_briefs, ensure_ascii=False, indent=2)}
@@ -376,8 +456,9 @@ Required design_plan schema:
   }},
   "art_direction": {{"mood": "", "motifs": [], "composition_principles": [], "background_style": "", "card_style": "", "diagram_style": "", "chart_style": "", "avoid": []}},
   "layout_system": {{"grid": "", "density": "", "archetypes": [], "diversity_policy": "", "soft_constraints": ""}},
-  "component_system": {{"cards": "", "icons": "", "charts": "", "callouts": "", "technical_motifs": ""}},
+  "component_system": {{"cards": "", "icons": "", "charts": "", "chart_template_policy": "", "callouts": "", "technical_motifs": ""}},
   "assets": {{"icons": {{"library": "chunk-filled", "inventory": []}}, "images": {{}}}},
+  "cookbook": {{"id": "", "priority": "", "applied_to": ["design_plan", "spec_lock", "svg"], "recipe_policy": "reference examples, not whitelist", "adaptation_policy": "derive cookbook-compatible layouts when content requires other structures"}},
   "slides": [
     {{"index": 1, "title": "", "kind": "", "section_title": null, "svg_filename": "", "rhythm": "", "layout": "", "layout_family": "", "layout_signature": "", "intent": "", "composition": "", "visual_structure": "", "why_this_layout": "", "visual_metaphor": "", "visual_guidance": "", "icon_plan": [], "chart_or_diagram": "", "content_density": ""}}
   ]
@@ -393,10 +474,11 @@ Required spec_lock schema:
   "spacing": {{"outer_margin": 64, "card_gap": 20, "section_gap": 28}},
   "shape_language": {{"radius": 10, "stroke_width": 1, "shadow": "none"}},
   "style_anchor": {{"theme": "light technology venture deck", "repeat": [], "vary": []}},
+  "cookbook": {{"id": "", "priority": "", "required_repeats": [], "layout_recipes": [], "adaptation_policy": "", "chart_catalog_precedence": "", "decorative_asset_policy": "", "forbidden_drift": []}},
   "theme_color_policy": {{"primary_accent": "#1D4ED8", "supporting_accents": ["#0F766E", "#F59E0B"], "allow_extra_colors": "", "dominance_rule": ""}},
   "flex_rules": {{"allowed": "", "not_allowed": ""}},
   "icon_rules": {{"syntax": "<use data-icon=\\"chunk-filled/name\\" .../>", "style": "filled, simple, one accent color"}},
-  "chart_rules": {{"style": "light, minimal axes, no clip-path, no rgba"}},
+  "chart_rules": {{"style": "light, minimal axes, no clip-path, no rgba", "catalog_source": "templates/charts/charts_index.json", "selected_templates": [], "selection_policy": "choose real catalog keys by content semantics first, then redraw/restyle in cookbook theme"}},
   "svg_rules": {{"root_bg": "#FFFFFF", "max_chars": 12000, "forbid": ["rgba()", "clip-path", "<style>", "class", "<foreignObject>", "<mask>"]}},
   "page_rhythm": {{"P01": "hero", "P02": "dense"}},
   "forbidden": []
@@ -523,7 +605,14 @@ def enforce_light_theme(plan: dict[str, Any], lock: dict[str, Any]) -> tuple[dic
         },
     )
     lock.setdefault("icon_rules", {"syntax": '<use data-icon="chunk-filled/name" .../>', "style": "filled, simple, one accent color"})
-    lock.setdefault("chart_rules", {"style": "light, minimal axes, no clip-path, no rgba"})
+    chart_rules = lock.setdefault("chart_rules", {"style": "light, minimal axes, no clip-path, no rgba"})
+    if isinstance(chart_rules, dict):
+        chart_rules.setdefault("catalog_source", "templates/charts/charts_index.json")
+        chart_rules.setdefault(
+            "selection_policy",
+            "choose real catalog keys as chart_or_diagram values by content semantics first; redraw/restyle in the locked cookbook theme",
+        )
+        chart_rules.setdefault("available_templates", [item["key"] for item in build_chart_template_reference()])
     lock.setdefault("svg_rules", {"root_bg": "#FFFFFF", "max_chars": 12000, "forbid": ["rgba()", "clip-path", "<style>", "class", "<foreignObject>", "<mask>"]})
     forbidden = lock.get("forbidden", [])
     if not isinstance(forbidden, list):
@@ -649,6 +738,7 @@ def generate_plan(
     qwen_model: str = QWEN_MODEL,
     qwen_max_tokens: int = QWEN_MAX_TOKENS,
     qwen_timeout: int = QWEN_TIMEOUT,
+    cookbook: Cookbook | None = None,
     logger: UsageLogger | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if renderer == "local":
@@ -656,7 +746,7 @@ def generate_plan(
         write_plan_artifacts(project_path, plan, lock)
         return plan, lock
 
-    prompt = build_design_plan_prompt(deck, canvas_format, style)
+    prompt = build_design_plan_prompt(deck, canvas_format, style, cookbook)
     if provider == "qwen":
         actual_model = qwen_model
         text, usage = call_qwen_openai(
@@ -703,9 +793,10 @@ def prime_deepseek_cache(
     api_key: str | None,
     base_url: str = DEFAULT_BASE_URL,
     model: str = DEFAULT_MODEL,
+    cookbook: Cookbook | None = None,
     logger: UsageLogger | None = None,
 ) -> None:
-    prompt = build_deck_context_prefix(deck, canvas_format, style)
+    prompt = build_deck_context_prefix(deck, canvas_format, style, cookbook)
     text, usage = call_deepseek_anthropic(
         api_key=resolve_api_key(api_key),
         base_url=base_url,
@@ -725,8 +816,8 @@ def prime_deepseek_cache(
         logger.log("deepseek_cache_prime", usage=usage, input_chars=len(prompt), output_chars=len(text))
 
 
-def build_notes_prompt(deck: Deck, canvas_format: str, style: str) -> str:
-    return f"""{build_deck_context_prefix(deck, canvas_format, style)}
+def build_notes_prompt(deck: Deck, canvas_format: str, style: str, cookbook: Cookbook | None = None) -> str:
+    return f"""{build_deck_context_prefix(deck, canvas_format, style, cookbook)}
 
 Task: generate `notes/total.md` for this PPT Master project.
 

@@ -8,6 +8,7 @@ import random
 import re
 import shutil
 import subprocess
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from html import escape as xml_escape
@@ -16,11 +17,16 @@ from typing import Any
 from xml.etree import ElementTree as ET
 
 from .config import CLAUDE_FLASH_MODEL, CLAUDE_MODEL, DEFAULT_BASE_URL, REPO_ROOT, canvas_dimensions
+from .cookbook import Cookbook
 from .errors import GenerationError
 from .parser import Deck, Slide
-from .planner import ICON_INVENTORY, build_deck_context_prefix, build_design_plan_prompt, build_notes_prompt
+from .planner import ICON_INVENTORY, build_deck_context_prefix, build_design_plan_prompt, build_notes_prompt, call_deepseek_anthropic
 from .usage import UsageLogger
 from clean_svg_entities import clean_svg_entities
+
+SVG_SYNTAX_REPAIR_SYSTEM = (
+    "You repair SVG XML syntax only. Return exactly one complete SVG document and no prose."
+)
 
 
 def stripped_markdown_lines(markdown: str) -> list[str]:
@@ -211,9 +217,15 @@ def deterministic_notes(deck: Deck) -> str:
     return "\n".join(sections).rstrip() + "\n"
 
 
-def build_svg_prompt_prefix(project_path: Path, deck: Deck, canvas_format: str, style: str) -> str:
+def build_svg_prompt_prefix(
+    project_path: Path,
+    deck: Deck,
+    canvas_format: str,
+    style: str,
+    cookbook: Cookbook | None = None,
+) -> str:
     _, _, _, canvas = canvas_dimensions(canvas_format)
-    common_prefix = build_deck_context_prefix(deck, canvas_format, style)
+    common_prefix = build_deck_context_prefix(deck, canvas_format, style, cookbook)
     design_plan = ""
     design_path = project_path / "design_plan.json"
     if design_path.exists():
@@ -226,6 +238,7 @@ def build_svg_prompt_prefix(project_path: Path, deck: Deck, canvas_format: str, 
                     "layout_system": design_data.get("layout_system", {}),
                     "component_system": design_data.get("component_system", {}),
                     "assets": design_data.get("assets", {}),
+                    "cookbook": design_data.get("cookbook", {}),
                     "slides": [
                         {
                             key: slide.get(key)
@@ -265,6 +278,16 @@ def build_svg_prompt_prefix(project_path: Path, deck: Deck, canvas_format: str, 
     image_manifest_path = project_path / "images" / "image_manifest.json"
     if image_manifest_path.exists():
         image_manifest = image_manifest_path.read_text(encoding="utf-8", errors="replace")
+    cookbook_svg_rules = ""
+    if cookbook is not None:
+        cookbook_svg_rules = f"""
+Theme Cookbook SVG rules:
+- Cookbook `{cookbook.id}` is active. Follow its typography, chrome, component geometry, decorative asset policy, chart skin, layout grammar, and forbidden drift rules.
+- Treat named cookbook recipes as strong reference exemplars, not as a closed set. If `layout_family` is `g08_adapted_*` or otherwise cookbook-compatible, build the requested semantic structure using the cookbook's visual grammar.
+- If `chart_or_diagram` names a catalog template, preserve that chart/diagram's semantic geometry and restyle it in the cookbook theme even when the cookbook does not list that exact template.
+- Do not downgrade cookbook-compatible layouts into a generic card or two-column page.
+- If spec_lock repeats cookbook tokens, spec_lock is the executable contract. If spec_lock is missing a cookbook detail, fall back to the cookbook text above.
+"""
     return f"""{common_prefix}
 
 Task family: SVG page generation.
@@ -277,7 +300,7 @@ Stable rules:
 - Use inline SVG attributes only.
 - Forbidden: `<style>`, `class`, `<foreignObject>`, `rgba()`, `clip-path`, `<script>`, `<animate*>`, `<textPath>`, `<mask>`, and HTML named entities.
 - Light theme only: the root background must be `#FFFFFF` or near-white. Do not use dark theme, black/dark full-slide backgrounds, dark hero panels, GitHub-dark palette, or neon-on-black styling even if the model prefers a technology look.
-- Keep the deck theme continuous: the locked primary accent (`#1D4ED8` unless spec_lock says otherwise) must be the dominant non-neutral accent on every slide. Teal, amber, and extra colors may add richness, but they must not make one slide feel like a green/orange/other-theme page.
+- Keep the deck theme continuous: the locked primary accent from spec_lock/cookbook must be dominant on every slide. Extra colors may add richness, but they must not make one slide feel like a different theme.
 - XML reserved characters in text must be escaped.
 - Text wrapping and inline emphasis must use `<text>` and `<tspan>` only. Never use HTML `<span>`; write `<tspan fill="#..." font-weight="...">...</tspan>`.
 - Group related elements with plain `<g>`; never use `<g opacity>`.
@@ -291,6 +314,8 @@ Stable rules:
 - Prefer project icon placeholders instead of hand-drawn icons. Use syntax such as `<use data-icon="chunk-filled/rocket" x="100" y="100" width="32" height="32" fill="#1D4ED8"/>`; `finalize_svg.py` will embed the real icon.
 - Available icon placeholders: {", ".join(ICON_INVENTORY)}.
 - Current style: {style}
+
+{cookbook_svg_rules}
 
 Design Plan JSON:
 {design_plan}
@@ -318,12 +343,105 @@ Current page source Markdown:
 """
 
 
-def write_prompt_files(project_path: Path, deck: Deck, canvas_format: str, style: str) -> None:
+def claude_tool_mode() -> str:
+    raw = os.environ.get("PPT_MASTER_CLAUDE_TOOLS", "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return "readonly"
+    if raw in {"read", "readonly"}:
+        return "readonly"
+    if raw in {"readwrite", "read-write", "rw"}:
+        return "readwrite"
+    if raw in {"", "0", "false", "no", "off", "none", "disabled"}:
+        return "disabled"
+    return "disabled"
+
+
+def claude_tool_args(mode: str) -> list[str]:
+    if mode == "readonly":
+        return [
+            "--tools",
+            "Read",
+            "--allowedTools",
+            "Read",
+            "--permission-mode",
+            "acceptEdits",
+        ]
+    if mode == "readwrite":
+        return [
+            "--tools",
+            "Read,Write",
+            "--allowedTools",
+            "Read,Write",
+            "--permission-mode",
+            "acceptEdits",
+        ]
+    return ["--tools="]
+
+
+def claude_stream_enabled() -> bool:
+    raw = os.environ.get("PPT_MASTER_CLAUDE_STREAM", "1").strip().lower()
+    return raw not in {"0", "false", "no", "off", "disabled"}
+
+
+def claude_output_format() -> str:
+    return "stream-json" if claude_stream_enabled() else "json"
+
+
+def claude_command(claude_exe: str, *, tool_args: list[str], output_format: str) -> list[str]:
+    command = [
+        claude_exe,
+        "-p",
+        "--output-format",
+        output_format,
+        "--input-format",
+        "text",
+    ]
+    if output_format == "stream-json":
+        command.append("--verbose")
+        command.append("--include-partial-messages")
+    command.extend(tool_args)
+    return command
+
+
+def tool_audit_filename(slide: Slide) -> str:
+    return f"claude_tool_audit_{slide.stem}.json"
+
+
+def append_tool_experiment_prompt(prompt: str, slide: Slide, tool_mode: str) -> str:
+    audit_name = tool_audit_filename(slide)
+    if tool_mode == "readonly":
+        return f"""{prompt}
+
+Restricted tool-access instructions:
+- This run enables only the Claude Code `Read` tool for observability.
+- You may use `Read` to inspect `design_plan.json`, `spec_lock.json`, `slide_manifest.json`, `prompts/svg_prefix.md`, or this slide's prompt file if it is necessary.
+- Prefer the content already embedded in this prompt. Do not read files unless the embedded context is insufficient.
+- You cannot write or edit files in this mode.
+- The final response must contain exactly one complete SVG document and no prose, so the runner can validate and log usage normally.
+"""
+    return f"""{prompt}
+
+Restricted tool-access instructions:
+- This run intentionally enables only Claude Code `Read` and `Write` file tools to measure behavior. The `Edit` tool is not available.
+- You may use `Read` to inspect `design_plan.json`, `spec_lock.json`, `slide_manifest.json`, `prompts/svg_prefix.md`, or this slide's prompt file if it helps.
+- Use `Write` to save the final SVG to `svg_output/{slide.svg_filename}` before your final response.
+- Use `Write` to save a JSON audit file at `logs/{audit_name}` with keys: `read_files`, `wrote_files`, `notes`.
+- The final response must still contain exactly one complete SVG document and no prose, so the runner can validate and log usage normally.
+"""
+
+
+def write_prompt_files(
+    project_path: Path,
+    deck: Deck,
+    canvas_format: str,
+    style: str,
+    cookbook: Cookbook | None = None,
+) -> None:
     prompt_dir = project_path / "prompts"
     prompt_dir.mkdir(parents=True, exist_ok=True)
-    (prompt_dir / "design_plan_prompt.md").write_text(build_design_plan_prompt(deck, canvas_format, style), encoding="utf-8")
-    (prompt_dir / "notes_prompt.md").write_text(build_notes_prompt(deck, canvas_format, style), encoding="utf-8")
-    prefix = build_svg_prompt_prefix(project_path, deck, canvas_format, style)
+    (prompt_dir / "design_plan_prompt.md").write_text(build_design_plan_prompt(deck, canvas_format, style, cookbook), encoding="utf-8")
+    (prompt_dir / "notes_prompt.md").write_text(build_notes_prompt(deck, canvas_format, style, cookbook), encoding="utf-8")
+    prefix = build_svg_prompt_prefix(project_path, deck, canvas_format, style, cookbook)
     (prompt_dir / "svg_prefix.md").write_text(prefix, encoding="utf-8")
     page_dir = prompt_dir / "svg_pages"
     page_dir.mkdir(exist_ok=True)
@@ -349,13 +467,17 @@ def normalize_svg_text(svg: str) -> str:
     return clean_svg_entities(candidate).strip() + "\n"
 
 
-def extract_svg(text: str) -> str:
+def extract_svg_document(text: str) -> str:
     normalized_text = normalize_svg_text(text)
     start = normalized_text.find("<svg")
     end = normalized_text.rfind("</svg>")
     if start < 0 or end < 0:
         raise GenerationError("Claude output did not contain a complete <svg> document.")
-    svg = normalize_svg_text(normalized_text[start : end + len("</svg>")])
+    return normalize_svg_text(normalized_text[start : end + len("</svg>")])
+
+
+def extract_svg(text: str) -> str:
+    svg = extract_svg_document(text)
     try:
         ET.fromstring(svg)
     except ET.ParseError as exc:
@@ -363,11 +485,70 @@ def extract_svg(text: str) -> str:
     return svg
 
 
+def is_svg_xml_syntax_error(exc: Exception) -> bool:
+    return "contained invalid SVG XML" in str(exc)
+
+
+def build_svg_syntax_repair_prompt(svg: str, error: str) -> str:
+    return f"""Repair only XML/SVG syntax in the SVG below.
+
+Rules:
+- Return exactly one complete <svg>...</svg> document and no prose.
+- Preserve the visual design, coordinates, colors, text, icons, and element order.
+- Fix only malformed XML tag delimiters, missing inline text/tspan closers, broken <tspan> tags, and XML escaping.
+- Do not redesign, summarize, translate, or add new content.
+- Use SVG <text> and <tspan> only for inline text emphasis.
+
+Parser error:
+{error}
+
+SVG to repair:
+```svg
+{svg}
+```
+"""
+
+
 def parse_claude_json_output(stdout: str) -> tuple[str, dict[str, Any]]:
     try:
         data = json.loads(stdout)
     except json.JSONDecodeError:
-        return stdout, {}
+        data = None
+    if data is None:
+        result_event: dict[str, Any] | None = None
+        text_parts: list[str] = []
+        for raw_line in stdout.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            if event.get("type") == "result":
+                result_event = event
+                continue
+            if event.get("type") != "assistant":
+                continue
+            message = event.get("message")
+            content = message.get("content") if isinstance(message, dict) else event.get("content")
+            if isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text" and item.get("text"):
+                        text_parts.append(str(item["text"]))
+            elif isinstance(content, str):
+                text_parts.append(content)
+        if result_event:
+            text = result_event.get("result") or result_event.get("text") or result_event.get("content")
+            if isinstance(text, list):
+                text = "\n".join(str(item.get("text", item)) if isinstance(item, dict) else str(item) for item in text)
+            if text is None:
+                text = "\n".join(text_parts) or stdout
+            usage = result_event.get("usage", {}) if isinstance(result_event.get("usage"), dict) else {}
+            return str(text), usage
+        return ("\n".join(text_parts) if text_parts else stdout), {}
     if not isinstance(data, dict):
         return stdout, {}
     text = data.get("result") or data.get("text") or data.get("content") or stdout
@@ -426,7 +607,15 @@ def claude_lock_retries() -> int:
         return 5
 
 
-def run_claude_print(command: list[str], *, prompt: str, cwd: Path, env: dict[str, str], timeout: int) -> tuple[str, str, int, float]:
+def run_claude_print(
+    command: list[str],
+    *,
+    prompt: str,
+    cwd: Path,
+    env: dict[str, str],
+    timeout: int,
+    stream_log_path: Path | None = None,
+) -> tuple[str, str, int, float]:
     creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
     started = time.perf_counter()
     lock_retry_logs: list[str] = []
@@ -445,7 +634,51 @@ def run_claude_print(command: list[str], *, prompt: str, cwd: Path, env: dict[st
             creationflags=creationflags,
         )
         try:
-            stdout, stderr = process.communicate(prompt, timeout=timeout)
+            if stream_log_path is None:
+                stdout, stderr = process.communicate(prompt, timeout=timeout)
+            else:
+                stream_log_path.parent.mkdir(parents=True, exist_ok=True)
+                stream_log_path.write_text("", encoding="utf-8")
+                stderr_log_path = stream_log_path.with_name(f"{stream_log_path.stem}.stderr.log")
+                stderr_log_path.write_text("", encoding="utf-8")
+                stdout_chunks: list[str] = []
+                stderr_chunks: list[str] = []
+
+                def drain_output(pipe: Any, chunks: list[str], path: Path) -> None:
+                    try:
+                        for line in iter(pipe.readline, ""):
+                            chunks.append(line)
+                            with path.open("a", encoding="utf-8") as stream_fh:
+                                stream_fh.write(line)
+                    finally:
+                        try:
+                            pipe.close()
+                        except Exception:
+                            pass
+
+                stdout_thread = threading.Thread(
+                    target=drain_output,
+                    args=(process.stdout, stdout_chunks, stream_log_path),
+                    daemon=True,
+                )
+                stderr_thread = threading.Thread(
+                    target=drain_output,
+                    args=(process.stderr, stderr_chunks, stderr_log_path),
+                    daemon=True,
+                )
+                stdout_thread.start()
+                stderr_thread.start()
+                if process.stdin is not None:
+                    try:
+                        process.stdin.write(prompt)
+                        process.stdin.close()
+                    except BrokenPipeError:
+                        pass
+                process.wait(timeout=timeout)
+                stdout_thread.join(timeout=10)
+                stderr_thread.join(timeout=10)
+                stdout = "".join(stdout_chunks)
+                stderr = "".join(stderr_chunks)
         except subprocess.TimeoutExpired as exc:
             if os.name == "nt":
                 subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)], capture_output=True, text=True)
@@ -492,6 +725,9 @@ def generate_claude_slide(
     env: dict[str, str],
     claude_timeout: int,
     claude_retries: int,
+    syntax_repair_api_key: str,
+    syntax_repair_base_url: str,
+    syntax_repair_model: str,
     logger: UsageLogger | None,
     batch_index: int | None = None,
     scope_id: str | None = None,
@@ -502,25 +738,39 @@ def generate_claude_slide(
             logger.log("claude_svg", slide=slide.svg_filename, ok=True, skipped=True, batch=batch_index)
         return
     prompt = build_svg_prompt(prefix, slide)
+    tool_mode = claude_tool_mode()
+    tool_args = claude_tool_args(tool_mode)
+    output_format = claude_output_format()
+    if tool_mode != "disabled":
+        prompt = append_tool_experiment_prompt(prompt, slide, tool_mode)
     claude_env = scoped_claude_env(env, scope_id or f"slide_{slide.index:02d}_{slide.stem}")
     attempts = max(1, claude_retries + 1)
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
+        stream_log_path = (
+            project_path / "logs" / "claude_stream" / f"{slide.stem}.attempt{attempt}.jsonl"
+            if output_format == "stream-json"
+            else None
+        )
+        if logger and stream_log_path is not None:
+            logger.log(
+                "claude_stream",
+                event="start",
+                slide=slide.svg_filename,
+                batch=batch_index,
+                attempt=attempt,
+                output_format=output_format,
+                tool_mode=tool_mode,
+                stream_log=str(stream_log_path.relative_to(project_path)),
+            )
         try:
             stdout, stderr, returncode, duration = run_claude_print(
-                [
-                    claude_exe,
-                    "-p",
-                    "--output-format",
-                    "json",
-                    "--input-format",
-                    "text",
-                    "--tools=",
-                ],
+                claude_command(claude_exe, tool_args=tool_args, output_format=output_format),
                 prompt=prompt,
                 cwd=project_path,
                 env=claude_env,
                 timeout=claude_timeout,
+                stream_log_path=stream_log_path,
             )
             if returncode != 0:
                 (project_path / "logs" / f"claude_{slide.stem}.attempt{attempt}.stderr.txt").write_text(stderr, encoding="utf-8")
@@ -538,14 +788,100 @@ def generate_claude_slide(
                             "duration_seconds": round(duration, 3),
                             "batch": batch_index,
                             "attempt": attempt,
+                            "tool_mode": tool_mode,
+                            "tool_args": tool_args,
+                            "output_format": output_format,
+                            "stream_log": str(stream_log_path.relative_to(project_path)) if stream_log_path else None,
                         },
                     )
                 raise GenerationError(f"Claude SVG generation failed for {slide.svg_filename}: {(stderr or stdout).strip()}")
             text, usage = parse_claude_json_output(stdout)
+            recovered_from_tool_write = False
+            syntax_repaired_by_api = False
+            syntax_repair_usage: dict[str, Any] | None = None
             try:
                 svg = extract_svg(text)
             except Exception as exc:
-                if logger:
+                if tool_mode != "disabled" and output_path.exists() and output_path.stat().st_size > 0:
+                    try:
+                        svg = extract_svg(output_path.read_text(encoding="utf-8", errors="replace"))
+                        recovered_from_tool_write = True
+                    except Exception:
+                        recovered_from_tool_write = False
+                    if recovered_from_tool_write:
+                        append_text = (
+                            f"\n\n[runner recovered SVG from tool-written file: "
+                            f"{output_path.relative_to(project_path)}]"
+                        )
+                        text = f"{text}{append_text}"
+                if not recovered_from_tool_write and is_svg_xml_syntax_error(exc):
+                    repair_prompt = ""
+                    repair_response = ""
+                    try:
+                        repair_prompt = build_svg_syntax_repair_prompt(extract_svg_document(text), str(exc))
+                        repair_response, syntax_repair_usage = call_deepseek_anthropic(
+                            api_key=syntax_repair_api_key,
+                            base_url=syntax_repair_base_url,
+                            model=syntax_repair_model,
+                            prompt=repair_prompt,
+                            system=SVG_SYNTAX_REPAIR_SYSTEM,
+                            max_tokens=16000,
+                        )
+                        svg = extract_svg(repair_response)
+                        syntax_repaired_by_api = True
+                        text = f"{text}\n\n[runner repaired SVG XML syntax via direct API]"
+                        if logger:
+                            logger.log_transcript(
+                                "deepseek_svg_syntax_repair",
+                                prompt=repair_prompt,
+                                response=repair_response,
+                                metadata={
+                                    "slide": slide.svg_filename,
+                                    "ok": True,
+                                    "source_error": str(exc),
+                                    "attempt": attempt,
+                                    "model": syntax_repair_model,
+                                    "usage": syntax_repair_usage,
+                                },
+                            )
+                            logger.log(
+                                "deepseek_svg_syntax_repair",
+                                slide=slide.svg_filename,
+                                ok=True,
+                                attempt=attempt,
+                                model=syntax_repair_model,
+                                usage=syntax_repair_usage,
+                                prompt_chars=len(repair_prompt),
+                                output_chars=len(repair_response),
+                            )
+                    except Exception as repair_exc:
+                        if logger:
+                            logger.log_transcript(
+                                "deepseek_svg_syntax_repair",
+                                prompt=repair_prompt,
+                                response=repair_response,
+                                metadata={
+                                    "slide": slide.svg_filename,
+                                    "ok": False,
+                                    "source_error": str(exc),
+                                    "repair_error": str(repair_exc),
+                                    "attempt": attempt,
+                                    "model": syntax_repair_model,
+                                    "usage": syntax_repair_usage,
+                                },
+                            )
+                            logger.log(
+                                "deepseek_svg_syntax_repair",
+                                slide=slide.svg_filename,
+                                ok=False,
+                                attempt=attempt,
+                                model=syntax_repair_model,
+                                error=str(repair_exc),
+                            )
+                if not recovered_from_tool_write:
+                    if not syntax_repaired_by_api:
+                        svg = ""
+                if not recovered_from_tool_write and not syntax_repaired_by_api and logger:
                     logger.log_transcript(
                         "claude_svg",
                         prompt=prompt,
@@ -562,9 +898,18 @@ def generate_claude_slide(
                             "usage": usage,
                             "batch": batch_index,
                             "attempt": attempt,
+                            "tool_mode": tool_mode,
+                            "tool_args": tool_args,
+                            "output_format": output_format,
+                            "stream_log": str(stream_log_path.relative_to(project_path)) if stream_log_path else None,
+                            "tool_audit": f"logs/{tool_audit_filename(slide)}" if tool_mode != "disabled" else None,
+                            "syntax_repaired_by_api": syntax_repaired_by_api,
+                            "syntax_repair_model": syntax_repair_model if syntax_repaired_by_api else None,
+                            "syntax_repair_usage": syntax_repair_usage,
                         },
                     )
-                raise
+                if not recovered_from_tool_write and not syntax_repaired_by_api:
+                    raise
             if logger:
                 logger.log_transcript(
                     "claude_svg",
@@ -581,6 +926,15 @@ def generate_claude_slide(
                         "usage": usage,
                         "batch": batch_index,
                         "attempt": attempt,
+                        "tool_mode": tool_mode,
+                        "tool_args": tool_args,
+                        "output_format": output_format,
+                        "stream_log": str(stream_log_path.relative_to(project_path)) if stream_log_path else None,
+                        "tool_audit": f"logs/{tool_audit_filename(slide)}" if tool_mode != "disabled" else None,
+                        "recovered_from_tool_write": recovered_from_tool_write,
+                        "syntax_repaired_by_api": syntax_repaired_by_api,
+                        "syntax_repair_model": syntax_repair_model if syntax_repaired_by_api else None,
+                        "syntax_repair_usage": syntax_repair_usage,
                     },
                 )
             output_path.write_text(svg, encoding="utf-8")
@@ -595,6 +949,13 @@ def generate_claude_slide(
                     output_chars=len(stdout),
                     batch=batch_index,
                     attempt=attempt,
+                    tool_mode=tool_mode,
+                    output_format=output_format,
+                    stream_log=str(stream_log_path.relative_to(project_path)) if stream_log_path else None,
+                    tool_audit=f"logs/{tool_audit_filename(slide)}" if tool_mode != "disabled" else None,
+                    recovered_from_tool_write=recovered_from_tool_write,
+                    syntax_repaired_by_api=syntax_repaired_by_api,
+                    syntax_repair_model=syntax_repair_model if syntax_repaired_by_api else None,
                 )
             return
         except Exception as exc:
@@ -634,6 +995,7 @@ def generate_svg_files(
     svg_workers: int = 1,
     svg_batch_size: int = 5,
     cache_prime: bool = False,
+    cookbook: Cookbook | None = None,
     logger: UsageLogger | None = None,
 ) -> None:
     if renderer == "local":
@@ -669,9 +1031,9 @@ def generate_svg_files(
     )
     if not truthy_env(os.environ.get("PPT_MASTER_CLAUDE_SHARE_CONFIG")):
         env["PPT_MASTER_CLAUDE_CONFIG_BASE"] = str(claude_config_base(project_path))
-    prefix = build_svg_prompt_prefix(project_path, deck, canvas_format, style)
+    prefix = build_svg_prompt_prefix(project_path, deck, canvas_format, style, cookbook)
     if cache_prime:
-        prime_prompt = build_deck_context_prefix(deck, canvas_format, style)
+        prime_prompt = build_deck_context_prefix(deck, canvas_format, style, cookbook)
         try:
             prime_env = scoped_claude_env(env, "cache_prime")
             stdout, stderr, returncode, duration = run_claude_print(
@@ -754,6 +1116,9 @@ def generate_svg_files(
                 env=env,
                 claude_timeout=claude_timeout,
                 claude_retries=claude_retries,
+                syntax_repair_api_key=resolved_key,
+                syntax_repair_base_url=deepseek_base_url,
+                syntax_repair_model=claude_flash_model,
                 logger=logger,
                 batch_index=batch_index,
                 scope_id=f"slide_{slide.index:02d}_{slide.stem}",

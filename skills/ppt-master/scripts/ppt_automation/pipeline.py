@@ -27,6 +27,7 @@ from .config import (
     normalized_format,
 )
 from .assets import download_and_rewrite_markdown_images
+from .cookbook import resolve_cookbook, write_project_cookbook
 from .errors import GenerationError
 from .parser import parse_markdown_deck, read_input_markdown, safe_project_name
 from .planner import (
@@ -78,6 +79,7 @@ class GenerationOptions:
     svg_workers: int = 1
     svg_batch_size: int = 5
     cache_prime: bool = False
+    cookbook: str | None = None
 
     @classmethod
     def from_namespace(cls, args: argparse.Namespace) -> "GenerationOptions":
@@ -214,7 +216,13 @@ def generate_notes(project_path: Path, options: GenerationOptions, logger: Usage
         (project_path / "notes" / "total.md").write_text(deterministic_notes(deck), encoding="utf-8")
         return
 
-    prompt = build_notes_prompt(parse_markdown_deck((project_path / "sources" / "input.md").read_text(encoding="utf-8"), options.max_slides), options.format, options.style)
+    cookbook = resolve_cookbook(options.cookbook)
+    prompt = build_notes_prompt(
+        parse_markdown_deck((project_path / "sources" / "input.md").read_text(encoding="utf-8"), options.max_slides),
+        options.format,
+        options.style,
+        cookbook,
+    )
     if options.notes_provider == "qwen":
         model = options.qwen_model
         text, usage = call_qwen_openai(
@@ -433,8 +441,10 @@ def generate(options: GenerationOptions) -> RunResult:
     canvas_format = normalized_format(options.format)
     project_path = create_project(project_name, canvas_format, Path(options.projects_dir))
     logger = UsageLogger(project_path)
+    cookbook = resolve_cookbook(options.cookbook)
 
     try:
+        write_project_cookbook(project_path, cookbook)
         markdown, image_assets = download_and_rewrite_markdown_images(raw_markdown, project_path, input_path.parent)
         deck = parse_markdown_deck(markdown, max_slides=options.max_slides)
         if image_assets:
@@ -456,6 +466,7 @@ def generate(options: GenerationOptions) -> RunResult:
                 api_key=options.deepseek_api_key,
                 base_url=options.deepseek_base_url,
                 model=options.deepseek_model,
+                cookbook=cookbook,
                 logger=logger,
             )
         generate_plan(
@@ -474,9 +485,10 @@ def generate(options: GenerationOptions) -> RunResult:
             qwen_model=options.qwen_model,
             qwen_max_tokens=options.qwen_max_tokens,
             qwen_timeout=options.qwen_timeout,
+            cookbook=cookbook,
             logger=logger,
         )
-        write_prompt_files(project_path, deck, canvas_format, options.style)
+        write_prompt_files(project_path, deck, canvas_format, options.style, cookbook)
         if options.dry_run:
             result = RunResult(ok=True, project_path=str(project_path), slides=len(deck.slides), dry_run=True, renderer=options.renderer)
             write_result(project_path, result)
@@ -501,6 +513,7 @@ def generate(options: GenerationOptions) -> RunResult:
                 svg_workers=options.svg_workers,
                 svg_batch_size=options.svg_batch_size,
                 cache_prime=options.cache_prime,
+                cookbook=cookbook,
                 logger=logger,
             )
             clean_svg_output_entities(project_path)
