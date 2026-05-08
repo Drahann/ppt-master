@@ -328,7 +328,83 @@ Available Project Images JSON:
 """
 
 
-def build_svg_prompt(prefix: str, slide: Slide) -> str:
+CURRENT_PAGE_SPEC_KEYS = (
+    "index",
+    "title",
+    "kind",
+    "section_title",
+    "svg_filename",
+    "rhythm",
+    "layout",
+    "layout_family",
+    "layout_signature",
+    "intent",
+    "composition",
+    "visual_structure",
+    "why_this_layout",
+    "visual_metaphor",
+    "visual_guidance",
+    "icon_plan",
+    "chart_or_diagram",
+    "content_density",
+)
+
+
+def build_current_page_spec_excerpt(project_path: Path, slide: Slide) -> str:
+    """Extract the current slide's spec tail so recency reinforces page execution."""
+
+    page_key = f"P{slide.index:02d}"
+    payload: dict[str, Any] = {
+        "page": page_key,
+        "svg_filename": slide.svg_filename,
+        "design_plan_slide": {},
+        "spec_lock_page": {},
+    }
+
+    design_path = project_path / "design_plan.json"
+    if design_path.exists():
+        try:
+            design_data = json.loads(design_path.read_text(encoding="utf-8", errors="replace"))
+            for item in design_data.get("slides", []):
+                if not isinstance(item, dict):
+                    continue
+                if item.get("index") == slide.index or item.get("svg_filename") == slide.svg_filename:
+                    payload["design_plan_slide"] = {
+                        key: item.get(key)
+                        for key in CURRENT_PAGE_SPEC_KEYS
+                        if key in item
+                    }
+                    break
+        except Exception:
+            payload["design_plan_slide"] = {}
+
+    lock_path = project_path / "spec_lock.json"
+    if lock_path.exists():
+        try:
+            lock_data = json.loads(lock_path.read_text(encoding="utf-8", errors="replace"))
+            chart_rules = lock_data.get("chart_rules", {}) if isinstance(lock_data, dict) else {}
+            style_anchor = lock_data.get("style_anchor", {}) if isinstance(lock_data, dict) else {}
+            theme_color_policy = lock_data.get("theme_color_policy", {}) if isinstance(lock_data, dict) else {}
+            page_rhythm = lock_data.get("page_rhythm", {}) if isinstance(lock_data, dict) else {}
+            payload["spec_lock_page"] = {
+                "page_rhythm": page_rhythm.get(page_key) if isinstance(page_rhythm, dict) else None,
+                "shape_language": lock_data.get("shape_language", {}),
+                "spacing": lock_data.get("spacing", {}),
+                "style_anchor_repeat": style_anchor.get("repeat") if isinstance(style_anchor, dict) else None,
+                "style_anchor_vary": style_anchor.get("vary") if isinstance(style_anchor, dict) else None,
+                "theme_color_policy": theme_color_policy,
+                "chart_rules_style": chart_rules.get("style") if isinstance(chart_rules, dict) else None,
+                "chart_rules_selection_policy": chart_rules.get("selection_policy") if isinstance(chart_rules, dict) else None,
+                "svg_forbidden": (lock_data.get("svg_rules") or {}).get("forbid", []) if isinstance(lock_data.get("svg_rules"), dict) else [],
+            }
+        except Exception:
+            payload["spec_lock_page"] = {}
+
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def build_svg_prompt(prefix: str, slide: Slide, current_page_spec: str | None = None) -> str:
+    page_spec = current_page_spec or "{}"
     return f"""{prefix}
 
 Current page task:
@@ -340,6 +416,9 @@ Current page source Markdown:
 ```markdown
 {slide.raw_markdown}
 ```
+
+Current page design/spec excerpt JSON:
+{page_spec}
 """
 
 
@@ -359,7 +438,8 @@ def write_prompt_files(
     page_dir = prompt_dir / "svg_pages"
     page_dir.mkdir(exist_ok=True)
     for slide in deck.slides:
-        (page_dir / f"{slide.stem}.md").write_text(build_svg_prompt(prefix, slide), encoding="utf-8")
+        page_spec = build_current_page_spec_excerpt(project_path, slide)
+        (page_dir / f"{slide.stem}.md").write_text(build_svg_prompt(prefix, slide, page_spec), encoding="utf-8")
 
 
 def normalize_svg_text(svg: str) -> str:
@@ -453,7 +533,7 @@ def generate_deepseek_svg_slide(
         if logger:
             logger.log("deepseek_svg", slide=slide.svg_filename, ok=True, skipped=True, batch=batch_index)
         return
-    prompt = build_svg_prompt(prefix, slide)
+    prompt = build_svg_prompt(prefix, slide, build_current_page_spec_excerpt(project_path, slide))
     attempts = max(1, svg_retries + 1)
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
