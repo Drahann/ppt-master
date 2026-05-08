@@ -257,9 +257,9 @@ def build_svg_prompt_prefix(
                                 "why_this_layout",
                                 "visual_metaphor",
                                 "visual_guidance",
+                                "color_role",
                                 "density_plan",
                                 "card_anatomy",
-                                "creative_detail",
                                 "icon_plan",
                                 "chart_or_diagram",
                                 "content_density",
@@ -303,8 +303,8 @@ Stable rules:
 - Use inline SVG attributes only.
 - Forbidden: `<style>`, `class`, `<foreignObject>`, `rgba()`, `<script>`, `<animate*>`, `<textPath>`, `<mask>`, HTML named entities, `<g opacity>`, `<image opacity>`, and `clip-path` outside simple image crops.
 - `clip-path` is allowed only on `<image>` for simple photo/avatar crops, and only with a matching single-shape `<clipPath>` in `<defs>`. Never use clip-path on shapes, groups, text, charts, or decorative overlays.
-- Light theme only: the root background must be `#FFFFFF` or near-white. Do not use dark theme, black/dark full-slide backgrounds, dark hero panels, GitHub-dark palette, or neon-on-black styling even if the model prefers a technology look.
-- Keep the deck theme continuous: the locked primary accent from spec_lock/cookbook must be dominant on every slide. Extra colors may add richness, but they must not make one slide feel like a different theme.
+- Light-canvas theme only: the root background must be `#FFFFFF` or near-white. Controlled color rails, soft-tint cards, chart regions, image overlays, and small/medium section accents are allowed when text contrast remains strong; avoid large saturated color blocks. Do not use dark full-slide backgrounds, GitHub-dark palette, or neon-on-black styling.
+- Keep the deck theme continuous through locked compact palette, typography, spacing, page chrome, and component grammar. The primary accent should recur across the deck, but it does not need to dominate every slide; use the current page spec to choose one leading accent and one supporting accent from spec_lock/cookbook.
 - XML reserved characters in text must be escaped.
 - Text wrapping and inline emphasis must use `<text>` and `<tspan>` only. Never use HTML `<span>`; write `<tspan fill="#..." font-weight="...">...</tspan>`.
 - Group related elements with plain `<g>`; never use `<g opacity>`.
@@ -312,27 +312,28 @@ Stable rules:
 - Follow the current slide's `layout_signature`, `visual_structure`, and `visual_guidance` from Design Plan JSON. These are soft structure instructions, not exact coordinates.
 - Treat `visual_guidance` as the aesthetic execution brief: implement its card geometry, label placement, chart skin, decorative motif, whitespace rhythm, and accent hierarchy instead of falling back to a generic card page.
 - Apply current-page spec fields deliberately:
-  - `rhythm` controls density, whitespace, and visual weight.
+  - `rhythm` controls macro pacing and visual weight; `content_density` and `density_plan` control visible text volume.
   - `layout_signature` is the page blueprint; draw that structure before adding details.
   - `composition` defines reading order and major regions.
   - `visual_structure` names the visible primitives to create.
   - `why_this_layout` explains the slide's emphasis; preserve that emphasis.
-  - `visual_metaphor` should appear as a subtle motif, not a distracting illustration.
-  - `density_plan` is the visible information budget; follow its requested number of cards, labels, captions, metric chips, or evidence phrases unless it would cause collisions.
+  - `visual_metaphor` should appear as a visible but controlled motif, not a distracting illustration.
+  - `color_role` names the leading accent and supporting accent for this page; apply those colors to hierarchy, headers, chips, one chart series, connector lines, or callouts rather than defaulting everything to primary blue. Keep neutral surfaces dominant.
+  - `density_plan` is the visible information and component-density budget; follow its requested cards, labels, captions, metric chips, evidence phrases, and blank-space control unless it would cause collisions.
   - `card_anatomy` is mandatory when cards exist; build those internal structures instead of drawing identical blank rectangles with centered text.
-  - `creative_detail` should become one small visible device that clarifies hierarchy, such as an accent path, metric ribbon, cutaway line, numbered corner, or motif texture.
   - `icon_plan` should be implemented with `<use data-icon="...">` placeholders when icons add meaning.
   - `chart_or_diagram` chooses the visualization geometry; restyle it in the locked theme rather than swapping to a generic card grid.
   - `content_density` decides how much text to keep visible and how aggressively to summarize.
 - Text density execution:
   - `low`: 1-2 visible text units; use only for intentional breathing, quote, cover, or closing pages.
-  - `medium`: normal content page; usually keep a headline plus 3-5 visible content units with short body phrases, labels, captions, or metric explanations.
+  - `medium`: normal content page; usually keep a headline plus 4-6 visible content units with short body phrases, labels, captions, or metric explanations.
   - `high`: evidence-rich page; use compact typography and strong grouping to keep 5-7 content units readable.
   - `showcase`: visual-dominant page; keep the hero visual large, but include supporting specs, labels, or metric chips so it does not feel empty.
+- Page fullness execution: normal content pages should use about 75-85% of the safe content area with meaningful components. Fill empty quadrants with relevant diagrams, comparison strips, metric chips, captions, callout bands, or image/diagram panels; do not add decorative clutter or text collisions.
 - Card creativity execution: preserve shared card outer geometry from spec_lock/cookbook, but vary card interiors by role. Combine header badges, side rails, corner numbers, icon pockets, metric chips, micro-chart strips, nested callout bands, status dots, or connector notches. Do not make a row of cards differ only by text.
 - If the current page uses a real data chart, wrap it in `<g id="chartArea">` and include a `<!-- chart-plot-area: ... -->` marker before the first data mark.
 - Avoid collapsing specific layout guidance into a generic two-column card page. If the plan asks for a chart, matrix, roadmap, dashboard, network, architecture, product view, or profile wall, build that visible structure.
-- Produce a polished slide, not a plain document dump: strong hierarchy, intentional whitespace, aligned panels/cards/diagrams, restrained colors, and no text collisions.
+- Produce a polished slide, not a plain document dump: strong hierarchy, intentional whitespace, aligned panels/cards/diagrams, deliberate color roles, and no text collisions.
 - If a slide is dense, summarize into key phrases and speaker-note-level detail rather than overfilling the canvas; do not over-compress medium/high pages into a few sparse labels.
 - Keep SVG concise: target 7,000-12,000 characters, no comments, no duplicated hidden text, no verbose metadata.
 - If current page source Markdown contains an image, use the downloaded local image when it helps the slide. Reference it with `<image href="../images/filename.ext" ... preserveAspectRatio="xMidYMid meet"/>`; do not reference external http(s), `/root/...`, or original source URLs.
