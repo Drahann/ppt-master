@@ -69,6 +69,39 @@ DEFAULT_TYPOGRAPHY = {
     "cover_title": 44,
 }
 
+TYPOGRAPHY_SIZE_KEYS = {"body", "title", "subtitle", "annotation", "cover_title"}
+TYPOGRAPHY_FAMILY_KEYS = {"font_family", "title_family", "body_family", "emphasis_family", "code_family"}
+PPT_SAFE_FONT_TAILS = {
+    "microsoft yahei",
+    "simhei",
+    "simsun",
+    "kaiti",
+    "fangsong",
+    "pingfang sc",
+    "heiti sc",
+    "songti sc",
+    "stsong",
+    "arial",
+    "arial black",
+    "calibri",
+    "segoe ui",
+    "verdana",
+    "helvetica",
+    "helvetica neue",
+    "tahoma",
+    "trebuchet ms",
+    "times new roman",
+    "times",
+    "georgia",
+    "cambria",
+    "palatino",
+    "consolas",
+    "courier new",
+    "menlo",
+    "monaco",
+    "impact",
+}
+
 FORBIDDEN = [
     "Mixing icon libraries",
     "Dark theme or dark full-slide backgrounds",
@@ -82,9 +115,10 @@ FORBIDDEN = [
 REPOSITORY_REFERENCE_CONTRACT = """Repository reference contract distilled from CLAUDE.md, SKILL.md, shared-standards.md, and executor references:
 - Direct API calls do not auto-load repository markdown. This prompt is the self-contained execution contract.
 - `design_plan.json` is the soft visual/semantic plan. `spec_lock.json` is the hard visual/token anchor for colors, fonts, icons, spacing, shape language, chart rules, and forbidden SVG features.
-- Each slide spec field has a role: `rhythm` controls density and whitespace; `layout` names the semantic archetype; `layout_signature` is the spatial blueprint; `intent` is the message; `composition` maps regions; `visual_structure` lists visible primitives; `why_this_layout` explains the content fit; `visual_metaphor` names the motif; `visual_guidance` gives concrete aesthetic execution; `icon_plan` lists exact placeholder icons; `chart_or_diagram` names the visualization grammar; `content_density` controls text compression.
+- Each slide spec field has a role: `rhythm` controls density and whitespace; `layout` names the semantic archetype; `layout_signature` is the spatial blueprint; `intent` is the message; `composition` maps regions; `visual_structure` lists visible primitives; `why_this_layout` explains the content fit; `visual_metaphor` names the motif; `visual_guidance` gives concrete aesthetic execution; `density_plan` sets visible text budget; `card_anatomy` designs card interiors; `creative_detail` names one tasteful visual twist; `icon_plan` lists exact placeholder icons; `chart_or_diagram` names the visualization grammar; `content_density` controls text compression.
 - Good specs are cumulative: precise fields create precise SVGs. Avoid filler values. Every non-empty field must give the SVG worker a usable drawing decision.
 - PPT-safe SVG rules: inline attributes only; HEX colors only; no CSS classes/styles; no rgba; no group/image opacity; no masks; no foreignObject; no script/animation; no textPath; no symbol definitions.
+- Typography must be PPT-safe: font stacks should end with Microsoft YaHei, SimSun, Arial, Times New Roman, Consolas, or another known installed family. Do not use `Noto Sans SC` as a sole font-family; the Source Han export variant is produced later by post-processing.
 - `clip-path` is allowed only on `<image>` elements with a matching simple `<clipPath>` in `<defs>` for photo/avatar crops. Do not use clip-path on shapes, groups, text, charts, or decorations.
 - Text must be SVG XML, not HTML: escape XML-reserved characters, use raw Unicode for normal punctuation/symbols, use `<text>` and `<tspan>` only, and keep inline emphasis inside one logical `<text>` where possible.
 - Group editable units with plain `<g>`: cards, process steps, icon-text pairs, chart groups, headers, and callouts. Never use `<g opacity>`.
@@ -265,6 +299,10 @@ def deterministic_plan(project_name: str, canvas_format: str, style: str, deck: 
             layout_family = "hero"
             visual_structure = "title-first cover with a subtle glove/data motif"
             visual_guidance = "Create a bright title-first cover with a confident focal title, one refined technology motif, generous negative space, and a small repeated accent system that can echo through later pages."
+            density_plan = "Low text density: title, one subtitle line, and one short identity label only."
+            card_anatomy = ""
+            creative_detail = "Repeat a small accent motif that can return in later page headers or dividers."
+            content_density = "low"
         elif slide.kind == "closing":
             rhythm = "closing"
             layout = "closing_centered"
@@ -272,6 +310,10 @@ def deterministic_plan(project_name: str, canvas_format: str, style: str, deck: 
             layout_family = "closing"
             visual_structure = "centered closing message with repeated accent motif"
             visual_guidance = "Use a quiet closing composition with a concise thank-you message, balanced whitespace, and a restrained reprise of the cover motif so the deck feels intentionally closed."
+            density_plan = "Low text density: closing message plus one supporting deck-title or contact line."
+            card_anatomy = ""
+            creative_detail = "Use the cover motif as a closing seal or short accent path."
+            content_density = "low"
         else:
             rhythm = "breathing" if slide.index % 5 == 0 else "dense"
             archetype = LAYOUT_ARCHETYPE_LIBRARY[(slide.index - 2) % (len(LAYOUT_ARCHETYPE_LIBRARY) - 2) + 1]
@@ -280,6 +322,10 @@ def deterministic_plan(project_name: str, canvas_format: str, style: str, deck: 
             layout_family = "evidence/diagram"
             visual_structure = "semantic diagram or card/chart composition selected for the slide content"
             visual_guidance = "Use the shared light technology style, then choose a content-specific diagram/card/chart treatment with clear focal hierarchy, elegant spacing, and one tasteful detail that makes the page feel designed rather than templated."
+            density_plan = "Medium content-rich density: preserve 3-5 visible points or card bodies, using short phrases rather than sparse labels."
+            card_anatomy = "If cards are used, keep one shared outer geometry but vary interiors with badges, side rails, metric chips, icon pockets, or short evidence strips."
+            creative_detail = "Add one subtle content-linked motif such as a connector path, calibrated highlight band, or small technical annotation."
+            content_density = "medium"
         page_key = f"P{slide.index:02d}"
         page_rhythm[page_key] = rhythm
         slides.append(
@@ -298,9 +344,12 @@ def deterministic_plan(project_name: str, canvas_format: str, style: str, deck: 
                 "composition": layout,
                 "visual_metaphor": "precision interaction system",
                 "visual_guidance": visual_guidance,
+                "density_plan": density_plan,
+                "card_anatomy": card_anatomy,
+                "creative_detail": creative_detail,
                 "visual_structure": visual_structure,
                 "why_this_layout": "Chosen to match the slide's semantic role while preserving visual variety.",
-                "content_density": "medium",
+                "content_density": content_density,
             }
         )
     plan = {
@@ -329,14 +378,14 @@ def deterministic_plan(project_name: str, canvas_format: str, style: str, deck: 
         },
         "layout_system": {
             "grid": "12-column 1280x720 canvas with 60-80px outer margins",
-            "density": "one governing idea per slide; use cards and diagrams for support",
+            "density": "content-rich, not sparse: normal content pages should carry enough visible evidence to feel substantive while preserving hierarchy",
             "archetypes": LAYOUT_ARCHETYPE_LIBRARY,
             "variation": ["hero", "evidence grid", "process/timeline", "metrics cards", "comparison", "closing"],
             "diversity_policy": "Choose specific semantic archetypes from content rather than quotas. Avoid generic two-column pages unless the right/left structure is distinctive and justified.",
             "soft_constraints": "guide composition and visual emphasis, but do not lock exact coordinates for every page",
         },
         "component_system": {
-            "cards": "near-white fills, 8-12px radius, 1px border, no heavy shadows",
+            "cards": "near-white fills, 8-12px radius, 1px border, no heavy shadows; keep a shared outer grammar but vary card interiors by content role",
             "icons": "chunk-filled placeholders, 20-40px, one accent color per group",
             "charts": "prefer simplified SVG chart motifs; reserve chart templates for explicit data-heavy pages; include chart-plot-area markers for real data charts",
             "chart_template_policy": "choose real template keys from templates/charts/charts_index.json as semantic vocabulary, then redraw/restyle in the locked theme",
@@ -437,8 +486,12 @@ Rules:
 - Add useful visual guidance for every slide: one concise but concrete sentence describing composition intent, focal visual, component/card/chart treatment, decorative motif, whitespace rhythm, and accent usage where relevant.
 - Keep all per-slide text fields compact: `intent`, `composition`, `visual_structure`, `why_this_layout`, `visual_metaphor`, and `visual_guidance` should be short phrases or one short sentence, not paragraphs.
 - `visual_guidance` must improve aesthetic execution, not merely repeat the chosen layout. Name the design moves that make the selected chart/layout beautiful: card silhouette, title scale, label placement, highlight path, axis treatment, decorative image/motif, rhythm of empty space, and micro-contrast.
+- Define density explicitly. The default for substantive content pages is `medium`, and it should feel information-rich rather than sparse: visible slide text should usually include a clear headline plus 3-5 short content units, card bodies, labels, captions, or metric explanations. Use `low` only for intentional breathing pages, quotes, covers, or closings. Use `high` for evidence, technical, financial, table, roadmap, or multi-factor analysis pages. Use `showcase` when an image/product/team visual is dominant but still needs specs or metrics.
+- Add `density_plan` for every slide. It should state the visible text budget and structure, for example: `medium: 4 cards, each with 1 title + 1 evidence phrase + 1 metric chip`, or `high: timeline labels plus 5 milestone notes and a bottom implication strip`.
 - When `chart_or_diagram` is selected, explain how to restyle that visualization in the theme: what is emphasized, how labels/legends should sit, what supporting marks are muted, and what small creative detail prevents a generic chart look.
 - When a page uses cards, specify the card grammar: radius, border weight, fill relationship, header badge, icon placement, spacing, and how cards align to the page's narrative flow.
+- Add `card_anatomy` when cards appear. Cards should share a deck-level outer grammar but their interiors should not be identical boxes with centered text. Use role-specific interiors such as header badges, left accent rails, corner numbers, icon pockets, metric chips, micro chart strips, nested callout bands, comparison ticks, status dots, or connector notches.
+- Add `creative_detail` for every non-cover/non-closing slide: one concrete, restrained visual twist tied to the content, such as a launch path through roadmap nodes, sensor-mesh dots behind a product card, an evidence ribbon crossing the strongest metric, or a subtle diagram cutaway. This is not decoration for its own sake; it should clarify hierarchy or theme.
 - If a cookbook is active, `visual_guidance` should translate cookbook style into the exact slide structure instead of producing vague inspiration language.
 - Avoid generic guidance such as "make it polished" or "use a beautiful layout" unless it is followed by concrete visual choices.
 - The full response must include all slides plus both marker pairs. Prefer concise slide guidance over long prose.
@@ -466,9 +519,12 @@ Design plan field contract:
 - `why_this_layout`: why this structure fits the source content, not a generic justification.
 - `visual_metaphor`: a motif the SVG can render subtly, e.g. launch trajectory, sensor mesh, precision cockpit.
 - `visual_guidance`: the execution brief. Mention card grammar, chart label/legend placement, decorative motif, highlight path, image framing, whitespace rhythm, and accent hierarchy where relevant.
+- `density_plan`: visible text and information budget. Include approximate block/card/count structure and whether text should be terse, normal, or evidence-rich.
+- `card_anatomy`: if cards appear, describe their internal layout and variation; otherwise leave empty.
+- `creative_detail`: one concrete content-linked design detail that makes the page feel custom while staying in the theme.
 - `icon_plan`: exact icon placeholder names from inventory, only when icons have semantic value.
 - `chart_or_diagram`: one real catalog key when the page needs data/diagram structure; empty only for pure quote/image/text/team pages.
-- `content_density`: `low`, `medium`, `high`, or `showcase`; use it to tell SVG generation how aggressively to compress visible text.
+- `content_density`: `low`, `medium`, `high`, or `showcase`; use it to tell SVG generation how aggressively to compress visible text. `medium` is not minimal: it should preserve enough visible detail to avoid thin, under-explained slides.
 - These fields should agree with each other. Do not set `chart_or_diagram=roadmap_vertical` while `layout_signature` describes unrelated KPI cards.
 
 {cookbook_rules}
@@ -494,12 +550,12 @@ Required design_plan schema:
     "typography": {{"title_family": "", "body_family": "", "title": 34, "body": 18, "annotation": 13}}
   }},
   "art_direction": {{"mood": "", "motifs": [], "composition_principles": [], "background_style": "", "card_style": "", "diagram_style": "", "chart_style": "", "avoid": []}},
-  "layout_system": {{"grid": "", "density": "", "archetypes": [], "diversity_policy": "", "soft_constraints": ""}},
-  "component_system": {{"cards": "", "icons": "", "charts": "", "chart_template_policy": "", "callouts": "", "technical_motifs": ""}},
+  "layout_system": {{"grid": "", "density": "", "density_scale": {{"low": "", "medium": "", "high": "", "showcase": ""}}, "archetypes": [], "diversity_policy": "", "soft_constraints": ""}},
+  "component_system": {{"cards": "", "card_internal_variations": [], "icons": "", "charts": "", "chart_template_policy": "", "callouts": "", "technical_motifs": ""}},
   "assets": {{"icons": {{"library": "chunk-filled", "inventory": []}}, "images": {{}}}},
   "cookbook": {{"id": "", "priority": "", "applied_to": ["design_plan", "spec_lock", "svg"], "recipe_policy": "reference examples, not whitelist", "adaptation_policy": "derive cookbook-compatible layouts when content requires other structures"}},
   "slides": [
-    {{"index": 1, "title": "", "kind": "", "section_title": null, "svg_filename": "", "rhythm": "", "layout": "", "layout_family": "", "layout_signature": "", "intent": "", "composition": "", "visual_structure": "", "why_this_layout": "", "visual_metaphor": "", "visual_guidance": "", "icon_plan": [], "chart_or_diagram": "", "content_density": ""}}
+    {{"index": 1, "title": "", "kind": "", "section_title": null, "svg_filename": "", "rhythm": "", "layout": "", "layout_family": "", "layout_signature": "", "intent": "", "composition": "", "visual_structure": "", "why_this_layout": "", "visual_metaphor": "", "visual_guidance": "", "density_plan": "", "card_anatomy": "", "creative_detail": "", "icon_plan": [], "chart_or_diagram": "", "content_density": ""}}
   ]
 }}
 
@@ -570,13 +626,44 @@ def merge_light_colors(colors: Any) -> dict[str, str]:
     return merged
 
 
+def font_stack_has_safe_tail(value: str) -> bool:
+    parts = [
+        part.strip().strip('"').strip("'").lower()
+        for part in str(value).split(",")
+    ]
+    concrete = [
+        part
+        for part in parts
+        if part and part not in {"sans-serif", "serif", "monospace", "cursive", "fantasy", "system-ui"}
+    ]
+    return bool(concrete and concrete[-1] in PPT_SAFE_FONT_TAILS)
+
+
+def merge_typography(typography: Any) -> dict[str, Any]:
+    merged: dict[str, Any] = {**DEFAULT_TYPOGRAPHY}
+    if not isinstance(typography, dict):
+        return merged
+
+    for key, value in typography.items():
+        if key in TYPOGRAPHY_SIZE_KEYS:
+            try:
+                size = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 8 <= size <= 72:
+                merged[key] = size
+        elif key in TYPOGRAPHY_FAMILY_KEYS and isinstance(value, str) and font_stack_has_safe_tail(value):
+            merged[key] = value
+    return merged
+
+
 def enforce_light_theme(plan: dict[str, Any], lock: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     theme = plan.setdefault("theme", {})
     if not isinstance(theme, dict):
         theme = {}
         plan["theme"] = theme
     theme["colors"] = merge_light_colors(theme.get("colors", {}))
-    theme.setdefault("typography", DEFAULT_TYPOGRAPHY)
+    theme["typography"] = merge_typography(theme.get("typography", {}))
     plan.setdefault(
         "art_direction",
         {
@@ -594,7 +681,13 @@ def enforce_light_theme(plan: dict[str, Any], lock: dict[str, Any]) -> tuple[dic
         "layout_system",
         {
             "grid": "12-column 1280x720 canvas with 60-80px outer margins",
-            "density": "one governing idea per slide",
+            "density": "content-rich, not sparse: normal content pages should preserve enough visible evidence to feel substantive while keeping hierarchy",
+            "density_scale": {
+                "low": "cover, quote, breathing, and closing pages only; 1-2 text units",
+                "medium": "default content density; 3-5 visible content units with short body phrases or labels",
+                "high": "evidence/technical/finance/table/roadmap pages; 5-7 visible content units with compact labels",
+                "showcase": "visual-dominant product/team/image pages with supporting specs, metric chips, or captions",
+            },
             "archetypes": ["cover", "evidence grid", "process/timeline", "metrics cards", "comparison", "closing"],
             "diversity_policy": "choose specific semantic archetypes from content rather than quotas; avoid generic repeat layouts",
             "soft_constraints": "guide composition and visual emphasis, but do not lock exact coordinates for every page",
@@ -603,7 +696,17 @@ def enforce_light_theme(plan: dict[str, Any], lock: dict[str, Any]) -> tuple[dic
     plan.setdefault(
         "component_system",
         {
-            "cards": "near-white fills, 8-12px radius, 1px border, no heavy shadows",
+            "cards": "near-white fills, 8-12px radius, 1px border, no heavy shadows; shared outer grammar with varied internal anatomy",
+            "card_internal_variations": [
+                "header badge",
+                "left accent rail",
+                "corner number",
+                "icon pocket",
+                "metric chip",
+                "micro chart strip",
+                "nested callout band",
+                "connector notch",
+            ],
             "icons": "chunk-filled placeholders, 20-40px, one accent color per group",
             "charts": "light, minimal axes, restrained labels, chart-plot-area markers for real data charts",
             "callouts": "short highlighted phrases, never full paragraphs",
@@ -615,7 +718,7 @@ def enforce_light_theme(plan: dict[str, Any], lock: dict[str, Any]) -> tuple[dic
         plan["assets"]["icons"] = {"library": "chunk-filled", "inventory": ICON_INVENTORY}
 
     lock["colors"] = merge_light_colors(lock.get("colors", {}))
-    lock.setdefault("typography", DEFAULT_TYPOGRAPHY)
+    lock["typography"] = merge_typography(lock.get("typography", {}))
     lock["icons"] = {"library": "chunk-filled", "inventory": ICON_INVENTORY, "stroke_width": 2}
     lock.setdefault("spacing", {"outer_margin": 64, "card_gap": 20, "section_gap": 28})
     lock.setdefault("shape_language", {"radius": 10, "stroke_width": 1, "shadow": "none"})

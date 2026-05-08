@@ -257,6 +257,9 @@ def build_svg_prompt_prefix(
                                 "why_this_layout",
                                 "visual_metaphor",
                                 "visual_guidance",
+                                "density_plan",
+                                "card_anatomy",
+                                "creative_detail",
                                 "icon_plan",
                                 "chart_or_diagram",
                                 "content_density",
@@ -296,6 +299,7 @@ Stable rules:
 - Do not use layout templates.
 - Use `width="{canvas['viewbox'].split()[2]}" height="{canvas['viewbox'].split()[3]}" viewBox="{canvas['viewbox']}"`.
 - Use only colors, fonts, icon inventory, and image filenames listed in spec_lock.json.
+- Use font-family values exactly from spec_lock typography. Do not invent `Noto Sans SC` or other unlisted font names; primary SVG export should stay on PPT-safe stacks such as Microsoft YaHei / Arial.
 - Use inline SVG attributes only.
 - Forbidden: `<style>`, `class`, `<foreignObject>`, `rgba()`, `<script>`, `<animate*>`, `<textPath>`, `<mask>`, HTML named entities, `<g opacity>`, `<image opacity>`, and `clip-path` outside simple image crops.
 - `clip-path` is allowed only on `<image>` for simple photo/avatar crops, and only with a matching single-shape `<clipPath>` in `<defs>`. Never use clip-path on shapes, groups, text, charts, or decorative overlays.
@@ -314,13 +318,22 @@ Stable rules:
   - `visual_structure` names the visible primitives to create.
   - `why_this_layout` explains the slide's emphasis; preserve that emphasis.
   - `visual_metaphor` should appear as a subtle motif, not a distracting illustration.
+  - `density_plan` is the visible information budget; follow its requested number of cards, labels, captions, metric chips, or evidence phrases unless it would cause collisions.
+  - `card_anatomy` is mandatory when cards exist; build those internal structures instead of drawing identical blank rectangles with centered text.
+  - `creative_detail` should become one small visible device that clarifies hierarchy, such as an accent path, metric ribbon, cutaway line, numbered corner, or motif texture.
   - `icon_plan` should be implemented with `<use data-icon="...">` placeholders when icons add meaning.
   - `chart_or_diagram` chooses the visualization geometry; restyle it in the locked theme rather than swapping to a generic card grid.
   - `content_density` decides how much text to keep visible and how aggressively to summarize.
+- Text density execution:
+  - `low`: 1-2 visible text units; use only for intentional breathing, quote, cover, or closing pages.
+  - `medium`: normal content page; usually keep a headline plus 3-5 visible content units with short body phrases, labels, captions, or metric explanations.
+  - `high`: evidence-rich page; use compact typography and strong grouping to keep 5-7 content units readable.
+  - `showcase`: visual-dominant page; keep the hero visual large, but include supporting specs, labels, or metric chips so it does not feel empty.
+- Card creativity execution: preserve shared card outer geometry from spec_lock/cookbook, but vary card interiors by role. Combine header badges, side rails, corner numbers, icon pockets, metric chips, micro-chart strips, nested callout bands, status dots, or connector notches. Do not make a row of cards differ only by text.
 - If the current page uses a real data chart, wrap it in `<g id="chartArea">` and include a `<!-- chart-plot-area: ... -->` marker before the first data mark.
 - Avoid collapsing specific layout guidance into a generic two-column card page. If the plan asks for a chart, matrix, roadmap, dashboard, network, architecture, product view, or profile wall, build that visible structure.
 - Produce a polished slide, not a plain document dump: strong hierarchy, intentional whitespace, aligned panels/cards/diagrams, restrained colors, and no text collisions.
-- If a slide is dense, summarize into key phrases and speaker-note-level detail rather than overfilling the canvas.
+- If a slide is dense, summarize into key phrases and speaker-note-level detail rather than overfilling the canvas; do not over-compress medium/high pages into a few sparse labels.
 - Keep SVG concise: target 7,000-12,000 characters, no comments, no duplicated hidden text, no verbose metadata.
 - If current page source Markdown contains an image, use the downloaded local image when it helps the slide. Reference it with `<image href="../images/filename.ext" ... preserveAspectRatio="xMidYMid meet"/>`; do not reference external http(s), `/root/...`, or original source URLs.
 - Prefer project icon placeholders instead of hand-drawn icons. Use syntax such as `<use data-icon="chunk-filled/rocket" x="100" y="100" width="32" height="32" fill="#1D4ED8"/>`; `finalize_svg.py` will embed the real icon.
