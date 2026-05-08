@@ -75,8 +75,22 @@ FORBIDDEN = [
     "rgba()",
     "`<style>`, `class`, `<foreignObject>`, `textPath`, `@font-face`, `<animate*>`, `<script>`, `<iframe>`, `<symbol>`",
     "`<g opacity>` (set opacity on each child element individually)",
+    "`<image opacity>` (use an overlay rectangle instead)",
     "HTML named entities in text",
 ]
+
+REPOSITORY_REFERENCE_CONTRACT = """Repository reference contract distilled from CLAUDE.md, SKILL.md, shared-standards.md, and executor references:
+- Direct API calls do not auto-load repository markdown. This prompt is the self-contained execution contract.
+- `design_plan.json` is the soft visual/semantic plan. `spec_lock.json` is the hard visual/token anchor for colors, fonts, icons, spacing, shape language, chart rules, and forbidden SVG features.
+- Each slide spec field has a role: `rhythm` controls density and whitespace; `layout` names the semantic archetype; `layout_signature` is the spatial blueprint; `intent` is the message; `composition` maps regions; `visual_structure` lists visible primitives; `why_this_layout` explains the content fit; `visual_metaphor` names the motif; `visual_guidance` gives concrete aesthetic execution; `icon_plan` lists exact placeholder icons; `chart_or_diagram` names the visualization grammar; `content_density` controls text compression.
+- Good specs are cumulative: precise fields create precise SVGs. Avoid filler values. Every non-empty field must give the SVG worker a usable drawing decision.
+- PPT-safe SVG rules: inline attributes only; HEX colors only; no CSS classes/styles; no rgba; no group/image opacity; no masks; no foreignObject; no script/animation; no textPath; no symbol definitions.
+- `clip-path` is allowed only on `<image>` elements with a matching simple `<clipPath>` in `<defs>` for photo/avatar crops. Do not use clip-path on shapes, groups, text, charts, or decorations.
+- Text must be SVG XML, not HTML: escape XML-reserved characters, use raw Unicode for normal punctuation/symbols, use `<text>` and `<tspan>` only, and keep inline emphasis inside one logical `<text>` where possible.
+- Group editable units with plain `<g>`: cards, process steps, icon-text pairs, chart groups, headers, and callouts. Never use `<g opacity>`.
+- If a page contains a real data chart, include a `<!-- chart-plot-area: ... -->` marker inside `<g id="chartArea">` so downstream chart scanning can find it.
+- Use shadows and gradients sparingly. Prefer spacing, typography, borders, subtle tints, and accent bars before decorative effects.
+"""
 
 LAYOUT_ARCHETYPE_LIBRARY = [
     "hero_cover",
@@ -199,8 +213,10 @@ Fixed generation contract:
 - If source Markdown contains project images, reference local files with PPT-safe `<image href="../images/filename.ext" ... preserveAspectRatio="xMidYMid meet"/>` or `slice` for deliberate image fills.
 - Use project icon placeholders when icons are needed: `<use data-icon="chunk-filled/rocket" x="100" y="100" width="32" height="32" fill="#1D4ED8"/>`.
 - Available icon placeholders: {", ".join(ICON_INVENTORY)}.
-- Forbidden SVG features: `<style>`, `class`, `<foreignObject>`, `rgba()`, `clip-path`, `<script>`, `<animate*>`, `<textPath>`, `<mask>`, HTML named entities, and `<g opacity>`.
+- Forbidden SVG features: `<style>`, `class`, `<foreignObject>`, `rgba()`, `<script>`, `<animate*>`, `<textPath>`, `<mask>`, HTML named entities, `<g opacity>`, and `clip-path` outside simple image crops.
 - If no task follows this prefix, return exactly `ACK`.
+
+{REPOSITORY_REFERENCE_CONTRACT}
 
 Canvas JSON:
 {json.dumps(canvas, ensure_ascii=False, sort_keys=True)}
@@ -322,7 +338,7 @@ def deterministic_plan(project_name: str, canvas_format: str, style: str, deck: 
         "component_system": {
             "cards": "near-white fills, 8-12px radius, 1px border, no heavy shadows",
             "icons": "chunk-filled placeholders, 20-40px, one accent color per group",
-            "charts": "prefer simplified SVG chart motifs; reserve chart templates for explicit data-heavy pages",
+            "charts": "prefer simplified SVG chart motifs; reserve chart templates for explicit data-heavy pages; include chart-plot-area markers for real data charts",
             "chart_template_policy": "choose real template keys from templates/charts/charts_index.json as semantic vocabulary, then redraw/restyle in the locked theme",
             "callouts": "short conclusion phrases with accent bars or small badges, never long paragraphs",
         },
@@ -356,11 +372,12 @@ def deterministic_plan(project_name: str, canvas_format: str, style: str, deck: 
             "not_allowed": "dark pages, one-off palettes, invented icon styles, dense paragraph dumps, exact visual clones on every page",
         },
         "chart_rules": {
-            "style": "light, minimal axes, restrained labels",
+            "style": "light, minimal axes, restrained labels, no clip-path on chart elements",
             "auto_calibration": "scan-only",
             "catalog_source": "templates/charts/charts_index.json",
             "available_templates": [item["key"] for item in build_chart_template_reference()],
             "selection_policy": "choose real catalog keys as chart_or_diagram values; redraw/restyle in the locked theme",
+            "plot_area_marker": "required for real data charts",
         },
         "page_rhythm": page_rhythm,
         "forbidden": FORBIDDEN,
@@ -438,6 +455,22 @@ Rules:
 - Do not over-select chart types merely because the cookbook describes them in detail; detailed cookbook recipes are examples of style execution, not priority rankings.
 - Put the catalog source and selected template keys in `spec_lock.chart_rules`.
 
+Design plan field contract:
+- `rhythm`: a page pacing tag, not a mood word. Use values such as `hero`, `showcase`, `dense`, `breathing`, `process`, `future`, `closing` when they fit. It controls whitespace, text amount, and visual weight.
+- `layout`: the archetype or catalog-derived structure, e.g. `product_exploded_view`, `executive_summary_strips`, `roadmap_vertical`.
+- `layout_family`: broader family for continuity checks, e.g. `product`, `timeline`, `dashboard`, `matrix`, `network`, `quote`, `closing`.
+- `layout_signature`: a short spatial blueprint that could be sketched, e.g. `left product image + right spec cards`, `top timeline + bottom impact summary`.
+- `intent`: the audience-facing message this slide must prove.
+- `composition`: the major regions and reading order.
+- `visual_structure`: visible primitives to draw, e.g. `milestone nodes + text blocks`, `hero image + metric tiles`.
+- `why_this_layout`: why this structure fits the source content, not a generic justification.
+- `visual_metaphor`: a motif the SVG can render subtly, e.g. launch trajectory, sensor mesh, precision cockpit.
+- `visual_guidance`: the execution brief. Mention card grammar, chart label/legend placement, decorative motif, highlight path, image framing, whitespace rhythm, and accent hierarchy where relevant.
+- `icon_plan`: exact icon placeholder names from inventory, only when icons have semantic value.
+- `chart_or_diagram`: one real catalog key when the page needs data/diagram structure; empty only for pure quote/image/text/team pages.
+- `content_density`: `low`, `medium`, `high`, or `showcase`; use it to tell SVG generation how aggressively to compress visible text.
+- These fields should agree with each other. Do not set `chart_or_diagram=roadmap_vertical` while `layout_signature` describes unrelated KPI cards.
+
 {cookbook_rules}
 
 Layout archetype library:
@@ -484,8 +517,8 @@ Required spec_lock schema:
   "theme_color_policy": {{"primary_accent": "#1D4ED8", "supporting_accents": ["#0F766E", "#F59E0B"], "allow_extra_colors": "", "dominance_rule": ""}},
   "flex_rules": {{"allowed": "", "not_allowed": ""}},
   "icon_rules": {{"syntax": "<use data-icon=\\"chunk-filled/name\\" .../>", "style": "filled, simple, one accent color"}},
-  "chart_rules": {{"style": "light, minimal axes, no clip-path, no rgba", "catalog_source": "templates/charts/charts_index.json", "selected_templates": [], "selection_policy": "choose real catalog keys by content semantics first, then redraw/restyle in cookbook theme"}},
-  "svg_rules": {{"root_bg": "#FFFFFF", "max_chars": 12000, "forbid": ["rgba()", "clip-path", "<style>", "class", "<foreignObject>", "<mask>"]}},
+  "chart_rules": {{"style": "light, minimal axes, no clip-path on chart elements, no rgba", "catalog_source": "templates/charts/charts_index.json", "selected_templates": [], "selection_policy": "choose real catalog keys by content semantics first, then redraw/restyle in cookbook theme", "plot_area_marker": "required for real data charts"}},
+  "svg_rules": {{"root_bg": "#FFFFFF", "max_chars": 12000, "forbid": ["rgba()", "<style>", "class", "<foreignObject>", "<mask>", "<g opacity>", "<image opacity>"], "clip_path_policy": "only allowed on <image> with matching simple <clipPath> in <defs>"}},
   "page_rhythm": {{"P01": "hero", "P02": "dense"}},
   "forbidden": []
 }}
@@ -572,7 +605,7 @@ def enforce_light_theme(plan: dict[str, Any], lock: dict[str, Any]) -> tuple[dic
         {
             "cards": "near-white fills, 8-12px radius, 1px border, no heavy shadows",
             "icons": "chunk-filled placeholders, 20-40px, one accent color per group",
-            "charts": "light, minimal axes, restrained labels, no clip-path",
+            "charts": "light, minimal axes, restrained labels, chart-plot-area markers for real data charts",
             "callouts": "short highlighted phrases, never full paragraphs",
             "technical_motifs": "thin lines, small nodes, measured accent bars, light system diagrams",
         },
@@ -611,7 +644,7 @@ def enforce_light_theme(plan: dict[str, Any], lock: dict[str, Any]) -> tuple[dic
         },
     )
     lock.setdefault("icon_rules", {"syntax": '<use data-icon="chunk-filled/name" .../>', "style": "filled, simple, one accent color"})
-    chart_rules = lock.setdefault("chart_rules", {"style": "light, minimal axes, no clip-path, no rgba"})
+    chart_rules = lock.setdefault("chart_rules", {"style": "light, minimal axes, no clip-path on chart elements, no rgba"})
     if isinstance(chart_rules, dict):
         chart_rules.setdefault("catalog_source", "templates/charts/charts_index.json")
         chart_rules.setdefault(
@@ -619,7 +652,16 @@ def enforce_light_theme(plan: dict[str, Any], lock: dict[str, Any]) -> tuple[dic
             "choose real catalog keys as chart_or_diagram values by content semantics first; redraw/restyle in the locked cookbook theme",
         )
         chart_rules.setdefault("available_templates", [item["key"] for item in build_chart_template_reference()])
-    lock.setdefault("svg_rules", {"root_bg": "#FFFFFF", "max_chars": 12000, "forbid": ["rgba()", "clip-path", "<style>", "class", "<foreignObject>", "<mask>"]})
+        chart_rules.setdefault("plot_area_marker", "required for real data charts")
+    lock.setdefault(
+        "svg_rules",
+        {
+            "root_bg": "#FFFFFF",
+            "max_chars": 12000,
+            "forbid": ["rgba()", "<style>", "class", "<foreignObject>", "<mask>", "<g opacity>", "<image opacity>"],
+            "clip_path_policy": "only allowed on <image> with matching simple <clipPath> in <defs>",
+        },
+    )
     forbidden = lock.get("forbidden", [])
     if not isinstance(forbidden, list):
         forbidden = []

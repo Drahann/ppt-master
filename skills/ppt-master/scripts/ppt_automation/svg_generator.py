@@ -297,7 +297,8 @@ Stable rules:
 - Use `width="{canvas['viewbox'].split()[2]}" height="{canvas['viewbox'].split()[3]}" viewBox="{canvas['viewbox']}"`.
 - Use only colors, fonts, icon inventory, and image filenames listed in spec_lock.json.
 - Use inline SVG attributes only.
-- Forbidden: `<style>`, `class`, `<foreignObject>`, `rgba()`, `clip-path`, `<script>`, `<animate*>`, `<textPath>`, `<mask>`, and HTML named entities.
+- Forbidden: `<style>`, `class`, `<foreignObject>`, `rgba()`, `<script>`, `<animate*>`, `<textPath>`, `<mask>`, HTML named entities, `<g opacity>`, `<image opacity>`, and `clip-path` outside simple image crops.
+- `clip-path` is allowed only on `<image>` for simple photo/avatar crops, and only with a matching single-shape `<clipPath>` in `<defs>`. Never use clip-path on shapes, groups, text, charts, or decorative overlays.
 - Light theme only: the root background must be `#FFFFFF` or near-white. Do not use dark theme, black/dark full-slide backgrounds, dark hero panels, GitHub-dark palette, or neon-on-black styling even if the model prefers a technology look.
 - Keep the deck theme continuous: the locked primary accent from spec_lock/cookbook must be dominant on every slide. Extra colors may add richness, but they must not make one slide feel like a different theme.
 - XML reserved characters in text must be escaped.
@@ -306,6 +307,17 @@ Stable rules:
 - Use the current page source Markdown as the source of visible content. The global manifest is only for deck context.
 - Follow the current slide's `layout_signature`, `visual_structure`, and `visual_guidance` from Design Plan JSON. These are soft structure instructions, not exact coordinates.
 - Treat `visual_guidance` as the aesthetic execution brief: implement its card geometry, label placement, chart skin, decorative motif, whitespace rhythm, and accent hierarchy instead of falling back to a generic card page.
+- Apply current-page spec fields deliberately:
+  - `rhythm` controls density, whitespace, and visual weight.
+  - `layout_signature` is the page blueprint; draw that structure before adding details.
+  - `composition` defines reading order and major regions.
+  - `visual_structure` names the visible primitives to create.
+  - `why_this_layout` explains the slide's emphasis; preserve that emphasis.
+  - `visual_metaphor` should appear as a subtle motif, not a distracting illustration.
+  - `icon_plan` should be implemented with `<use data-icon="...">` placeholders when icons add meaning.
+  - `chart_or_diagram` chooses the visualization geometry; restyle it in the locked theme rather than swapping to a generic card grid.
+  - `content_density` decides how much text to keep visible and how aggressively to summarize.
+- If the current page uses a real data chart, wrap it in `<g id="chartArea">` and include a `<!-- chart-plot-area: ... -->` marker before the first data mark.
 - Avoid collapsing specific layout guidance into a generic two-column card page. If the plan asks for a chart, matrix, roadmap, dashboard, network, architecture, product view, or profile wall, build that visible structure.
 - Produce a polished slide, not a plain document dump: strong hierarchy, intentional whitespace, aligned panels/cards/diagrams, restrained colors, and no text collisions.
 - If a slide is dense, summarize into key phrases and speaker-note-level detail rather than overfilling the canvas.
