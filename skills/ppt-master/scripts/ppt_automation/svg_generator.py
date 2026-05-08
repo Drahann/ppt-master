@@ -328,28 +328,6 @@ Available Project Images JSON:
 """
 
 
-CURRENT_PAGE_SPEC_KEYS = (
-    "index",
-    "title",
-    "kind",
-    "section_title",
-    "svg_filename",
-    "rhythm",
-    "layout",
-    "layout_family",
-    "layout_signature",
-    "intent",
-    "composition",
-    "visual_structure",
-    "why_this_layout",
-    "visual_metaphor",
-    "visual_guidance",
-    "icon_plan",
-    "chart_or_diagram",
-    "content_density",
-)
-
-
 def build_current_page_spec_excerpt(project_path: Path, slide: Slide) -> str:
     """Extract the current slide's spec tail so recency reinforces page execution."""
 
@@ -369,11 +347,7 @@ def build_current_page_spec_excerpt(project_path: Path, slide: Slide) -> str:
                 if not isinstance(item, dict):
                     continue
                 if item.get("index") == slide.index or item.get("svg_filename") == slide.svg_filename:
-                    payload["design_plan_slide"] = {
-                        key: item.get(key)
-                        for key in CURRENT_PAGE_SPEC_KEYS
-                        if key in item
-                    }
+                    payload["design_plan_slide"] = item
                     break
         except Exception:
             payload["design_plan_slide"] = {}
