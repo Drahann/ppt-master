@@ -114,7 +114,7 @@ The old interactive workflow is no longer the main execution path, but these rep
 
 - DeepSeek direct Anthropic-compatible API is used for `design_plan/spec_lock` and speaker notes in live mode.
 - Claude Code CLI is used for per-slide SVG generation in live mode, producing one independent SVG file per slide call.
-- Claude SVG runs default to `PPT_MASTER_CLAUDE_TOOLS=readwrite` so cache-prime and per-slide calls share the same Claude Code tool declaration; set `PPT_MASTER_CLAUDE_TOOLS=disabled` only for controlled no-tool comparisons.
+- Claude SVG runs use a fixed no-tool Claude Code invocation for cache-prime and per-slide calls.
 - `--svg-workers` is the true SVG concurrency limit. `--svg-batch-size` only groups pages for log/reporting batch metadata; it does not reserve a worker slot for a whole batch.
 - SVG/spec font choices are preserved for the primary editable PPTX export. Post-processing also builds a temporary `svg_final_sourcehan/` variant and exports a Source Han version (`思源宋体` titles, `思源黑体` body text) without changing `svg_final/`.
 - All live prompt families start with a byte-stable `PPT_MASTER_COMMON_PREFIX_V1` deck prefix: fixed rules, canvas, style, source Markdown, and compact slide manifest.

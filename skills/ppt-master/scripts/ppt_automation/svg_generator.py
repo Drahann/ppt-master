@@ -343,43 +343,6 @@ Current page source Markdown:
 """
 
 
-def claude_tool_mode() -> str:
-    raw = os.environ.get("PPT_MASTER_CLAUDE_TOOLS", "readwrite").strip().lower()
-    if raw in {"1", "true", "yes", "on"}:
-        return "readwrite"
-    if raw in {"read", "readonly"}:
-        return "readonly"
-    if raw in {"readwrite", "read-write", "rw"}:
-        return "readwrite"
-    if raw in {"0", "false", "no", "off", "none", "disabled"}:
-        return "disabled"
-    if raw == "":
-        return "readwrite"
-    return "readwrite"
-
-
-def claude_tool_args(mode: str) -> list[str]:
-    if mode == "readonly":
-        return [
-            "--tools",
-            "Read",
-            "--allowedTools",
-            "Read",
-            "--permission-mode",
-            "acceptEdits",
-        ]
-    if mode == "readwrite":
-        return [
-            "--tools",
-            "Read,Write",
-            "--allowedTools",
-            "Read,Write",
-            "--permission-mode",
-            "acceptEdits",
-        ]
-    return ["--tools="]
-
-
 def claude_stream_enabled() -> bool:
     raw = os.environ.get("PPT_MASTER_CLAUDE_STREAM", "1").strip().lower()
     return raw not in {"0", "false", "no", "off", "disabled"}
@@ -389,7 +352,7 @@ def claude_output_format() -> str:
     return "stream-json" if claude_stream_enabled() else "json"
 
 
-def claude_command(claude_exe: str, *, tool_args: list[str], output_format: str) -> list[str]:
+def claude_command(claude_exe: str, *, output_format: str) -> list[str]:
     command = [
         claude_exe,
         "-p",
@@ -401,35 +364,8 @@ def claude_command(claude_exe: str, *, tool_args: list[str], output_format: str)
     if output_format == "stream-json":
         command.append("--verbose")
         command.append("--include-partial-messages")
-    command.extend(tool_args)
+    command.append("--tools=")
     return command
-
-
-def tool_audit_filename(slide: Slide) -> str:
-    return f"claude_tool_audit_{slide.stem}.json"
-
-
-def append_tool_experiment_prompt(prompt: str, slide: Slide, tool_mode: str) -> str:
-    audit_name = tool_audit_filename(slide)
-    if tool_mode == "readonly":
-        return f"""{prompt}
-
-Restricted tool-access instructions:
-- This run enables only the Claude Code `Read` tool for observability.
-- You may use `Read` to inspect `design_plan.json`, `spec_lock.json`, `slide_manifest.json`, `prompts/svg_prefix.md`, or this slide's prompt file if it is necessary.
-- Prefer the content already embedded in this prompt. Do not read files unless the embedded context is insufficient.
-- You cannot write or edit files in this mode.
-- The final response must contain exactly one complete SVG document and no prose, so the runner can validate and log usage normally.
-"""
-    return f"""{prompt}
-
-Restricted tool-access instructions:
-- This run intentionally enables only Claude Code `Read` and `Write` file tools to measure behavior. The `Edit` tool is not available.
-- You may use `Read` to inspect `design_plan.json`, `spec_lock.json`, `slide_manifest.json`, `prompts/svg_prefix.md`, or this slide's prompt file if it helps.
-- Use `Write` to save the final SVG to `svg_output/{slide.svg_filename}` before your final response.
-- Use `Write` to save a JSON audit file at `logs/{audit_name}` with keys: `read_files`, `wrote_files`, `notes`.
-- The final response must still contain exactly one complete SVG document and no prose, so the runner can validate and log usage normally.
-"""
 
 
 def write_prompt_files(
@@ -740,11 +676,7 @@ def generate_claude_slide(
             logger.log("claude_svg", slide=slide.svg_filename, ok=True, skipped=True, batch=batch_index)
         return
     prompt = build_svg_prompt(prefix, slide)
-    tool_mode = claude_tool_mode()
-    tool_args = claude_tool_args(tool_mode)
     output_format = claude_output_format()
-    if tool_mode != "disabled":
-        prompt = append_tool_experiment_prompt(prompt, slide, tool_mode)
     claude_env = scoped_claude_env(env, scope_id or f"slide_{slide.index:02d}_{slide.stem}")
     attempts = max(1, claude_retries + 1)
     last_error: Exception | None = None
@@ -762,12 +694,11 @@ def generate_claude_slide(
                 batch=batch_index,
                 attempt=attempt,
                 output_format=output_format,
-                tool_mode=tool_mode,
                 stream_log=str(stream_log_path.relative_to(project_path)),
             )
         try:
             stdout, stderr, returncode, duration = run_claude_print(
-                claude_command(claude_exe, tool_args=tool_args, output_format=output_format),
+                claude_command(claude_exe, output_format=output_format),
                 prompt=prompt,
                 cwd=project_path,
                 env=claude_env,
@@ -790,33 +721,18 @@ def generate_claude_slide(
                             "duration_seconds": round(duration, 3),
                             "batch": batch_index,
                             "attempt": attempt,
-                            "tool_mode": tool_mode,
-                            "tool_args": tool_args,
                             "output_format": output_format,
                             "stream_log": str(stream_log_path.relative_to(project_path)) if stream_log_path else None,
                         },
                     )
                 raise GenerationError(f"Claude SVG generation failed for {slide.svg_filename}: {(stderr or stdout).strip()}")
             text, usage = parse_claude_json_output(stdout)
-            recovered_from_tool_write = False
             syntax_repaired_by_api = False
             syntax_repair_usage: dict[str, Any] | None = None
             try:
                 svg = extract_svg(text)
             except Exception as exc:
-                if tool_mode != "disabled" and output_path.exists() and output_path.stat().st_size > 0:
-                    try:
-                        svg = extract_svg(output_path.read_text(encoding="utf-8", errors="replace"))
-                        recovered_from_tool_write = True
-                    except Exception:
-                        recovered_from_tool_write = False
-                    if recovered_from_tool_write:
-                        append_text = (
-                            f"\n\n[runner recovered SVG from tool-written file: "
-                            f"{output_path.relative_to(project_path)}]"
-                        )
-                        text = f"{text}{append_text}"
-                if not recovered_from_tool_write and is_svg_xml_syntax_error(exc):
+                if is_svg_xml_syntax_error(exc):
                     repair_prompt = ""
                     repair_response = ""
                     try:
@@ -880,10 +796,9 @@ def generate_claude_slide(
                                 model=syntax_repair_model,
                                 error=str(repair_exc),
                             )
-                if not recovered_from_tool_write:
-                    if not syntax_repaired_by_api:
-                        svg = ""
-                if not recovered_from_tool_write and not syntax_repaired_by_api and logger:
+                if not syntax_repaired_by_api:
+                    svg = ""
+                if not syntax_repaired_by_api and logger:
                     logger.log_transcript(
                         "claude_svg",
                         prompt=prompt,
@@ -900,17 +815,14 @@ def generate_claude_slide(
                             "usage": usage,
                             "batch": batch_index,
                             "attempt": attempt,
-                            "tool_mode": tool_mode,
-                            "tool_args": tool_args,
                             "output_format": output_format,
                             "stream_log": str(stream_log_path.relative_to(project_path)) if stream_log_path else None,
-                            "tool_audit": f"logs/{tool_audit_filename(slide)}" if tool_mode != "disabled" else None,
                             "syntax_repaired_by_api": syntax_repaired_by_api,
                             "syntax_repair_model": syntax_repair_model if syntax_repaired_by_api else None,
                             "syntax_repair_usage": syntax_repair_usage,
                         },
                     )
-                if not recovered_from_tool_write and not syntax_repaired_by_api:
+                if not syntax_repaired_by_api:
                     raise
             if logger:
                 logger.log_transcript(
@@ -928,12 +840,8 @@ def generate_claude_slide(
                         "usage": usage,
                         "batch": batch_index,
                         "attempt": attempt,
-                        "tool_mode": tool_mode,
-                        "tool_args": tool_args,
                         "output_format": output_format,
                         "stream_log": str(stream_log_path.relative_to(project_path)) if stream_log_path else None,
-                        "tool_audit": f"logs/{tool_audit_filename(slide)}" if tool_mode != "disabled" else None,
-                        "recovered_from_tool_write": recovered_from_tool_write,
                         "syntax_repaired_by_api": syntax_repaired_by_api,
                         "syntax_repair_model": syntax_repair_model if syntax_repaired_by_api else None,
                         "syntax_repair_usage": syntax_repair_usage,
@@ -951,11 +859,8 @@ def generate_claude_slide(
                     output_chars=len(stdout),
                     batch=batch_index,
                     attempt=attempt,
-                    tool_mode=tool_mode,
                     output_format=output_format,
                     stream_log=str(stream_log_path.relative_to(project_path)) if stream_log_path else None,
-                    tool_audit=f"logs/{tool_audit_filename(slide)}" if tool_mode != "disabled" else None,
-                    recovered_from_tool_write=recovered_from_tool_write,
                     syntax_repaired_by_api=syntax_repaired_by_api,
                     syntax_repair_model=syntax_repair_model if syntax_repaired_by_api else None,
                 )
@@ -972,10 +877,8 @@ def generate_claude_slide(
                     prompt_chars=len(prompt),
                     batch=batch_index,
                     attempt=attempt,
-                    tool_mode=tool_mode,
                     output_format=output_format,
                     stream_log=str(stream_log_path.relative_to(project_path)) if stream_log_path else None,
-                    tool_audit=f"logs/{tool_audit_filename(slide)}" if tool_mode != "disabled" else None,
                     retrying=attempt < attempts,
                 )
             if attempt < attempts:
@@ -1038,8 +941,6 @@ def generate_svg_files(
     if not truthy_env(os.environ.get("PPT_MASTER_CLAUDE_SHARE_CONFIG")):
         env["PPT_MASTER_CLAUDE_CONFIG_BASE"] = str(claude_config_base(project_path))
     prefix = build_svg_prompt_prefix(project_path, deck, canvas_format, style, cookbook)
-    tool_mode = claude_tool_mode()
-    tool_args = claude_tool_args(tool_mode)
     if cache_prime:
         prime_prompt = build_deck_context_prefix(deck, canvas_format, style, cookbook)
         try:
@@ -1052,7 +953,7 @@ def generate_svg_files(
                     "json",
                     "--input-format",
                     "text",
-                    *tool_args,
+                    "--tools=",
                 ],
                 prompt=prime_prompt,
                 cwd=project_path,
@@ -1073,8 +974,6 @@ def generate_svg_files(
                         "duration_seconds": round(duration, 3),
                         "usage": usage,
                         "scope": "common_prefix",
-                        "tool_mode": tool_mode,
-                        "tool_args": tool_args,
                         "output_format": "json",
                     },
                 )
@@ -1087,7 +986,6 @@ def generate_svg_files(
                     output_chars=len(stdout),
                     stderr_chars=len(stderr),
                     scope="common_prefix",
-                    tool_mode=tool_mode,
                     output_format="json",
                 )
         except Exception as exc:
