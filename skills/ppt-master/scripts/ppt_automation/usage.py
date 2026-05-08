@@ -11,7 +11,7 @@ from typing import Any
 
 
 class UsageLogger:
-    """Append-only usage recorder for direct API and Claude Code calls."""
+    """Append-only usage recorder for direct API calls."""
 
     def __init__(self, project_path: Path) -> None:
         logs_dir = project_path / "logs"

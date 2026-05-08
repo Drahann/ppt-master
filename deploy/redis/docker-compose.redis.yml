@@ -1,27 +1,27 @@
 services:
-  ppt-master-claude-redis:
+  ppt-master-deepseek-redis:
     image: redis:7-alpine
-    container_name: ppt-master-claude-redis
+    container_name: ppt-master-deepseek-redis
     command: ["sh", "/usr/local/bin/start-redis.sh"]
     ports:
-      - "${PPT_CLAUDE_REDIS_BIND:-0.0.0.0}:${PPT_CLAUDE_REDIS_PORT:-6380}:6379"
+      - "${PPT_DEEPSEEK_REDIS_BIND:-0.0.0.0}:${PPT_DEEPSEEK_REDIS_PORT:-6380}:6379"
     volumes:
       - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
       - ./start-redis.sh:/usr/local/bin/start-redis.sh:ro
-      - ppt-master-claude-redis-data:/data
+      - ppt-master-deepseek-redis-data:/data
     restart: unless-stopped
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "if [ -n \"$${PPT_CLAUDE_REDIS_PASSWORD:-}\" ]; then REDISCLI_AUTH=\"$${PPT_CLAUDE_REDIS_PASSWORD}\" redis-cli ping; else redis-cli ping; fi",
+          "if [ -n \"$${PPT_DEEPSEEK_REDIS_PASSWORD:-}\" ]; then REDISCLI_AUTH=\"$${PPT_DEEPSEEK_REDIS_PASSWORD}\" redis-cli ping; else redis-cli ping; fi",
         ]
       interval: 10s
       timeout: 3s
       retries: 5
       start_period: 5s
     environment:
-      PPT_CLAUDE_REDIS_PASSWORD: ${PPT_CLAUDE_REDIS_PASSWORD:-}
+      PPT_DEEPSEEK_REDIS_PASSWORD: ${PPT_DEEPSEEK_REDIS_PASSWORD:-}
 
 volumes:
-  ppt-master-claude-redis-data:
+  ppt-master-deepseek-redis-data:

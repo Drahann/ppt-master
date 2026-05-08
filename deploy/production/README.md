@@ -1,11 +1,11 @@
-# Claude PPT Production Shell
+# DeepSeek PPT Production Shell
 
-This directory mirrors the current production PPT API shape, but targets the DeepSeek-backed Claude Code PPT generator in this repository.
+This directory mirrors the current production PPT API shape, but targets the direct DeepSeek Anthropic-compatible PPT generator in this repository.
 
 ## Ports
 
 - Existing production PPT service: keep using host port `3001`.
-- New DeepSeek/Claude PPT service: host port `3003`, container port `3000`.
+- New DeepSeek PPT service: host port `3003`, container port `3000`.
 - Dedicated Redis for this service: host port `6380`.
 
 The business API paths stay the same:
@@ -25,20 +25,20 @@ Copy the example and replace the five keys for this server:
 
 ```bash
 mkdir -p secrets
-cp deploy/production/deepseek_claude_account_pool.example.json secrets/deepseek_claude_account_pool.json
+cp deploy/production/deepseek_account_pool.example.json secrets/deepseek_account_pool.json
 ```
 
 This working tree also contains ignored ready-to-copy files when generated locally:
 
 - `.env.api`
-- `secrets/deepseek_claude_account_pool.json`
-- `deploy/production/server-claude.env.api`
-- `deploy/production/deepseek_claude_account_pool.json`
-- `deploy/production/deepseek_claude_account_pool_06_10.json`
+- `secrets/deepseek_account_pool.json`
+- `deploy/production/server-deepseek.env.api`
+- `deploy/production/deepseek_account_pool.json`
+- `deploy/production/deepseek_account_pool_06_10.json`
 
 Default policy:
 
-- 5 DeepSeek/Claude accounts per server.
+- 5 DeepSeek accounts per server.
 - Each account allows 2 concurrent PPT jobs.
 - Each account has 24 SVG slots.
 - Each PPT job requests 12 SVG slots by default.
@@ -60,7 +60,7 @@ PPT_API_RUNNER_START_JITTER_SECONDS=12
 PPT_API_RUNNER_START_STAGGER_SCOPE=global
 ```
 
-For `qwen3.6-plus` spec generation, the Qwen request timeout is intentionally longer than the old 5-minute default:
+For `qwen3.6-plus` notes generation, the Qwen request timeout is intentionally longer than the old 5-minute default:
 
 ```env
 PPT_API_QWEN_TIMEOUT=900
@@ -72,17 +72,17 @@ The root `docker-compose.yml` starts both the API container and the dedicated
 Redis container for this service.
 
 ```bash
-cp deploy/production/server-claude.env.api.example .env.api
+cp deploy/production/server-deepseek.env.api.example .env.api
 docker compose --env-file .env.api up -d --build
 ```
 
 If you run Redis outside the root compose stack, make sure `.env.api` points to
-that external Redis URL instead of `ppt-master-claude-redis`.
+that external Redis URL instead of `ppt-master-deepseek-redis`.
 
 ## Start API Only
 
 ```bash
-docker compose --env-file .env.api up -d --build ppt-master-claude-api
+docker compose --env-file .env.api up -d --build ppt-master-deepseek-api
 ```
 
 Then verify:

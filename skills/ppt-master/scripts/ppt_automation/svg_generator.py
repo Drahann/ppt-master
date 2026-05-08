@@ -1,14 +1,10 @@
-"""SVG generation, prompt files, and Claude Code execution."""
+"""SVG generation, prompt files, and direct DeepSeek API execution."""
 
 from __future__ import annotations
 
 import json
 import os
-import random
 import re
-import shutil
-import subprocess
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from html import escape as xml_escape
@@ -16,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from .config import CLAUDE_FLASH_MODEL, CLAUDE_MODEL, DEFAULT_BASE_URL, REPO_ROOT, canvas_dimensions
+from .config import DEFAULT_BASE_URL, SVG_MODEL, SVG_REPAIR_MODEL, canvas_dimensions
 from .cookbook import Cookbook
 from .errors import GenerationError
 from .parser import Deck, Slide
@@ -26,6 +22,9 @@ from clean_svg_entities import clean_svg_entities
 
 SVG_SYNTAX_REPAIR_SYSTEM = (
     "You repair SVG XML syntax only. Return exactly one complete SVG document and no prose."
+)
+SVG_GENERATION_SYSTEM = (
+    "You are PPT Master SVG renderer. Return exactly one complete valid SVG document and no prose."
 )
 
 
@@ -306,6 +305,7 @@ Stable rules:
 - Group related elements with plain `<g>`; never use `<g opacity>`.
 - Use the current page source Markdown as the source of visible content. The global manifest is only for deck context.
 - Follow the current slide's `layout_signature`, `visual_structure`, and `visual_guidance` from Design Plan JSON. These are soft structure instructions, not exact coordinates.
+- Treat `visual_guidance` as the aesthetic execution brief: implement its card geometry, label placement, chart skin, decorative motif, whitespace rhythm, and accent hierarchy instead of falling back to a generic card page.
 - Avoid collapsing specific layout guidance into a generic two-column card page. If the plan asks for a chart, matrix, roadmap, dashboard, network, architecture, product view, or profile wall, build that visible structure.
 - Produce a polished slide, not a plain document dump: strong hierarchy, intentional whitespace, aligned panels/cards/diagrams, restrained colors, and no text collisions.
 - If a slide is dense, summarize into key phrases and speaker-note-level detail rather than overfilling the canvas.
@@ -341,31 +341,6 @@ Current page source Markdown:
 {slide.raw_markdown}
 ```
 """
-
-
-def claude_stream_enabled() -> bool:
-    raw = os.environ.get("PPT_MASTER_CLAUDE_STREAM", "1").strip().lower()
-    return raw not in {"0", "false", "no", "off", "disabled"}
-
-
-def claude_output_format() -> str:
-    return "stream-json" if claude_stream_enabled() else "json"
-
-
-def claude_command(claude_exe: str, *, output_format: str) -> list[str]:
-    command = [
-        claude_exe,
-        "-p",
-        "--output-format",
-        output_format,
-        "--input-format",
-        "text",
-    ]
-    if output_format == "stream-json":
-        command.append("--verbose")
-        command.append("--include-partial-messages")
-    command.append("--tools=")
-    return command
 
 
 def write_prompt_files(
@@ -410,7 +385,7 @@ def extract_svg_document(text: str) -> str:
     start = normalized_text.find("<svg")
     end = normalized_text.rfind("</svg>")
     if start < 0 or end < 0:
-        raise GenerationError("Claude output did not contain a complete <svg> document.")
+        raise GenerationError("DeepSeek SVG output did not contain a complete <svg> document.")
     return normalize_svg_text(normalized_text[start : end + len("</svg>")])
 
 
@@ -419,7 +394,7 @@ def extract_svg(text: str) -> str:
     try:
         ET.fromstring(svg)
     except ET.ParseError as exc:
-        raise GenerationError(f"Claude output contained invalid SVG XML: {exc}") from exc
+        raise GenerationError(f"DeepSeek SVG output contained invalid SVG XML: {exc}") from exc
     return svg
 
 
@@ -447,201 +422,6 @@ SVG to repair:
 """
 
 
-def parse_claude_json_output(stdout: str) -> tuple[str, dict[str, Any]]:
-    try:
-        data = json.loads(stdout)
-    except json.JSONDecodeError:
-        data = None
-    if data is None:
-        result_event: dict[str, Any] | None = None
-        text_parts: list[str] = []
-        for raw_line in stdout.splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(event, dict):
-                continue
-            if event.get("type") == "result":
-                result_event = event
-                continue
-            if event.get("type") != "assistant":
-                continue
-            message = event.get("message")
-            content = message.get("content") if isinstance(message, dict) else event.get("content")
-            if isinstance(content, list):
-                for item in content:
-                    if isinstance(item, dict) and item.get("type") == "text" and item.get("text"):
-                        text_parts.append(str(item["text"]))
-            elif isinstance(content, str):
-                text_parts.append(content)
-        if result_event:
-            text = result_event.get("result") or result_event.get("text") or result_event.get("content")
-            if isinstance(text, list):
-                text = "\n".join(str(item.get("text", item)) if isinstance(item, dict) else str(item) for item in text)
-            if text is None:
-                text = "\n".join(text_parts) or stdout
-            usage = result_event.get("usage", {}) if isinstance(result_event.get("usage"), dict) else {}
-            return str(text), usage
-        return ("\n".join(text_parts) if text_parts else stdout), {}
-    if not isinstance(data, dict):
-        return stdout, {}
-    text = data.get("result") or data.get("text") or data.get("content") or stdout
-    if isinstance(text, list):
-        text = "\n".join(str(item.get("text", item)) if isinstance(item, dict) else str(item) for item in text)
-    return str(text), data.get("usage", {}) if isinstance(data.get("usage"), dict) else {}
-
-
-def truthy_env(value: str | None) -> bool:
-    return bool(value and value.strip().lower() in {"1", "true", "yes", "on"})
-
-
-def claude_config_base(project_path: Path) -> Path:
-    configured = os.environ.get("PPT_MASTER_CLAUDE_CONFIG_ROOT")
-    base = Path(configured) if configured else REPO_ROOT / ".tmp" / "claude-code-config"
-    path = base / project_path.name
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def scoped_claude_env(env: dict[str, str], scope: str) -> dict[str, str]:
-    share_config = env.get("PPT_MASTER_CLAUDE_SHARE_CONFIG") or os.environ.get("PPT_MASTER_CLAUDE_SHARE_CONFIG")
-    if truthy_env(share_config):
-        return env
-    base = env.get("PPT_MASTER_CLAUDE_CONFIG_BASE")
-    if not base:
-        return env
-    scope_mode = (
-        env.get("PPT_MASTER_CLAUDE_CONFIG_SCOPE") or os.environ.get("PPT_MASTER_CLAUDE_CONFIG_SCOPE") or "job"
-    ).strip().lower()
-    if scope_mode in {"batch", "scope", "scoped"}:
-        safe_scope = re.sub(r"[^A-Za-z0-9_.-]+", "_", scope).strip("_") or "default"
-        config_dir = Path(base) / safe_scope
-    else:
-        config_dir = Path(base)
-    config_dir.mkdir(parents=True, exist_ok=True)
-    scoped = env.copy()
-    scoped["CLAUDE_CONFIG_DIR"] = str(config_dir)
-    return scoped
-
-
-def is_claude_config_lock_error(text: str) -> bool:
-    lowered = text.lower()
-    return (
-        "ebusy" in lowered
-        and ".claude" in lowered
-        and ("resource busy" in lowered or "locked" in lowered or "open" in lowered)
-    )
-
-
-def claude_lock_retries() -> int:
-    raw = os.environ.get("PPT_MASTER_CLAUDE_LOCK_RETRIES", "5")
-    try:
-        return max(0, min(20, int(raw)))
-    except ValueError:
-        return 5
-
-
-def run_claude_print(
-    command: list[str],
-    *,
-    prompt: str,
-    cwd: Path,
-    env: dict[str, str],
-    timeout: int,
-    stream_log_path: Path | None = None,
-) -> tuple[str, str, int, float]:
-    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
-    started = time.perf_counter()
-    lock_retry_logs: list[str] = []
-    retries = claude_lock_retries()
-    for lock_attempt in range(1, retries + 2):
-        process = subprocess.Popen(
-            command,
-            cwd=cwd,
-            env=env,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=creationflags,
-        )
-        try:
-            if stream_log_path is None:
-                stdout, stderr = process.communicate(prompt, timeout=timeout)
-            else:
-                stream_log_path.parent.mkdir(parents=True, exist_ok=True)
-                stream_log_path.write_text("", encoding="utf-8")
-                stderr_log_path = stream_log_path.with_name(f"{stream_log_path.stem}.stderr.log")
-                stderr_log_path.write_text("", encoding="utf-8")
-                stdout_chunks: list[str] = []
-                stderr_chunks: list[str] = []
-
-                def drain_output(pipe: Any, chunks: list[str], path: Path) -> None:
-                    try:
-                        for line in iter(pipe.readline, ""):
-                            chunks.append(line)
-                            with path.open("a", encoding="utf-8") as stream_fh:
-                                stream_fh.write(line)
-                    finally:
-                        try:
-                            pipe.close()
-                        except Exception:
-                            pass
-
-                stdout_thread = threading.Thread(
-                    target=drain_output,
-                    args=(process.stdout, stdout_chunks, stream_log_path),
-                    daemon=True,
-                )
-                stderr_thread = threading.Thread(
-                    target=drain_output,
-                    args=(process.stderr, stderr_chunks, stderr_log_path),
-                    daemon=True,
-                )
-                stdout_thread.start()
-                stderr_thread.start()
-                if process.stdin is not None:
-                    try:
-                        process.stdin.write(prompt)
-                        process.stdin.close()
-                    except BrokenPipeError:
-                        pass
-                process.wait(timeout=timeout)
-                stdout_thread.join(timeout=10)
-                stderr_thread.join(timeout=10)
-                stdout = "".join(stdout_chunks)
-                stderr = "".join(stderr_chunks)
-        except subprocess.TimeoutExpired as exc:
-            if os.name == "nt":
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)], capture_output=True, text=True)
-            else:
-                process.kill()
-            try:
-                process.communicate(timeout=10)
-            except Exception:
-                pass
-            raise GenerationError(f"Claude SVG generation timed out after {timeout}s") from exc
-
-        combined = f"{stderr}\n{stdout}"
-        if process.returncode == 0 or not is_claude_config_lock_error(combined) or lock_attempt > retries:
-            if lock_retry_logs:
-                retry_log = "\n".join(lock_retry_logs)
-                stderr = f"{retry_log}\n{stderr}" if stderr else retry_log
-            return stdout, stderr, process.returncode, time.perf_counter() - started
-
-        lock_retry_logs.append(
-            f"[ppt-master] Claude config lock retry {lock_attempt}/{retries}: "
-            f"{(stderr or stdout).strip()[:500]}"
-        )
-        time.sleep(min(8.0, 0.75 * lock_attempt) + random.uniform(0.1, 0.6))
-
-
 def group_slide_jobs(slides: list[Slide], batch_size: int) -> list[tuple[int, Slide]]:
     size = max(1, batch_size)
     return [((index // size) + 1, slide) for index, slide in enumerate(slides)]
@@ -654,79 +434,44 @@ def group_jobs_by_batch(jobs: list[tuple[int, Slide]]) -> dict[int, list[Slide]]
     return grouped
 
 
-def generate_claude_slide(
+def generate_deepseek_svg_slide(
     *,
     slide: Slide,
     project_path: Path,
     prefix: str,
-    claude_exe: str,
-    env: dict[str, str],
-    claude_timeout: int,
-    claude_retries: int,
-    syntax_repair_api_key: str,
-    syntax_repair_base_url: str,
-    syntax_repair_model: str,
+    api_key: str,
+    base_url: str,
+    svg_model: str,
+    svg_repair_model: str,
+    svg_timeout: int,
+    svg_retries: int,
     logger: UsageLogger | None,
     batch_index: int | None = None,
-    scope_id: str | None = None,
 ) -> None:
     output_path = project_path / "svg_output" / slide.svg_filename
     if output_path.exists() and output_path.stat().st_size > 0:
         if logger:
-            logger.log("claude_svg", slide=slide.svg_filename, ok=True, skipped=True, batch=batch_index)
+            logger.log("deepseek_svg", slide=slide.svg_filename, ok=True, skipped=True, batch=batch_index)
         return
     prompt = build_svg_prompt(prefix, slide)
-    output_format = claude_output_format()
-    claude_env = scoped_claude_env(env, scope_id or f"slide_{slide.index:02d}_{slide.stem}")
-    attempts = max(1, claude_retries + 1)
+    attempts = max(1, svg_retries + 1)
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
-        stream_log_path = (
-            project_path / "logs" / "claude_stream" / f"{slide.stem}.attempt{attempt}.jsonl"
-            if output_format == "stream-json"
-            else None
-        )
-        if logger and stream_log_path is not None:
-            logger.log(
-                "claude_stream",
-                event="start",
-                slide=slide.svg_filename,
-                batch=batch_index,
-                attempt=attempt,
-                output_format=output_format,
-                stream_log=str(stream_log_path.relative_to(project_path)),
-            )
+        text = ""
+        usage: dict[str, Any] = {}
+        duration = 0.0
         try:
-            stdout, stderr, returncode, duration = run_claude_print(
-                claude_command(claude_exe, output_format=output_format),
+            started = time.perf_counter()
+            text, usage = call_deepseek_anthropic(
+                api_key=api_key,
+                base_url=base_url,
+                model=svg_model,
                 prompt=prompt,
-                cwd=project_path,
-                env=claude_env,
-                timeout=claude_timeout,
-                stream_log_path=stream_log_path,
+                system=SVG_GENERATION_SYSTEM,
+                max_tokens=32000,
+                timeout=svg_timeout,
             )
-            if returncode != 0:
-                (project_path / "logs" / f"claude_{slide.stem}.attempt{attempt}.stderr.txt").write_text(stderr, encoding="utf-8")
-                (project_path / "logs" / f"claude_{slide.stem}.attempt{attempt}.stdout.txt").write_text(stdout, encoding="utf-8")
-                if logger:
-                    logger.log_transcript(
-                        "claude_svg",
-                        prompt=prompt,
-                        stdout=stdout,
-                        stderr=stderr,
-                        metadata={
-                            "slide": slide.svg_filename,
-                            "ok": False,
-                            "returncode": returncode,
-                            "duration_seconds": round(duration, 3),
-                            "batch": batch_index,
-                            "attempt": attempt,
-                            "output_format": output_format,
-                            "stream_log": str(stream_log_path.relative_to(project_path)) if stream_log_path else None,
-                        },
-                    )
-                raise GenerationError(f"Claude SVG generation failed for {slide.svg_filename}: {(stderr or stdout).strip()}")
-            text, usage = parse_claude_json_output(stdout)
+            duration = time.perf_counter() - started
             syntax_repaired_by_api = False
             syntax_repair_usage: dict[str, Any] | None = None
             try:
@@ -738,12 +483,13 @@ def generate_claude_slide(
                     try:
                         repair_prompt = build_svg_syntax_repair_prompt(extract_svg_document(text), str(exc))
                         repair_response, syntax_repair_usage = call_deepseek_anthropic(
-                            api_key=syntax_repair_api_key,
-                            base_url=syntax_repair_base_url,
-                            model=syntax_repair_model,
+                            api_key=api_key,
+                            base_url=base_url,
+                            model=svg_repair_model,
                             prompt=repair_prompt,
                             system=SVG_SYNTAX_REPAIR_SYSTEM,
                             max_tokens=16000,
+                            timeout=svg_timeout,
                         )
                         svg = extract_svg(repair_response)
                         syntax_repaired_by_api = True
@@ -758,7 +504,7 @@ def generate_claude_slide(
                                     "ok": True,
                                     "source_error": str(exc),
                                     "attempt": attempt,
-                                    "model": syntax_repair_model,
+                                    "model": svg_repair_model,
                                     "usage": syntax_repair_usage,
                                 },
                             )
@@ -767,7 +513,7 @@ def generate_claude_slide(
                                 slide=slide.svg_filename,
                                 ok=True,
                                 attempt=attempt,
-                                model=syntax_repair_model,
+                                model=svg_repair_model,
                                 usage=syntax_repair_usage,
                                 prompt_chars=len(repair_prompt),
                                 output_chars=len(repair_response),
@@ -784,7 +530,7 @@ def generate_claude_slide(
                                     "source_error": str(exc),
                                     "repair_error": str(repair_exc),
                                     "attempt": attempt,
-                                    "model": syntax_repair_model,
+                                    "model": svg_repair_model,
                                     "usage": syntax_repair_usage,
                                 },
                             )
@@ -793,32 +539,29 @@ def generate_claude_slide(
                                 slide=slide.svg_filename,
                                 ok=False,
                                 attempt=attempt,
-                                model=syntax_repair_model,
+                                model=svg_repair_model,
                                 error=str(repair_exc),
                             )
                 if not syntax_repaired_by_api:
                     svg = ""
                 if not syntax_repaired_by_api and logger:
                     logger.log_transcript(
-                        "claude_svg",
+                        "deepseek_svg",
+                        system=SVG_GENERATION_SYSTEM,
                         prompt=prompt,
                         response=text,
-                        stdout=stdout,
-                        stderr=stderr,
                         metadata={
                             "slide": slide.svg_filename,
                             "ok": False,
-                            "returncode": returncode,
                             "validated_svg": False,
                             "validation_error": str(exc),
                             "duration_seconds": round(duration, 3),
                             "usage": usage,
+                            "model": svg_model,
                             "batch": batch_index,
                             "attempt": attempt,
-                            "output_format": output_format,
-                            "stream_log": str(stream_log_path.relative_to(project_path)) if stream_log_path else None,
                             "syntax_repaired_by_api": syntax_repaired_by_api,
-                            "syntax_repair_model": syntax_repair_model if syntax_repaired_by_api else None,
+                            "syntax_repair_model": svg_repair_model if syntax_repaired_by_api else None,
                             "syntax_repair_usage": syntax_repair_usage,
                         },
                     )
@@ -826,59 +569,55 @@ def generate_claude_slide(
                     raise
             if logger:
                 logger.log_transcript(
-                    "claude_svg",
+                    "deepseek_svg",
+                    system=SVG_GENERATION_SYSTEM,
                     prompt=prompt,
                     response=text,
-                    stdout=stdout,
-                    stderr=stderr,
                     metadata={
                         "slide": slide.svg_filename,
                         "ok": True,
-                        "returncode": returncode,
                         "validated_svg": True,
                         "duration_seconds": round(duration, 3),
                         "usage": usage,
+                        "model": svg_model,
                         "batch": batch_index,
                         "attempt": attempt,
-                        "output_format": output_format,
-                        "stream_log": str(stream_log_path.relative_to(project_path)) if stream_log_path else None,
                         "syntax_repaired_by_api": syntax_repaired_by_api,
-                        "syntax_repair_model": syntax_repair_model if syntax_repaired_by_api else None,
+                        "syntax_repair_model": svg_repair_model if syntax_repaired_by_api else None,
                         "syntax_repair_usage": syntax_repair_usage,
                     },
                 )
             output_path.write_text(svg, encoding="utf-8")
             if logger:
                 logger.log(
-                    "claude_svg",
+                    "deepseek_svg",
                     slide=slide.svg_filename,
                     ok=True,
                     usage=usage,
                     duration_seconds=round(duration, 3),
                     prompt_chars=len(prompt),
-                    output_chars=len(stdout),
+                    output_chars=len(text),
+                    model=svg_model,
                     batch=batch_index,
                     attempt=attempt,
-                    output_format=output_format,
-                    stream_log=str(stream_log_path.relative_to(project_path)) if stream_log_path else None,
                     syntax_repaired_by_api=syntax_repaired_by_api,
-                    syntax_repair_model=syntax_repair_model if syntax_repaired_by_api else None,
+                    syntax_repair_model=svg_repair_model if syntax_repaired_by_api else None,
                 )
             return
         except Exception as exc:
             last_error = exc
-            (project_path / "logs" / f"claude_{slide.stem}.attempt{attempt}.error.txt").write_text(str(exc), encoding="utf-8")
+            (project_path / "logs" / f"deepseek_{slide.stem}.attempt{attempt}.error.txt").write_text(str(exc), encoding="utf-8")
             if logger:
                 logger.log(
-                    "claude_svg",
+                    "deepseek_svg",
                     slide=slide.svg_filename,
                     ok=False,
                     error=str(exc),
                     prompt_chars=len(prompt),
+                    output_chars=len(text),
+                    model=svg_model,
                     batch=batch_index,
                     attempt=attempt,
-                    output_format=output_format,
-                    stream_log=str(stream_log_path.relative_to(project_path)) if stream_log_path else None,
                     retrying=attempt < attempts,
                 )
             if attempt < attempts:
@@ -896,11 +635,10 @@ def generate_svg_files(
     renderer: str,
     deepseek_api_key: str | None,
     deepseek_base_url: str = DEFAULT_BASE_URL,
-    claude_model: str = CLAUDE_MODEL,
-    claude_flash_model: str = CLAUDE_FLASH_MODEL,
-    claude_effort: str = "high",
-    claude_timeout: int = 600,
-    claude_retries: int = 1,
+    svg_model: str = SVG_MODEL,
+    svg_repair_model: str = SVG_REPAIR_MODEL,
+    svg_timeout: int = 600,
+    svg_retries: int = 1,
     svg_workers: int = 1,
     svg_batch_size: int = 5,
     cache_prime: bool = False,
@@ -915,82 +653,59 @@ def generate_svg_files(
             )
         return
 
-    claude_exe = shutil.which("claude")
-    if not claude_exe:
-        raise GenerationError("Claude Code CLI not found. Install with: npm install -g @anthropic-ai/claude-code@latest")
-    version = subprocess.run([claude_exe, "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace")
-    if version.returncode != 0:
-        raise GenerationError("Claude Code CLI preflight failed. Install/update with: npm install -g @anthropic-ai/claude-code@latest")
     resolved_key = deepseek_api_key or os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
     if not resolved_key:
-        raise GenerationError("DeepSeek API key is required for Claude SVG generation.")
+        raise GenerationError("DeepSeek API key is required for direct SVG generation.")
 
-    env = os.environ.copy()
-    env.update(
-        {
-            "ANTHROPIC_BASE_URL": deepseek_base_url,
-            "ANTHROPIC_AUTH_TOKEN": resolved_key,
-            "ANTHROPIC_MODEL": claude_model,
-            "ANTHROPIC_DEFAULT_OPUS_MODEL": claude_model,
-            "ANTHROPIC_DEFAULT_SONNET_MODEL": claude_model,
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL": claude_flash_model,
-            "CLAUDE_CODE_SUBAGENT_MODEL": claude_flash_model,
-            "CLAUDE_CODE_EFFORT_LEVEL": claude_effort,
-        }
-    )
-    if not truthy_env(os.environ.get("PPT_MASTER_CLAUDE_SHARE_CONFIG")):
-        env["PPT_MASTER_CLAUDE_CONFIG_BASE"] = str(claude_config_base(project_path))
     prefix = build_svg_prompt_prefix(project_path, deck, canvas_format, style, cookbook)
     if cache_prime:
-        prime_prompt = build_deck_context_prefix(deck, canvas_format, style, cookbook)
+        prime_prompt = prefix
+        started = time.perf_counter()
         try:
-            prime_env = scoped_claude_env(env, "cache_prime")
-            stdout, stderr, returncode, duration = run_claude_print(
-                [
-                    claude_exe,
-                    "-p",
-                    "--output-format",
-                    "json",
-                    "--input-format",
-                    "text",
-                    "--tools=",
-                ],
+            text, usage = call_deepseek_anthropic(
+                api_key=resolved_key,
+                base_url=deepseek_base_url,
+                model=svg_model,
                 prompt=prime_prompt,
-                cwd=project_path,
-                env=prime_env,
-                timeout=min(claude_timeout, 180),
+                system=SVG_GENERATION_SYSTEM,
+                max_tokens=8,
+                timeout=min(svg_timeout, 180),
             )
-            text, usage = parse_claude_json_output(stdout)
+            duration = time.perf_counter() - started
             if logger:
                 logger.log_transcript(
-                    "claude_cache_prime",
+                    "deepseek_svg_cache_prime",
+                    system=SVG_GENERATION_SYSTEM,
                     prompt=prime_prompt,
                     response=text,
-                    stdout=stdout,
-                    stderr=stderr,
                     metadata={
-                        "ok": returncode == 0,
-                        "returncode": returncode,
+                        "ok": True,
                         "duration_seconds": round(duration, 3),
                         "usage": usage,
+                        "model": svg_model,
                         "scope": "common_prefix",
-                        "output_format": "json",
                     },
                 )
                 logger.log(
-                    "claude_cache_prime",
-                    ok=returncode == 0,
+                    "deepseek_svg_cache_prime",
+                    ok=True,
                     usage=usage,
                     duration_seconds=round(duration, 3),
                     prompt_chars=len(prime_prompt),
-                    output_chars=len(stdout),
-                    stderr_chars=len(stderr),
+                    output_chars=len(text),
+                    model=svg_model,
                     scope="common_prefix",
-                    output_format="json",
                 )
         except Exception as exc:
             if logger:
-                logger.log("claude_cache_prime", ok=False, error=str(exc), prompt_chars=len(prime_prompt), scope="common_prefix")
+                logger.log(
+                    "deepseek_svg_cache_prime",
+                    ok=False,
+                    error=str(exc),
+                    prompt_chars=len(prime_prompt),
+                    model=svg_model,
+                    scope="common_prefix",
+                )
     workers = max(1, svg_workers)
     jobs = group_slide_jobs(deck.slides, svg_batch_size)
     if not jobs:
@@ -998,7 +713,7 @@ def generate_svg_files(
     batches = group_jobs_by_batch(jobs)
     if logger:
         logger.log(
-            "claude_parallel",
+            "deepseek_parallel",
             workers=workers,
             batch_size=svg_batch_size,
             batches=len(batches),
@@ -1007,7 +722,7 @@ def generate_svg_files(
         )
         for batch_index, slides in batches.items():
             logger.log(
-                "claude_batch",
+                "deepseek_batch",
                 batch=batch_index,
                 ok=True,
                 event="scheduled",
@@ -1019,20 +734,18 @@ def generate_svg_files(
     with ThreadPoolExecutor(max_workers=min(workers, len(jobs))) as executor:
         futures = {
             executor.submit(
-                generate_claude_slide,
+                generate_deepseek_svg_slide,
                 slide=slide,
                 project_path=project_path,
                 prefix=prefix,
-                claude_exe=claude_exe,
-                env=env,
-                claude_timeout=claude_timeout,
-                claude_retries=claude_retries,
-                syntax_repair_api_key=resolved_key,
-                syntax_repair_base_url=deepseek_base_url,
-                syntax_repair_model=claude_flash_model,
+                api_key=resolved_key,
+                base_url=deepseek_base_url,
+                svg_model=svg_model,
+                svg_repair_model=svg_repair_model,
+                svg_timeout=svg_timeout,
+                svg_retries=svg_retries,
                 logger=logger,
                 batch_index=batch_index,
-                scope_id=f"slide_{slide.index:02d}_{slide.stem}",
             ): batch_index
             for batch_index, slide in jobs
         }
@@ -1042,7 +755,7 @@ def generate_svg_files(
             remaining_by_batch[batch_index] -= 1
             if logger and remaining_by_batch[batch_index] == 0:
                 logger.log(
-                    "claude_batch",
+                    "deepseek_batch",
                     batch=batch_index,
                     ok=True,
                     event="finish",

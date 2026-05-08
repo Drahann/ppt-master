@@ -28,8 +28,8 @@ class AccountPoolEntry:
     api_key: str
     base_url: str | None = None
     deepseek_model: str | None = None
-    claude_model: str | None = None
-    claude_flash_model: str | None = None
+    svg_model: str | None = None
+    svg_repair_model: str | None = None
     max_concurrent_jobs: int = DEFAULT_ACCOUNT_MAX_JOBS
     slot_capacity: int = DEFAULT_ACCOUNT_SLOT_CAPACITY
     enabled: bool = True
@@ -44,8 +44,8 @@ class AccountPoolEntry:
             "account_id": self.account_id,
             "base_url": self.base_url,
             "deepseek_model": self.deepseek_model,
-            "claude_model": self.claude_model,
-            "claude_flash_model": self.claude_flash_model,
+            "svg_model": self.svg_model,
+            "svg_repair_model": self.svg_repair_model,
             "max_concurrent_jobs": self.max_concurrent_jobs,
             "slot_capacity": self.slot_capacity,
             "enabled_config": self.enabled,
@@ -59,8 +59,8 @@ class AccountLease:
     api_key: str
     base_url: str | None
     deepseek_model: str | None
-    claude_model: str | None
-    claude_flash_model: str | None
+    svg_model: str | None
+    svg_repair_model: str | None
     slots: int
     expires_at: float
 
@@ -98,8 +98,8 @@ def load_account_pool_entries(env: dict[str, str] | None = None) -> list[Account
                 api_key=api_key,
                 base_url=_optional_str(item.get("base_url")),
                 deepseek_model=_optional_str(item.get("deepseek_model") or item.get("model")),
-                claude_model=_optional_str(item.get("claude_model")),
-                claude_flash_model=_optional_str(item.get("claude_flash_model")),
+                svg_model=_optional_str(item.get("svg_model")),
+                svg_repair_model=_optional_str(item.get("svg_repair_model")),
                 max_concurrent_jobs=_safe_int(item.get("max_concurrent_jobs"), DEFAULT_ACCOUNT_MAX_JOBS, minimum=1),
                 slot_capacity=_safe_int(item.get("slot_capacity"), DEFAULT_ACCOUNT_SLOT_CAPACITY, minimum=1),
                 enabled=_safe_bool(item.get("enabled"), True),
@@ -122,7 +122,7 @@ def classify_error(error: str | None) -> str:
 
 
 class RedisAccountPool:
-    """Redis-backed DeepSeek/Claude account pool.
+    """Redis-backed DeepSeek account pool.
 
     A lease is held for the whole PPT job. With the default 12 SVG workers,
     each account's 24-slot capacity naturally admits two concurrent jobs.
@@ -133,7 +133,7 @@ class RedisAccountPool:
         client: Any,
         accounts: Iterable[AccountPoolEntry],
         *,
-        key_prefix: str = "ppt-claude",
+        key_prefix: str = "ppt-deepseek",
         lease_ttl_seconds: int = DEFAULT_LEASE_TTL_SECONDS,
         rate_limit_cooldown_seconds: int = DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
         transient_cooldown_seconds: int = DEFAULT_TRANSIENT_COOLDOWN_SECONDS,
@@ -141,7 +141,7 @@ class RedisAccountPool:
         self.client = client
         self.accounts = list(accounts)
         self.accounts_by_id = {account.account_id: account for account in self.accounts}
-        self.key_prefix = key_prefix.strip().strip(":") or "ppt-claude"
+        self.key_prefix = key_prefix.strip().strip(":") or "ppt-deepseek"
         self.lease_ttl_seconds = max(60, lease_ttl_seconds)
         self.rate_limit_cooldown_seconds = max(1, rate_limit_cooldown_seconds)
         self.transient_cooldown_seconds = max(1, transient_cooldown_seconds)
@@ -299,8 +299,8 @@ class RedisAccountPool:
                 api_key=account.api_key,
                 base_url=account.base_url,
                 deepseek_model=account.deepseek_model,
-                claude_model=account.claude_model,
-                claude_flash_model=account.claude_flash_model,
+                svg_model=account.svg_model,
+                svg_repair_model=account.svg_repair_model,
                 slots=requested_slots,
                 expires_at=expires_at,
             )
@@ -417,4 +417,3 @@ def _safe_bool(value: Any, default: bool) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
-

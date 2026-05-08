@@ -20,8 +20,8 @@ QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 QWEN_MODEL = "qwen3.6-plus"
 QWEN_MAX_TOKENS = 65536
 QWEN_TIMEOUT = 900
-CLAUDE_MODEL = "deepseek-v4-pro[1m]"
-CLAUDE_FLASH_MODEL = "deepseek-v4-flash"
+SVG_MODEL = "deepseek-v4-pro[1m]"
+SVG_REPAIR_MODEL = "deepseek-v4-flash"
 
 
 def normalized_format(canvas_format: str) -> str:

@@ -24,7 +24,7 @@ class RunResult:
     quality: dict[str, int] | None = None
     slides: int = 0
     dry_run: bool = False
-    renderer: str = "claude"
+    renderer: str = "deepseek"
     warnings: list[str] | None = None
     result_path: str | None = None
     error: str | None = None

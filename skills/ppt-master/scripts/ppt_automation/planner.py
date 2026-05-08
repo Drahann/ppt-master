@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import http.client
 import urllib.error
 import urllib.request
 from typing import Any
@@ -247,14 +248,14 @@ def deterministic_plan(project_name: str, canvas_format: str, style: str, deck: 
             intent = "open with the project name and visual identity"
             layout_family = "hero"
             visual_structure = "title-first cover with a subtle glove/data motif"
-            visual_guidance = "Create a bright title-first cover with one subtle technology motif. Keep it spacious, institutional, and clearly connected to intelligent data gloves."
+            visual_guidance = "Create a bright title-first cover with a confident focal title, one refined technology motif, generous negative space, and a small repeated accent system that can echo through later pages."
         elif slide.kind == "closing":
             rhythm = "closing"
             layout = "closing_centered"
             intent = "close the presentation cleanly"
             layout_family = "closing"
             visual_structure = "centered closing message with repeated accent motif"
-            visual_guidance = "Use a quiet closing composition with a concise thank-you message and the same accent system as the cover."
+            visual_guidance = "Use a quiet closing composition with a concise thank-you message, balanced whitespace, and a restrained reprise of the cover motif so the deck feels intentionally closed."
         else:
             rhythm = "breathing" if slide.index % 5 == 0 else "dense"
             archetype = LAYOUT_ARCHETYPE_LIBRARY[(slide.index - 2) % (len(LAYOUT_ARCHETYPE_LIBRARY) - 2) + 1]
@@ -262,7 +263,7 @@ def deterministic_plan(project_name: str, canvas_format: str, style: str, deck: 
             intent = "summarize the corresponding Markdown section into clear presentation points"
             layout_family = "evidence/diagram"
             visual_structure = "semantic diagram or card/chart composition selected for the slide content"
-            visual_guidance = "Use the shared light technology style, then choose the simplest diagram/card/chart treatment that clarifies this page's source content."
+            visual_guidance = "Use the shared light technology style, then choose a content-specific diagram/card/chart treatment with clear focal hierarchy, elegant spacing, and one tasteful detail that makes the page feel designed rather than templated."
         page_key = f"P{slide.index:02d}"
         page_rhythm[page_key] = rhythm
         slides.append(
@@ -416,8 +417,13 @@ Rules:
 - `icons` and `images` must be JSON objects, not strings.
 - Use this icon library inventory exactly when icons are needed: {", ".join(ICON_INVENTORY)}.
 - Make art direction explicit enough for independent SVG page generation: include mood, motifs, composition principles, card style, diagram style, chart style, and slide archetypes.
-- Add soft visual guidance for every slide: one concise sentence describing composition intent, focal visual, and accent usage.
+- Add useful visual guidance for every slide: one concise but concrete sentence describing composition intent, focal visual, component/card/chart treatment, decorative motif, whitespace rhythm, and accent usage where relevant.
 - Keep all per-slide text fields compact: `intent`, `composition`, `visual_structure`, `why_this_layout`, `visual_metaphor`, and `visual_guidance` should be short phrases or one short sentence, not paragraphs.
+- `visual_guidance` must improve aesthetic execution, not merely repeat the chosen layout. Name the design moves that make the selected chart/layout beautiful: card silhouette, title scale, label placement, highlight path, axis treatment, decorative image/motif, rhythm of empty space, and micro-contrast.
+- When `chart_or_diagram` is selected, explain how to restyle that visualization in the theme: what is emphasized, how labels/legends should sit, what supporting marks are muted, and what small creative detail prevents a generic chart look.
+- When a page uses cards, specify the card grammar: radius, border weight, fill relationship, header badge, icon placement, spacing, and how cards align to the page's narrative flow.
+- If a cookbook is active, `visual_guidance` should translate cookbook style into the exact slide structure instead of producing vague inspiration language.
+- Avoid generic guidance such as "make it polished" or "use a beautiful layout" unless it is followed by concrete visual choices.
 - The full response must include all slides plus both marker pairs. Prefer concise slide guidance over long prose.
 - Do not over-lock each page. Avoid exact coordinates or mandatory object counts unless the content truly requires them.
 - Keep style consistency through repeated palette, typography, spacing, shape language, icon library, and diagram primitives; vary only the layout archetype and focal visualization.
@@ -632,6 +638,7 @@ def call_deepseek_anthropic(
     prompt: str,
     system: str,
     max_tokens: int,
+    timeout: int = 180,
 ) -> tuple[str, dict[str, Any]]:
     endpoint = base_url.rstrip("/") + "/v1/messages"
     payload = {
@@ -651,15 +658,20 @@ def call_deepseek_anthropic(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=180) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise GenerationError(f"DeepSeek Anthropic API failed: HTTP {exc.code}: {detail}") from exc
     except urllib.error.URLError as exc:
         raise GenerationError(f"DeepSeek Anthropic API request failed: {exc}") from exc
+    except (TimeoutError, http.client.IncompleteRead) as exc:
+        raise GenerationError(f"DeepSeek Anthropic API transport failed: {exc}") from exc
 
-    result = json.loads(raw)
+    try:
+        result = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise GenerationError(f"DeepSeek Anthropic API returned invalid JSON: {raw[:500]}") from exc
     blocks = result.get("content", [])
     if isinstance(blocks, str):
         text_parts = [blocks]

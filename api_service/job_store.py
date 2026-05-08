@@ -16,13 +16,13 @@ class RedisJobStoreError(RuntimeError):
 class RedisJobStore:
     """Redis-backed queue and status store for production API jobs."""
 
-    def __init__(self, redis_url: str, *, key_prefix: str = "ppt-claude") -> None:
+    def __init__(self, redis_url: str, *, key_prefix: str = "ppt-deepseek") -> None:
         try:
             import redis
         except ImportError as exc:
             raise RedisJobStoreError("redis package is not installed") from exc
         self.redis_url = redis_url
-        self.key_prefix = key_prefix.strip().strip(":") or "ppt-claude"
+        self.key_prefix = key_prefix.strip().strip(":") or "ppt-deepseek"
         self.client = redis.Redis.from_url(redis_url, decode_responses=True)
         self.pending_queue_key = self.key("jobs:pending")
         self.running_key = self.key("jobs:running")
@@ -205,4 +205,3 @@ class RedisJobStore:
                 )
         records.sort(key=lambda item: float(item.get("created_at") or 0))
         return records
-

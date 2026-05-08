@@ -14,8 +14,6 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from ppt_automation.config import (  # noqa: E402
-    CLAUDE_FLASH_MODEL,
-    CLAUDE_MODEL,
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
     QWEN_BASE_URL,
@@ -23,6 +21,8 @@ from ppt_automation.config import (  # noqa: E402
     QWEN_MODEL,
     QWEN_TIMEOUT,
     REPO_ROOT,
+    SVG_MODEL,
+    SVG_REPAIR_MODEL,
 )
 from ppt_automation.pipeline import GenerationOptions, generate  # noqa: E402
 
@@ -36,7 +36,7 @@ def add_generate_parser(subparsers: argparse._SubParsersAction[argparse.Argument
     parser.add_argument("--format", default="ppt169", help="Canvas format (default: ppt169).")
     parser.add_argument("--style", default="general", choices=["general", "consultant", "consultant-top"], help="Design style.")
     parser.add_argument("--cookbook", default=None, help="Theme cookbook name or path. Also reads PPT_MASTER_COOKBOOK if omitted.")
-    parser.add_argument("--renderer", default="claude", choices=["claude", "local"], help="SVG renderer: claude uses DeepSeek-backed Claude Code; local is deterministic smoke mode.")
+    parser.add_argument("--renderer", default="deepseek", choices=["deepseek", "local"], help="SVG renderer: deepseek uses direct Anthropic-compatible API; local is deterministic smoke mode.")
     parser.add_argument("--dry-run", action="store_true", help="Create project structure, source, manifests, plan, and prompts only.")
     parser.add_argument("--max-slides", type=int, default=None, help="Limit parsed slides for smoke runs.")
     parser.add_argument("--no-quality-check", dest="quality_check", action="store_false", help="Skip svg_quality_checker.py.")
@@ -45,17 +45,16 @@ def add_generate_parser(subparsers: argparse._SubParsersAction[argparse.Argument
     parser.add_argument("--deepseek-base-url", default=DEFAULT_BASE_URL, help="Anthropic-compatible base URL.")
     parser.add_argument("--deepseek-model", default=DEFAULT_MODEL, help="Model for direct DeepSeek calls.")
     parser.add_argument("--planner-provider", default="deepseek", choices=["deepseek", "qwen"], help="Provider for design_plan/spec_lock.")
-    parser.add_argument("--notes-provider", default="deepseek", choices=["deepseek", "qwen"], help="Provider for speaker notes.")
+    parser.add_argument("--notes-provider", default="qwen", choices=["deepseek", "qwen"], help="Provider for speaker notes.")
     parser.add_argument("--qwen-api-key", default=None, help="Qwen/DashScope key; prefer DASHSCOPE_API_KEY env var.")
     parser.add_argument("--qwen-base-url", default=QWEN_BASE_URL, help="OpenAI-compatible DashScope base URL.")
-    parser.add_argument("--qwen-model", default=QWEN_MODEL, help="Qwen model for planning and notes.")
-    parser.add_argument("--qwen-max-tokens", type=int, default=QWEN_MAX_TOKENS, help="Max output tokens for Qwen planning/notes.")
-    parser.add_argument("--qwen-timeout", type=int, default=QWEN_TIMEOUT, help="Timeout per Qwen planning/notes request in seconds.")
-    parser.add_argument("--claude-model", default=CLAUDE_MODEL, help="Model env value for Claude Code.")
-    parser.add_argument("--claude-flash-model", default=CLAUDE_FLASH_MODEL, help="Haiku/subagent model env value for Claude Code.")
-    parser.add_argument("--claude-effort", default="high", choices=["low", "medium", "high", "max"], help="CLAUDE_CODE_EFFORT_LEVEL for SVG generation.")
-    parser.add_argument("--claude-timeout", type=int, default=600, help="Timeout per Claude SVG page in seconds.")
-    parser.add_argument("--claude-retries", type=int, default=1, help="Retries per failed Claude SVG page.")
+    parser.add_argument("--qwen-model", default=QWEN_MODEL, help="Qwen model for notes, or planning when --planner-provider qwen is selected.")
+    parser.add_argument("--qwen-max-tokens", type=int, default=QWEN_MAX_TOKENS, help="Max output tokens for Qwen notes/planning requests.")
+    parser.add_argument("--qwen-timeout", type=int, default=QWEN_TIMEOUT, help="Timeout per Qwen notes/planning request in seconds.")
+    parser.add_argument("--svg-model", default=SVG_MODEL, help="DeepSeek model for direct SVG generation.")
+    parser.add_argument("--svg-repair-model", default=SVG_REPAIR_MODEL, help="DeepSeek model for SVG syntax repair.")
+    parser.add_argument("--svg-timeout", type=int, default=600, help="Timeout per direct SVG page request in seconds.")
+    parser.add_argument("--svg-retries", type=int, default=1, help="Retries per failed direct SVG page.")
     parser.add_argument("--svg-workers", type=int, default=1, help="Parallel SVG batch workers. Default keeps sequential behavior.")
     parser.add_argument("--svg-batch-size", type=int, default=5, help="Slides per SVG batch when --svg-workers > 1.")
     parser.add_argument("--cache-prime", action="store_true", help="Prime provider context cache with the stable deck prefix before live generation.")

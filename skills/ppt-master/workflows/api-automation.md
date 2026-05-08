@@ -80,10 +80,9 @@ project/
 
 ## Runtime Behavior
 
-- DeepSeek direct API generates `design_plan/spec_lock` and notes in live mode.
-- Claude Code CLI generates one SVG per call in live mode.
-- Direct DeepSeek prompts for plan/lock and notes start with a byte-stable `PPT_MASTER_COMMON_PREFIX_V1` containing fixed rules, canvas, style, source Markdown, and a compact slide manifest.
-- Claude SVG prompts also start with that same common prefix, then append SVG rules, `design_plan.json`, `spec_lock.json`, and current page Markdown last.
+- DeepSeek direct API generates `design_plan/spec_lock` and one SVG per slide in live mode; speaker notes default to Qwen.
+- Direct live prompts for plan/lock, notes, and SVG start with a byte-stable `PPT_MASTER_COMMON_PREFIX_V1` containing fixed rules, canvas, style, source Markdown, and a compact slide manifest.
+- SVG prompts then append SVG rules, `design_plan.json`, `spec_lock.json`, and current page Markdown last.
 - The common prefix must not include project paths, timestamps, random paths, logs, current page numbers, or other run-specific values.
 - `--cache-prime` sends a low-output ACK request for the common prefix before live work. This adds one small request but improves cache locality for decks with many pages.
 - Color quality checks allow additional HEX colors as palette richness. They warn only when the dominant non-neutral accent drifts away from the locked primary theme color.
@@ -98,7 +97,7 @@ All model calls append JSONL records to `logs/usage.jsonl`.
 
 DeepSeek records include available token/cache fields from the API response.
 
-Claude records include slide filename, prompt size, output size, duration, success/failure, and usage fields when Claude JSON output exposes them. If a Claude call times out or fails, the failure is logged and a failure `result.json` is written.
+SVG records include slide filename, prompt size, output size, duration, success/failure, and DeepSeek usage fields. If a direct API call times out or fails, the failure is logged and a failure `result.json` is written.
 
 Full live LLM prompts and responses are also written to `logs/llm_transcript.jsonl` with body files under `logs/transcripts/`. This is intended for prompt audit: checking whether the agent produced unnecessary summaries, performed avoidable work, or ignored output-only constraints. API keys are redacted before writing transcript files.
 

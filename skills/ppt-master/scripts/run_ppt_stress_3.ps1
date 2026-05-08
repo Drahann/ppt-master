@@ -46,10 +46,6 @@ Assert-Secret "DASHSCOPE_API_KEY"
 
 $inputPath = Resolve-RepoPath $InputFile
 $python = (Get-Command python -ErrorAction Stop).Source
-$claude = Get-Command claude -ErrorAction SilentlyContinue
-if (-not $claude) {
-    throw "Claude Code CLI was not found in PATH. Install/login to claude before running the live stress test."
-}
 
 $logRoot = if ([System.IO.Path]::IsPathRooted($LogDir)) {
     $LogDir
@@ -77,7 +73,7 @@ for ($i = 1; $i -le $Count; $i++) {
         "generate",
         $inputPath,
         "--project-name", $projectName,
-        "--renderer", "claude",
+        "--renderer", "deepseek",
         "--planner-provider", "qwen",
         "--notes-provider", "qwen",
         "--qwen-model", "qwen3.6-plus",
@@ -85,9 +81,10 @@ for ($i = 1; $i -le $Count; $i++) {
         "--cache-prime",
         "--svg-workers", "12",
         "--svg-batch-size", "3",
-        "--claude-effort", "max",
-        "--claude-timeout", "1200",
-        "--claude-retries", "1"
+        "--svg-model", "deepseek-v4-pro[1m]",
+        "--svg-repair-model", "deepseek-v4-flash",
+        "--svg-timeout", "1200",
+        "--svg-retries", "1"
     )
 
     $process = Start-Process `
@@ -172,7 +169,7 @@ $summary = foreach ($job in $jobs) {
         $usage = Get-Content $usagePath | ForEach-Object {
             try { $_ | ConvertFrom-Json } catch { $null }
         }
-        $svgUsage = @($usage | Where-Object { $_ -and $_.label -eq "claude_svg" })
+        $svgUsage = @($usage | Where-Object { $_ -and $_.label -eq "deepseek_svg" })
         $svgCount = $svgUsage.Count
         $retryCount = @($svgUsage | Where-Object { $_.retrying -eq $true }).Count
         $failureCount = @($svgUsage | Where-Object { $_.failure -eq 1 -or $_.ok -eq $false }).Count
@@ -184,7 +181,7 @@ $summary = foreach ($job in $jobs) {
         Ok = $ok
         Slides = $slides
         QualityWarnings = $warnings
-        ClaudeSvgEntries = $svgCount
+        DeepSeekSvgEntries = $svgCount
         Retries = $retryCount
         Failures = $failureCount
         ProjectDir = if ($projectDir) { $projectDir.FullName } else { "<missing>" }

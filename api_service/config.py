@@ -62,11 +62,10 @@ class Settings:
     qwen_timeout: int
     deepseek_base_url: str
     deepseek_model: str
-    claude_model: str
-    claude_flash_model: str
-    claude_effort: str
-    claude_timeout: int
-    claude_retries: int
+    svg_model: str
+    svg_repair_model: str
+    svg_timeout: int
+    svg_retries: int
     svg_workers: int
     svg_batch_size: int
     cache_prime: bool
@@ -115,11 +114,11 @@ def load_settings() -> Settings:
         default_response_mode=_choice("PPT_API_DEFAULT_RESPONSE_MODE", "async", {"sync", "async"}),
         default_callback_mode=_choice("PPT_API_DEFAULT_CALLBACK_MODE", "auto", {"auto", "defer", "none"}),
         redis_url=((os.getenv("PPT_REDIS_URL") or os.getenv("REDIS_URL") or "").strip() or None),
-        redis_key_prefix=(os.getenv("PPT_REDIS_KEY_PREFIX", "ppt-claude") or "ppt-claude").strip().strip(":") or "ppt-claude",
+        redis_key_prefix=(os.getenv("PPT_REDIS_KEY_PREFIX", "ppt-deepseek") or "ppt-deepseek").strip().strip(":") or "ppt-deepseek",
         canvas_format=os.getenv("PPT_API_CANVAS_FORMAT", "ppt169").strip() or "ppt169",
         style=_choice("PPT_API_STYLE", "general", {"general", "consultant", "consultant-top"}),
-        renderer=_choice("PPT_API_RENDERER", "claude", {"claude", "local"}),
-        planner_provider=_choice("PPT_API_PLANNER_PROVIDER", "qwen", {"deepseek", "qwen"}),
+        renderer=_choice("PPT_API_RENDERER", "deepseek", {"deepseek", "local"}),
+        planner_provider=_choice("PPT_API_PLANNER_PROVIDER", "deepseek", {"deepseek", "qwen"}),
         notes_provider=_choice("PPT_API_NOTES_PROVIDER", "qwen", {"deepseek", "qwen"}),
         qwen_base_url=os.getenv("PPT_API_QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1").strip(),
         qwen_model=os.getenv("PPT_API_QWEN_MODEL", "qwen3.6-plus").strip() or "qwen3.6-plus",
@@ -128,11 +127,10 @@ def load_settings() -> Settings:
         qwen_timeout=max(60, _env_int("PPT_API_QWEN_TIMEOUT", 900)),
         deepseek_base_url=os.getenv("PPT_API_DEEPSEEK_BASE_URL", "https://api.deepseek.com/anthropic").strip(),
         deepseek_model=os.getenv("PPT_API_DEEPSEEK_MODEL", "deepseek-v4-pro").strip() or "deepseek-v4-pro",
-        claude_model=os.getenv("PPT_API_CLAUDE_MODEL", "deepseek-v4-pro[1m]").strip() or "deepseek-v4-pro[1m]",
-        claude_flash_model=os.getenv("PPT_API_CLAUDE_FLASH_MODEL", "deepseek-v4-flash").strip() or "deepseek-v4-flash",
-        claude_effort=_choice("PPT_API_CLAUDE_EFFORT", "max", {"low", "medium", "high", "max"}),
-        claude_timeout=max(60, _env_int("PPT_API_CLAUDE_TIMEOUT", 1200)),
-        claude_retries=max(0, _env_int("PPT_API_CLAUDE_RETRIES", 1)),
+        svg_model=os.getenv("PPT_API_SVG_MODEL", "deepseek-v4-pro[1m]").strip() or "deepseek-v4-pro[1m]",
+        svg_repair_model=os.getenv("PPT_API_SVG_REPAIR_MODEL", "deepseek-v4-flash").strip() or "deepseek-v4-flash",
+        svg_timeout=max(60, _env_int("PPT_API_SVG_TIMEOUT", 1200)),
+        svg_retries=max(0, _env_int("PPT_API_SVG_RETRIES", 1)),
         svg_workers=max(1, _env_int("PPT_API_SVG_WORKERS", 12)),
         svg_batch_size=max(1, _env_int("PPT_API_SVG_BATCH_SIZE", 3)),
         cache_prime=_env_bool("PPT_API_CACHE_PRIME", True),

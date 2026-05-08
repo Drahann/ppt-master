@@ -20,7 +20,7 @@ python3 scripts/api_ppt.py generate input.md --project-name demo --dry-run
 | `ppt_automation/parser.py` | Markdown/JSON input parsing; `#` title and `##` slide boundaries |
 | `ppt_automation/project.py` | Project directories, manifests, plan/lock mirrors, `result.json` |
 | `ppt_automation/planner.py` | DeepSeek direct API and deterministic local design plan |
-| `ppt_automation/svg_generator.py` | Local SVG smoke renderer and Claude Code per-slide SVG generation |
+| `ppt_automation/svg_generator.py` | Local SVG smoke renderer and direct DeepSeek per-slide SVG generation |
 | `ppt_automation/pipeline.py` | End-to-end orchestration, quality report, chart scan, notes, export |
 | `ppt_automation/usage.py` | `logs/usage.jsonl` and compatibility `logs/api_ppt.log` |
 
@@ -44,23 +44,16 @@ project/
 └── exports/*.pptx
 ```
 
-## DeepSeek / Claude Code Environment
+## DeepSeek Environment
 
-Live mode uses DeepSeek's Anthropic-compatible endpoint and Claude Code CLI for per-slide SVG generation.
+Live mode uses DeepSeek's Anthropic-compatible endpoint for planning and per-slide SVG generation. Speaker notes default to Qwen.
 
 ```bash
 set DEEPSEEK_API_KEY=sk-...
-set ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
-set ANTHROPIC_AUTH_TOKEN=<DeepSeek key>
-set ANTHROPIC_MODEL=deepseek-v4-pro[1m]
-set ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro[1m]
-set ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-pro[1m]
-set ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash
-set CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash
-set CLAUDE_CODE_EFFORT_LEVEL=high
+python3 scripts/api_ppt.py generate postppt.json --project-name demo --renderer deepseek --cache-prime --svg-workers 12 --svg-batch-size 4
 ```
 
-The automation package sets the Anthropic variables for child Claude Code processes. Do not write API keys into project files.
+Do not write API keys into project files.
 
 ## Reused Asset/Export Scripts
 

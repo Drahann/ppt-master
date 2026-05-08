@@ -31,7 +31,7 @@ settings.project_base_dir.mkdir(parents=True, exist_ok=True)
 settings.jobs_dir.mkdir(parents=True, exist_ok=True)
 settings.metrics_export_dir.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="ppt-master-claude-api", version="1.0.0")
+app = FastAPI(title="ppt-master-deepseek-api", version="1.0.0")
 job_semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
 execution_semaphore = threading.BoundedSemaphore(settings.max_concurrent_jobs)
 worker_stop_event = threading.Event()
@@ -69,7 +69,7 @@ def _ensure_account_pool() -> RedisAccountPool | None:
                 key_prefix=settings.redis_key_prefix,
                 lease_ttl_seconds=settings.runner_timeout_seconds + 600,
             )
-            logger.info("Configured DeepSeek/Claude account pool with %s accounts", len(accounts))
+            logger.info("Configured DeepSeek account pool with %s accounts", len(accounts))
     except AccountPoolConfigError as exc:
         account_pool_error = str(exc)
         logger.error("Invalid account pool configuration: %s", exc)
@@ -84,7 +84,7 @@ def healthz() -> dict[str, object]:
     pool = _ensure_account_pool()
     return {
         "ok": True,
-        "service": "ppt-master-claude-api",
+        "service": "ppt-master-deepseek-api",
         "cosEnabled": settings.cos_enabled,
         "projectBaseDir": str(settings.project_base_dir),
         "jobsDir": str(settings.jobs_dir),
@@ -96,7 +96,6 @@ def healthz() -> dict[str, object]:
             "notesProvider": settings.notes_provider,
             "svgWorkers": settings.svg_workers,
             "svgBatchSize": settings.svg_batch_size,
-            "claudeEffort": settings.claude_effort,
             "cachePrime": settings.cache_prime,
             "startStagger": {
                 "enabled": settings.runner_start_stagger_enabled,
@@ -245,7 +244,7 @@ def _process_request(request: NormalizedRequest, job_id: str | None = None) -> d
     try:
         if pool is None and settings.require_account_pool:
             detail = f": {account_pool_error}" if account_pool_error else ""
-            raise RuntimeError(f"DeepSeek/Claude account pool is required{detail}")
+            raise RuntimeError(f"DeepSeek account pool is required{detail}")
         if pool is not None:
             _update_job_stage(metric_job_id, job_id, "account_pool", event="waiting_for_deepseek_account")
             account_lease = pool.acquire(
@@ -255,7 +254,7 @@ def _process_request(request: NormalizedRequest, job_id: str | None = None) -> d
                 timeout_seconds=settings.account_lease_timeout_seconds,
             )
             if account_lease is None:
-                raise RuntimeError("No DeepSeek/Claude account lease available before timeout")
+                raise RuntimeError("No DeepSeek account lease available before timeout")
 
         metrics.start_job(
             metric_job_id,
@@ -297,7 +296,6 @@ def _process_request(request: NormalizedRequest, job_id: str | None = None) -> d
                 svg_batch_size=svg_batch_size,
                 qwen_model=request.qwen_model,
                 notes_model=request.notes_model,
-                claude_effort=request.claude_effort,
             )
 
             notes_path = runner_result.project_path / "notes" / "total.md"
@@ -523,8 +521,8 @@ def _build_metrics_payload() -> dict[str, object]:
         "qwen_model": settings.qwen_model,
         "qwen_notes_model": settings.qwen_notes_model,
         "qwen_timeout": settings.qwen_timeout,
-        "claude_model": settings.claude_model,
-        "claude_flash_model": settings.claude_flash_model,
+        "svg_model": settings.svg_model,
+        "svg_repair_model": settings.svg_repair_model,
         "start_stagger": {
             "enabled": settings.runner_start_stagger_enabled,
             "seconds": settings.runner_start_stagger_seconds,
@@ -571,7 +569,6 @@ def _normalize_report_to_ppt_request(request: ReportRequest) -> NormalizedReques
         svg_batch_size=request.svgBatchSize or request.batchSize,
         qwen_model=request.qwenModel or request.specModel,
         notes_model=request.notesModel,
-        claude_effort=request.claudeEffort,
     )
 
 
@@ -589,7 +586,6 @@ def _normalize_generate_ppt_request(request: GeneratePptRequest) -> NormalizedRe
         svg_batch_size=request.svgBatchSize or request.batchSize,
         qwen_model=request.qwenModel or request.specModel,
         notes_model=request.notesModel,
-        claude_effort=request.claudeEffort,
     )
 
 

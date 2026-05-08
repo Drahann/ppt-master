@@ -1,6 +1,6 @@
 # API Service
 
-FastAPI production shell for the current PPT Master Claude pipeline.
+FastAPI production shell for the current PPT Master DeepSeek direct API pipeline.
 
 The service intentionally keeps the existing production API paths so callers can switch from the old service by changing only the host port from `3001` to `3003`.
 
@@ -9,11 +9,11 @@ The service intentionally keeps the existing production API paths so callers can
 Redis is used for:
 
 - async job queue and job status
-- DeepSeek/Claude account leases
+- DeepSeek account leases
 - runner start stagger
 - metrics snapshots
 
-The DeepSeek/Claude account pool is job-level, not SVG-turn-level:
+The DeepSeek account pool is job-level, not SVG-turn-level:
 
 - default account capacity: 2 concurrent jobs
 - default account capacity: 24 SVG slots
@@ -29,8 +29,8 @@ The runner calls:
 
 ```bash
 python skills/ppt-master/scripts/api_ppt.py generate <source.md> \
-  --renderer claude \
-  --planner-provider qwen \
+  --renderer deepseek \
+  --planner-provider deepseek \
   --notes-provider qwen \
   --qwen-model qwen3.6-plus \
   --qwen-max-tokens 65536 \
@@ -38,13 +38,14 @@ python skills/ppt-master/scripts/api_ppt.py generate <source.md> \
   --cache-prime \
   --svg-workers 12 \
   --svg-batch-size 4 \
-  --claude-effort max \
-  --claude-timeout 1200 \
-  --claude-retries 1
+  --svg-model deepseek-v4-pro[1m] \
+  --svg-repair-model deepseek-v4-flash \
+  --svg-timeout 1200 \
+  --svg-retries 1
 ```
 
 DeepSeek keys are injected from the account lease into child process environment variables, not passed on the command line.
 
 SVG generation is scheduled per slide. `--svg-workers` is the actual concurrent
-Claude process limit; `--svg-batch-size` only keeps logical batch metadata in
+direct API request limit; `--svg-batch-size` only keeps logical batch metadata in
 logs and does not bind a worker slot to a whole batch.

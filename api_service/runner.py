@@ -65,12 +65,12 @@ def execute_runner(
     svg_batch_size: int,
     qwen_model: str | None,
     notes_model: str | None,
-    claude_effort: str | None,
 ) -> RunnerResult:
     job_id = build_job_id(report_id)
     working_dir.mkdir(parents=True, exist_ok=True)
 
     project_name = build_project_name(report_id, title)
+    effective_qwen_model = qwen_model or notes_model or settings.qwen_notes_model or settings.qwen_model
     command = [
         sys.executable,
         str(settings.repo_root / RUNNER_SCRIPT),
@@ -93,7 +93,7 @@ def execute_runner(
         "--qwen-base-url",
         settings.qwen_base_url,
         "--qwen-model",
-        qwen_model or settings.qwen_model,
+        effective_qwen_model,
         "--qwen-max-tokens",
         str(settings.qwen_max_tokens),
         "--qwen-timeout",
@@ -102,16 +102,14 @@ def execute_runner(
         account_lease.base_url if account_lease and account_lease.base_url else settings.deepseek_base_url,
         "--deepseek-model",
         account_lease.deepseek_model if account_lease and account_lease.deepseek_model else settings.deepseek_model,
-        "--claude-model",
-        account_lease.claude_model if account_lease and account_lease.claude_model else settings.claude_model,
-        "--claude-flash-model",
-        account_lease.claude_flash_model if account_lease and account_lease.claude_flash_model else settings.claude_flash_model,
-        "--claude-effort",
-        claude_effort or settings.claude_effort,
-        "--claude-timeout",
-        str(settings.claude_timeout),
-        "--claude-retries",
-        str(settings.claude_retries),
+        "--svg-model",
+        account_lease.svg_model if account_lease and account_lease.svg_model else settings.svg_model,
+        "--svg-repair-model",
+        account_lease.svg_repair_model if account_lease and account_lease.svg_repair_model else settings.svg_repair_model,
+        "--svg-timeout",
+        str(settings.svg_timeout),
+        "--svg-retries",
+        str(settings.svg_retries),
         "--svg-workers",
         str(svg_workers),
         "--svg-batch-size",
@@ -229,11 +227,13 @@ def _read_slide_count(project_path: Path) -> int:
 def _read_usage_summary(project_path: Path) -> dict[str, Any]:
     usage_path = project_path / "logs" / "usage.jsonl"
     summary = {
-        "claude_svg_entries": 0,
-        "claude_svg_ok": 0,
-        "claude_svg_failed": 0,
+        "deepseek_svg_entries": 0,
+        "deepseek_svg_ok": 0,
+        "deepseek_svg_failed": 0,
         "qwen_plan_tokens": 0,
         "qwen_notes_tokens": 0,
+        "deepseek_plan_tokens": 0,
+        "deepseek_notes_tokens": 0,
     }
     if not usage_path.exists():
         return summary
@@ -243,16 +243,20 @@ def _read_usage_summary(project_path: Path) -> dict[str, Any]:
         except json.JSONDecodeError:
             continue
         label = item.get("label")
-        if label == "claude_svg":
-            summary["claude_svg_entries"] += 1
+        if label == "deepseek_svg":
+            summary["deepseek_svg_entries"] += 1
             if item.get("ok") is True:
-                summary["claude_svg_ok"] += 1
+                summary["deepseek_svg_ok"] += 1
             elif item.get("ok") is False:
-                summary["claude_svg_failed"] += 1
+                summary["deepseek_svg_failed"] += 1
         elif label == "qwen_plan":
             summary["qwen_plan_tokens"] = _usage_total_tokens(item.get("usage"))
         elif label == "qwen_notes":
             summary["qwen_notes_tokens"] = _usage_total_tokens(item.get("usage"))
+        elif label == "deepseek_plan":
+            summary["deepseek_plan_tokens"] = _usage_total_tokens(item.get("usage"))
+        elif label == "deepseek_notes":
+            summary["deepseek_notes_tokens"] = _usage_total_tokens(item.get("usage"))
     return summary
 
 

@@ -153,6 +153,9 @@ yarn.lock
 .env.*.local
 .env*.ps1
 secrets/
+deploy/production/server-deepseek.env.api
+deploy/production/deepseek_account_pool.json
+deploy/production/deepseek_account_pool_*.json
 deploy/production/server-claude.env.api
 deploy/production/deepseek_claude_account_pool.json
 deploy/production/deepseek_claude_account_pool_*.json

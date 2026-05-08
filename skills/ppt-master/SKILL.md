@@ -24,7 +24,7 @@ For JSON payloads where Markdown is in `content`:
 python3 ${SKILL_DIR}/scripts/api_ppt.py generate postppt.json --project-name demo
 ```
 
-For local smoke tests without DeepSeek or Claude Code:
+For local smoke tests without DeepSeek:
 
 ```bash
 python3 ${SKILL_DIR}/scripts/api_ppt.py generate postppt.json --project-name demo --renderer local
@@ -112,14 +112,13 @@ The old interactive workflow is no longer the main execution path, but these rep
 
 ## Model Usage
 
-- DeepSeek direct Anthropic-compatible API is used for `design_plan/spec_lock` and speaker notes in live mode.
-- Claude Code CLI is used for per-slide SVG generation in live mode, producing one independent SVG file per slide call.
-- Claude SVG runs use a fixed no-tool Claude Code invocation for cache-prime and per-slide calls.
+- DeepSeek direct Anthropic-compatible API is used for `design_plan/spec_lock` and per-slide SVG generation in live mode; Qwen is the default speaker-notes provider.
+- SVG generation produces one independent direct API request per slide; no Claude Code CLI process is used in this branch.
 - `--svg-workers` is the true SVG concurrency limit. `--svg-batch-size` only groups pages for log/reporting batch metadata; it does not reserve a worker slot for a whole batch.
 - SVG/spec font choices are preserved for the primary editable PPTX export. Post-processing also builds a temporary `svg_final_sourcehan/` variant and exports a Source Han version (`思源宋体` titles, `思源黑体` body text) without changing `svg_final/`.
 - All live prompt families start with a byte-stable `PPT_MASTER_COMMON_PREFIX_V1` deck prefix: fixed rules, canvas, style, source Markdown, and compact slide manifest.
 - The common prefix must not include project paths, timestamps, logs, current page numbers, or random values.
-- `--cache-prime` sends a low-output ACK request for that common prefix before live model work; each per-slide SVG prompt appends slide-specific content after the stable prefix.
+- `--cache-prime` sends low-output ACK requests for stable shared prefixes before live model work; each per-slide SVG prompt appends slide-specific content after the stable prefix.
 - Theme color policy: extra HEX colors are allowed for richness, but the locked primary accent must remain the dominant non-neutral accent on every slide.
 - Layout diversity is semantic, not quota-based: `design_plan` should prefer specific archetypes and include `layout_family`, `layout_signature`, `visual_structure`, and `why_this_layout` per slide.
 - Usage is appended to `logs/usage.jsonl`; legacy `logs/api_ppt.log` is also written for compatibility.

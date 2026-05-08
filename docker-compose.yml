@@ -1,13 +1,12 @@
 services:
-  ppt-master-claude-api:
+  ppt-master-deepseek-api:
     build:
       context: .
       args:
         APT_MIRROR: ${APT_MIRROR:-mirrors.tuna.tsinghua.edu.cn}
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
         PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}
-        CLAUDE_CODE_PACKAGE: ${CLAUDE_CODE_PACKAGE:-@anthropic-ai/claude-code@latest}
-    container_name: ppt-master-claude-api
+    container_name: ppt-master-deepseek-api
     ports:
       - "${PPT_API_HOST_PORT:-3003}:3000"
     env_file:
@@ -17,24 +16,23 @@ services:
       PPT_API_PORT: 3000
       PPT_API_PROJECT_BASE_DIR: /app/projects
       PPT_API_JOBS_DIR: /app/tmp/api-jobs
-      PPT_MASTER_CLAUDE_CONFIG_ROOT: /app/tmp/claude-code-config
     volumes:
       - ./projects:/app/projects
       - ./tmp:/app/tmp
       - ./secrets:/app/secrets:ro
     depends_on:
-      ppt-master-claude-redis:
+      ppt-master-deepseek-redis:
         condition: service_healthy
     restart: unless-stopped
 
-  ppt-master-claude-redis:
+  ppt-master-deepseek-redis:
     image: redis:7-alpine
-    container_name: ppt-master-claude-redis
+    container_name: ppt-master-deepseek-redis
     ports:
       - "${PPT_REDIS_HOST_PORT:-6380}:6379"
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     volumes:
-      - ppt-master-claude-redis-data:/data
+      - ppt-master-deepseek-redis-data:/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -44,4 +42,4 @@ services:
       start_period: 5s
 
 volumes:
-  ppt-master-claude-redis-data:
+  ppt-master-deepseek-redis-data:

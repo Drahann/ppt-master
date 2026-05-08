@@ -14,8 +14,6 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from .config import (
-    CLAUDE_FLASH_MODEL,
-    CLAUDE_MODEL,
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
     QWEN_BASE_URL,
@@ -24,6 +22,8 @@ from .config import (
     QWEN_TIMEOUT,
     REPO_ROOT,
     TOOLS_DIR,
+    SVG_MODEL,
+    SVG_REPAIR_MODEL,
     normalized_format,
 )
 from .assets import download_and_rewrite_markdown_images
@@ -57,7 +57,7 @@ class GenerationOptions:
     projects_dir: str = str(REPO_ROOT / "projects")
     format: str = "ppt169"
     style: str = "general"
-    renderer: str = "claude"
+    renderer: str = "deepseek"
     dry_run: bool = False
     max_slides: int | None = None
     quality_check: bool = True
@@ -65,17 +65,16 @@ class GenerationOptions:
     deepseek_base_url: str = DEFAULT_BASE_URL
     deepseek_model: str = DEFAULT_MODEL
     planner_provider: str = "deepseek"
-    notes_provider: str = "deepseek"
+    notes_provider: str = "qwen"
     qwen_api_key: str | None = None
     qwen_base_url: str = QWEN_BASE_URL
     qwen_model: str = QWEN_MODEL
     qwen_max_tokens: int = QWEN_MAX_TOKENS
     qwen_timeout: int = QWEN_TIMEOUT
-    claude_model: str = CLAUDE_MODEL
-    claude_flash_model: str = CLAUDE_FLASH_MODEL
-    claude_effort: str = "high"
-    claude_timeout: int = 600
-    claude_retries: int = 1
+    svg_model: str = SVG_MODEL
+    svg_repair_model: str = SVG_REPAIR_MODEL
+    svg_timeout: int = 600
+    svg_retries: int = 1
     svg_workers: int = 1
     svg_batch_size: int = 5
     cache_prime: bool = False
@@ -505,11 +504,10 @@ def generate(options: GenerationOptions) -> RunResult:
                 renderer=options.renderer,
                 deepseek_api_key=options.deepseek_api_key,
                 deepseek_base_url=options.deepseek_base_url,
-                claude_model=options.claude_model,
-                claude_flash_model=options.claude_flash_model,
-                claude_effort=options.claude_effort,
-                claude_timeout=options.claude_timeout,
-                claude_retries=options.claude_retries,
+                svg_model=options.svg_model,
+                svg_repair_model=options.svg_repair_model,
+                svg_timeout=options.svg_timeout,
+                svg_retries=options.svg_retries,
                 svg_workers=options.svg_workers,
                 svg_batch_size=options.svg_batch_size,
                 cache_prime=options.cache_prime,

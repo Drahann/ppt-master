@@ -27,7 +27,6 @@ class ReportRequest(BaseModel):
     svgWorkers: int | None = Field(default=None, ge=1)
     svgBatchSize: int | None = Field(default=None, ge=1)
     qwenModel: str | None = None
-    claudeEffort: str | None = Field(default=None, pattern="^(low|medium|high|max)$")
 
 
 class GeneratePptRequest(BaseModel):
@@ -54,7 +53,6 @@ class GeneratePptRequest(BaseModel):
     svgWorkers: int | None = Field(default=None, ge=1)
     svgBatchSize: int | None = Field(default=None, ge=1)
     qwenModel: str | None = None
-    claudeEffort: str | None = Field(default=None, pattern="^(low|medium|high|max)$")
 
 
 @dataclass(frozen=True)
@@ -71,7 +69,6 @@ class NormalizedRequest:
     svg_batch_size: int | None
     qwen_model: str | None
     notes_model: str | None
-    claude_effort: str | None
 
 
 class CallbackResult(BaseModel):

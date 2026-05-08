@@ -1,6 +1,6 @@
-# Claude PPT Redis
+# DeepSeek PPT Redis
 
-This Redis instance is dedicated to the DeepSeek/Claude PPT API service. It is intentionally separate from the existing production PPT service so both services can run on the same server.
+This Redis instance is dedicated to the DeepSeek direct API PPT service. It is intentionally separate from the existing production PPT service so both services can run on the same server.
 
 Default host port: `6380`
 
@@ -19,5 +19,5 @@ PPT_REDIS_URL=redis://:change-me@host.docker.internal:6380/0
 Use this URL when Redis runs inside the same Compose network:
 
 ```env
-PPT_REDIS_URL=redis://ppt-master-claude-redis:6379/0
+PPT_REDIS_URL=redis://ppt-master-deepseek-redis:6379/0
 ```
