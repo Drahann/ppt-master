@@ -47,6 +47,14 @@ from .usage import UsageLogger
 SOURCE_HAN_SVG_DIRNAME = "svg_final_sourcehan"
 SOURCE_HAN_TITLE_FONT_FAMILY = "思源宋体"
 SOURCE_HAN_BODY_FONT_FAMILY = "思源黑体"
+SOURCE_HAN_FONT_FAMILY_REPLACEMENTS = {
+    "Microsoft YaHei": SOURCE_HAN_BODY_FONT_FAMILY,
+    "Microsoft YaHei UI": SOURCE_HAN_BODY_FONT_FAMILY,
+    "微软雅黑": SOURCE_HAN_BODY_FONT_FAMILY,
+    "SimSun": SOURCE_HAN_TITLE_FONT_FAMILY,
+    "NSimSun": SOURCE_HAN_TITLE_FONT_FAMILY,
+    "宋体": SOURCE_HAN_TITLE_FONT_FAMILY,
+}
 
 
 @dataclass
@@ -255,66 +263,41 @@ def generate_notes(project_path: Path, options: GenerationOptions, logger: Usage
     logger.log(f"{options.notes_provider}_notes", usage=usage, input_chars=len(prompt), output_chars=len(text))
 
 
-def parse_float_value(raw: str | None) -> float | None:
+def rewrite_source_han_font_stack(raw: str | None) -> tuple[str | None, bool]:
     if not raw:
-        return None
-    match = re.search(r"-?\d+(?:\.\d+)?", raw)
-    if not match:
-        return None
-    try:
-        return float(match.group(0))
-    except ValueError:
-        return None
+        return raw, False
+    fonts = [font.strip().strip("'\"") for font in raw.split(",")]
+    rewritten = [SOURCE_HAN_FONT_FAMILY_REPLACEMENTS.get(font, font) for font in fonts]
+    if rewritten == fonts:
+        return raw, False
+    return ", ".join(rewritten), True
 
 
-def parse_inline_style(raw: str | None) -> dict[str, str]:
-    style: dict[str, str] = {}
-    if not raw:
-        return style
-    for item in raw.split(";"):
-        if ":" not in item:
-            continue
-        key, value = item.split(":", 1)
-        style[key.strip().lower()] = value.strip()
-    return style
+def rewrite_element_font_family_to_source_han(element: ET.Element) -> bool:
+    changed = False
+    attr_value, attr_changed = rewrite_source_han_font_stack(element.get("font-family"))
+    if attr_changed and attr_value is not None:
+        element.set("font-family", attr_value)
+        changed = True
 
-
-def text_element_uses_source_han_serif(element: ET.Element) -> bool:
-    style = parse_inline_style(element.get("style"))
-    font_size = parse_float_value(element.get("font-size") or style.get("font-size")) or 0.0
-    y = parse_float_value(element.get("y")) or 9999.0
-    text = "".join(element.itertext()).strip()
-    if not text:
-        return False
-
-    metric_like = re.fullmatch(r"[\d\s.,，:%％+\-–—~<>×xX/年月日亿元万千百十台套件项篇家个倍余超约]+", text) is not None
-    if metric_like:
-        return False
-
-    weight = (element.get("font-weight") or style.get("font-weight") or "").strip().lower()
-    is_bold = weight in {"bold", "600", "700", "800", "900"}
-    return font_size >= 42 or (font_size >= 28 and y <= 150) or (font_size >= 32 and is_bold)
-
-
-def set_text_font_family(element: ET.Element, family: str) -> None:
-    element.set("font-family", family)
     style = element.get("style")
     if not style or "font-family" not in style.lower():
-        return
+        return changed
 
     parts: list[str] = []
-    replaced = False
     for part in style.split(";"):
         if not part.strip():
             continue
         if ":" in part and part.split(":", 1)[0].strip().lower() == "font-family":
-            parts.append(f"font-family:{family}")
-            replaced = True
+            _, raw_value = part.split(":", 1)
+            style_value, style_changed = rewrite_source_han_font_stack(raw_value.strip())
+            parts.append(f"font-family:{style_value or raw_value.strip()}")
+            changed = changed or style_changed
         else:
             parts.append(part.strip())
-    if not replaced:
-        parts.append(f"font-family:{family}")
-    element.set("style", "; ".join(parts))
+    if changed:
+        element.set("style", "; ".join(parts))
+    return changed
 
 
 def rewrite_svg_text_fonts_to_source_han(svg_text: str) -> tuple[str, int]:
@@ -323,17 +306,10 @@ def rewrite_svg_text_fonts_to_source_han(svg_text: str) -> tuple[str, int]:
     root = ET.fromstring(svg_text)
     changed = 0
     for element in root.iter():
-        if element.tag.rsplit("}", 1)[-1] != "text":
+        if element.tag.rsplit("}", 1)[-1] not in {"text", "tspan"}:
             continue
-        family = SOURCE_HAN_TITLE_FONT_FAMILY if text_element_uses_source_han_serif(element) else SOURCE_HAN_BODY_FONT_FAMILY
-        if element.get("font-family") != family:
+        if rewrite_element_font_family_to_source_han(element):
             changed += 1
-        set_text_font_family(element, family)
-        for child in element.iter():
-            if child is element:
-                continue
-            if child.tag.rsplit("}", 1)[-1] == "tspan":
-                set_text_font_family(child, family)
     return ET.tostring(root, encoding="unicode"), changed
 
 
@@ -370,6 +346,7 @@ def build_source_han_svg_export_variant(project_path: Path) -> Path:
             {
                 "source_dir": str(source_dir),
                 "target_dir": str(target_dir),
+                "font_policy": "preserve original SVG Latin font stack; replace only Microsoft YaHei/SimSun family fallbacks with Source Han",
                 "changed_files": changed_files,
                 "changed_text_nodes": changed_text_nodes,
             },
