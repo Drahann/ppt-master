@@ -1030,6 +1030,9 @@ Reducer rules:
 - When a cookbook is active, every normal slide should visibly carry 2+ source-native art moves via `required_art_moves`.
 - `layout_family` should be concrete and cookbook-adapted when a cookbook is active, e.g. `flsg_adapted_matrix`, not just `matrix`.
 - Keep chart catalog semantics intact; do not replace charts with generic cards during reduction.
+- Preserve valid `chart_or_diagram` keys from slide plans unless they clearly conflict with the source content; if a key must change, replace it with an equally specific or more specific catalog key, not an empty value.
+- Do not collapse diverse, valid visualization choices into repeated safe structures such as `basic_table`, `comparison_table`, `kpi_cards`, or `layered_architecture` merely for consistency; deck coherence comes from theme restyling, not chart-type homogenization.
+- `chart_rules.selected_templates` must include the distinct final `chart_or_diagram` keys so downstream SVG generation sees the intended catalog variety.
 
 Required final design_plan schema:
 {json.dumps(design_plan_schema_example(), ensure_ascii=False, indent=2)}
