@@ -250,6 +250,8 @@ def build_svg_prompt_prefix(
                                 "rhythm",
                                 "layout",
                                 "layout_family",
+                                "source_recipe_anchor",
+                                "required_art_moves",
                                 "layout_signature",
                                 "intent",
                                 "composition",
@@ -285,7 +287,8 @@ def build_svg_prompt_prefix(
         cookbook_svg_rules = f"""
 Theme Cookbook SVG rules:
 - Cookbook `{cookbook.id}` is active. Follow its typography, chrome, component geometry, decorative asset policy, chart skin, layout grammar, and forbidden drift rules.
-- Treat named cookbook recipes as strong reference exemplars, not as a closed set. If `layout_family` is `g08_adapted_*` or otherwise cookbook-compatible, build the requested semantic structure using the cookbook's visual grammar.
+- Treat named cookbook recipes as strong reference exemplars, not as a closed set. If `layout_family` is `g08_adapted_*`, `flsg_adapted_*`, or otherwise cookbook-compatible, build the requested semantic structure using the cookbook's visual grammar.
+- `source_recipe_anchor` and `required_art_moves` are hard art-direction anchors. Render the listed source-native moves visibly unless they would break source-content faithfulness or SVG safety.
 - If `chart_or_diagram` names a catalog template, preserve that chart/diagram's semantic geometry and restyle it in the cookbook theme even when the cookbook does not list that exact template.
 - Do not downgrade cookbook-compatible layouts into a generic card or two-column page.
 - If spec_lock repeats cookbook tokens, spec_lock is the executable contract. If spec_lock is missing a cookbook detail, fall back to the cookbook text above.
@@ -303,7 +306,7 @@ Stable rules:
 - Use inline SVG attributes only.
 - Forbidden: `<style>`, `class`, `<foreignObject>`, `rgba()`, `<script>`, `<animate*>`, `<textPath>`, `<mask>`, HTML named entities, `<g opacity>`, `<image opacity>`, and `clip-path` outside simple image crops.
 - `clip-path` is allowed only on `<image>` for simple photo/avatar crops, and only with a matching single-shape `<clipPath>` in `<defs>`. Never use clip-path on shapes, groups, text, charts, or decorative overlays.
-- Light-canvas theme only: the root background must be `#FFFFFF` or near-white. Controlled color rails, soft-tint cards, chart regions, image overlays, and small/medium section accents are allowed when text contrast remains strong; avoid large saturated color blocks. Do not use dark full-slide backgrounds, GitHub-dark palette, or neon-on-black styling.
+- Light-canvas theme by default: the root background should be `#FFFFFF` or near-white unless spec_lock/cookbook and the current page's art moves explicitly call for a dark, black, or accent full-bleed reversal page. Do not invent dark full-slide backgrounds outside those source-native moves; avoid GitHub-dark palette and neon-on-black styling.
 - Keep the deck theme continuous through locked compact palette, typography, spacing, page chrome, and component grammar. The primary accent should recur across the deck, but it does not need to dominate every slide; use the current page spec to choose one leading accent and one supporting accent from spec_lock/cookbook.
 - XML reserved characters in text must be escaped.
 - Text wrapping and inline emphasis must use `<text>` and `<tspan>` only. Never use HTML `<span>`; write `<tspan fill="#..." font-weight="...">...</tspan>`.
@@ -314,6 +317,8 @@ Stable rules:
 - Apply current-page spec fields deliberately:
   - `rhythm` controls macro pacing and visual weight; `content_density` and `density_plan` control visible text volume.
   - `layout_signature` is the page blueprint; draw that structure before adding details.
+  - `source_recipe_anchor` names the cookbook recipe or motif cluster that should be recognizable in the page.
+  - `required_art_moves` lists source-native visual actions that must survive semantic adaptation; draw them as concrete chrome, panels, rules, typography, image treatments, or component details.
   - `composition` defines reading order and major regions.
   - `visual_structure` names the visible primitives to create.
   - `why_this_layout` explains the slide's emphasis; preserve that emphasis.
@@ -386,8 +391,10 @@ def build_current_page_spec_excerpt(project_path: Path, slide: Slide) -> str:
             style_anchor = lock_data.get("style_anchor", {}) if isinstance(lock_data, dict) else {}
             theme_color_policy = lock_data.get("theme_color_policy", {}) if isinstance(lock_data, dict) else {}
             page_rhythm = lock_data.get("page_rhythm", {}) if isinstance(lock_data, dict) else {}
+            page_art_moves = lock_data.get("page_art_moves", {}) if isinstance(lock_data, dict) else {}
             payload["spec_lock_page"] = {
                 "page_rhythm": page_rhythm.get(page_key) if isinstance(page_rhythm, dict) else None,
+                "page_art_moves": page_art_moves.get(page_key) if isinstance(page_art_moves, dict) else None,
                 "shape_language": lock_data.get("shape_language", {}),
                 "spacing": lock_data.get("spacing", {}),
                 "style_anchor_repeat": style_anchor.get("repeat") if isinstance(style_anchor, dict) else None,

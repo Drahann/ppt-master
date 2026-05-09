@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 import re
 from xml.etree import ElementTree as ET
 
 from .drawingml_context import ConvertContext
+
+try:
+    import winreg
+except ImportError:  # pragma: no cover - non-Windows platforms
+    winreg = None
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -42,6 +48,13 @@ EA_FONTS = {
     'Songti SC', 'Songti TC',
 }
 SYSTEM_FONTS = {'system-ui', '-apple-system', 'BlinkMacSystemFont'}
+SOURCE_HAN_SANS_FONT = '思源黑体'
+SOURCE_HAN_SERIF_FONT = '思源宋体'
+
+EA_EXPORT_FONT_REPLACEMENTS = {
+    'Microsoft YaHei': SOURCE_HAN_SANS_FONT,
+    'SimSun': SOURCE_HAN_SERIF_FONT,
+}
 
 # macOS/Linux-only fonts -> Windows equivalents
 FONT_FALLBACK_WIN = {
@@ -59,18 +72,18 @@ FONT_FALLBACK_WIN = {
     'STZhongsong': 'SimSun',
     'Songti SC': 'SimSun',
     'Songti TC': 'SimSun',
-    'Noto Sans SC': 'Microsoft YaHei',
-    'Noto Sans TC': 'Microsoft JhengHei',
-    'Noto Serif SC': 'SimSun',
-    'Noto Serif TC': 'SimSun',
+    'Noto Sans SC': 'Noto Sans SC',
+    'Noto Sans TC': 'Noto Sans TC',
+    'Noto Serif SC': 'Noto Serif SC',
+    'Noto Serif TC': 'Noto Serif TC',
     'Source Han Sans SC': 'Source Han Sans SC',
     'Source Han Sans TC': 'Source Han Sans TC',
     'Source Han Serif SC': 'Source Han Serif SC',
     'Source Han Serif TC': 'Source Han Serif TC',
     '思源黑体': '思源黑体',
     '思源宋体': '思源宋体',
-    'WenQuanYi Micro Hei': 'Microsoft YaHei',
-    'WenQuanYi Zen Hei': 'Microsoft YaHei',
+    'WenQuanYi Micro Hei': 'WenQuanYi Micro Hei',
+    'WenQuanYi Zen Hei': 'WenQuanYi Zen Hei',
     # Latin fonts (macOS / Linux / Web -> Windows)
     'SF Pro': 'Segoe UI',
     'SF Pro Display': 'Segoe UI',
@@ -103,6 +116,14 @@ _SERIF_LATIN = {
     'Book Antiqua', 'Cambria', 'SimSun', 'Liberation Serif', 'DejaVu Serif',
     'Source Han Serif SC', 'Source Han Serif TC', '思源宋体',
 }
+
+_STYLE_SUFFIX_RE = re.compile(
+    r'\s+'
+    r'(Regular|Bold|Italic|Oblique|Light|Medium|Semibold|SemiBold|Semi Bold|'
+    r'ExtraLight|Extra Light|ExtraBold|Extra Bold|Black|Thin|Heavy|Condensed|'
+    r'Narrow|Display|Text|Variable|VF)$',
+    re.IGNORECASE,
+)
 
 # SVG stroke-dasharray -> DrawingML prstDash
 DASH_PRESETS = {
@@ -236,17 +257,75 @@ def get_effective_filter_id(elem: ET.Element, ctx: ConvertContext) -> str | None
 # Font parsing
 # ---------------------------------------------------------------------------
 
+def _font_family_aliases(registry_name: str) -> set[str]:
+    """Return plausible family names from a Windows font registry entry."""
+    base = re.sub(r'\s*\([^)]*\)\s*$', '', registry_name).strip()
+    aliases: set[str] = set()
+    for part in base.split('&'):
+        name = part.strip()
+        if not name:
+            continue
+        aliases.add(name)
+        stripped = name
+        while True:
+            next_name = _STYLE_SUFFIX_RE.sub('', stripped).strip()
+            if next_name == stripped:
+                break
+            stripped = next_name
+            if stripped:
+                aliases.add(stripped)
+    return aliases
+
+
+@lru_cache(maxsize=1)
+def installed_font_families() -> frozenset[str]:
+    """Best-effort installed font family names.
+
+    PowerPoint native text has no CSS fallback stack, so the exporter chooses
+    the first available Latin face from the SVG stack. On non-Windows systems,
+    or if the registry cannot be read, callers preserve the SVG's first choice.
+    """
+    if winreg is None:
+        return frozenset()
+
+    names: set[str] = set()
+    font_key = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+    for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        try:
+            with winreg.OpenKey(root, font_key) as key:
+                value_count = winreg.QueryInfoKey(key)[1]
+                for idx in range(value_count):
+                    value_name = winreg.EnumValue(key, idx)[0]
+                    names.update(_font_family_aliases(value_name))
+        except OSError:
+            continue
+
+    return frozenset(names)
+
+
+def _font_is_available(font: str) -> bool:
+    installed = installed_font_families()
+    if not installed:
+        return True
+    return font in installed
+
+
+def _resolve_export_ea_font(font: str) -> str:
+    return EA_EXPORT_FONT_REPLACEMENTS.get(font, font)
+
 def parse_font_family(font_family_str: str) -> dict[str, str]:
     """Parse CSS font-family into latin/ea typeface names.
 
-    Prioritizes Windows-available fonts since PPTX is primarily opened on
-    Windows. macOS/Linux-only fonts are mapped via FONT_FALLBACK_WIN.
+    Native PPTX text does not support CSS fallback stacks. Preserve the SVG
+    intent by selecting the first installed Latin font in the stack, while
+    replacing only the risky Chinese fallbacks used by the SVG generator.
     """
     if not font_family_str:
-        return {'latin': 'Segoe UI', 'ea': 'Microsoft YaHei'}
+        return {'latin': 'Segoe UI', 'ea': SOURCE_HAN_SANS_FONT}
 
     fonts = [f.strip().strip("'\"") for f in font_family_str.split(',')]
     latin_font = None
+    generic_latin_font = None
     ea_font = None
 
     for font in fonts:
@@ -254,24 +333,26 @@ def parse_font_family(font_family_str: str) -> dict[str, str]:
             continue
         if font in GENERIC_FONT_MAP:
             resolved = GENERIC_FONT_MAP[font]
-            latin_font = latin_font or resolved
+            if _font_is_available(resolved):
+                generic_latin_font = generic_latin_font or resolved
             continue
 
         win_font = FONT_FALLBACK_WIN.get(font, font)
         if font in EA_FONTS:
-            ea_font = ea_font or win_font
+            ea_font = ea_font or _resolve_export_ea_font(win_font)
         else:
-            latin_font = latin_font or win_font
+            if _font_is_available(win_font):
+                latin_font = latin_font or win_font
 
     # PPT renders CJK text via latin typeface when ea doesn't match
-    if not latin_font and ea_font:
+    if not latin_font and not generic_latin_font and ea_font:
         latin_font = ea_font
 
-    final_latin = latin_font or 'Segoe UI'
+    final_latin = latin_font or generic_latin_font or 'Segoe UI'
 
     # EA must always be a CJK-capable font
     if not ea_font:
-        ea_font = 'SimSun' if final_latin in _SERIF_LATIN else 'Microsoft YaHei'
+        ea_font = SOURCE_HAN_SERIF_FONT if final_latin in _SERIF_LATIN else SOURCE_HAN_SANS_FONT
 
     return {'latin': final_latin, 'ea': ea_font}
 

@@ -3,10 +3,12 @@
 Priority: hard theme system.
 
 Important philosophy:
-- This cookbook is a strong visual grammar, not a layout or chart whitelist.
+- This cookbook is an art-directed adaptive grammar, not a layout/chart whitelist or a loose style reference.
 - Source content and the full chart catalog decide semantic structure.
 - This cookbook decides how that structure is rendered in the theme.
 - Named recipes are reference exemplars. Use them when they fit; derive `THEME_adapted_*` layouts when content needs another structure.
+- Semantic structure may adapt to content; source-native art moves must remain visibly inherited.
+- Density may increase, but composition logic cannot collapse into generic cards.
 
 Reference set:
 - Source folder/deck:
@@ -75,6 +77,11 @@ Spacing:
 
 Define required motifs and reusable geometry.
 
+Art move inventory:
+- `THEME_art_move_1`: what it looks like, where it appears, when it must repeat.
+- `THEME_art_move_2`: what it looks like, where it appears, when it must repeat.
+- `THEME_art_move_3`: what it looks like, where it appears, when it must repeat.
+
 Rules:
 - 
 
@@ -98,7 +105,13 @@ Composition:
 
 Geometry:
 
+Art moves to preserve:
+- TODO
+
 Text rules:
+
+Adaptation rules:
+- TODO
 
 Failure modes:
 
@@ -110,7 +123,13 @@ Composition:
 
 Geometry:
 
+Art moves to preserve:
+- TODO
+
 Text rules:
+
+Adaptation rules:
+- TODO
 
 Failure modes:
 
@@ -124,6 +143,12 @@ Geometry:
 
 Image rules:
 
+Art moves to preserve:
+- TODO
+
+Adaptation rules:
+- TODO
+
 Failure modes:
 
 ### 4.4 `THEME_metric_or_proof`
@@ -136,6 +161,12 @@ Geometry:
 
 Number rules:
 
+Art moves to preserve:
+- TODO
+
+Adaptation rules:
+- TODO
+
 Failure modes:
 
 ### 4.5 `THEME_chart_table_diagram_example`
@@ -147,6 +178,12 @@ Composition:
 Geometry:
 
 Chart/table restyling:
+
+Art moves to preserve:
+- TODO
+
+Adaptation rules:
+- TODO
 
 Failure modes:
 
@@ -178,6 +215,9 @@ Theme restyling rules:
 Rules:
 - Do not discard essential evidence just to preserve sparse style.
 - Do not paste raw long paragraphs.
+- Low density preserves the reference whitespace and composition.
+- Medium density compresses whitespace while preserving the reference proportions and reading order.
+- High density uses tables, columns, annotation layers, or compact labels, but must still retain at least one strong source-native art move.
 - Use theme-compatible tables/columns for high-density pages.
 - Minimum font size:
 - Max title lines:
@@ -208,8 +248,14 @@ Root skeleton:
   "id": "THEME_ID",
   "priority": "hard",
   "required_repeats": [],
+  "source_native_art_moves": [],
   "layout_recipes": ["reference examples only; may derive THEME_adapted_* layouts when content requires other structures"],
-  "adaptation_policy": "derive theme-compatible layouts from content semantics",
+  "adaptation_policy": "derive theme-compatible layouts from content semantics while preserving source-native art moves",
+  "under_fidelity_checks": [
+    "Every normal slide carries 2+ source-native art moves",
+    "A viewer can recognize the reference template without seeing the cookbook name",
+    "Density adaptation preserves composition logic, not just palette/fonts"
+  ],
   "chart_catalog_precedence": "choose chart_or_diagram from full catalog first, then restyle in this theme",
   "decorative_asset_policy": "",
   "forbidden_drift": []
@@ -226,6 +272,11 @@ Root skeleton:
 - Cookbook is strong enough to avoid generic output.
 - Recipes are examples, not a whitelist.
 - Chart catalog precedence is explicit.
+- Every recipe has `Art moves to preserve`.
+- Design plans use `source_recipe_anchor` and `required_art_moves`, not only generic layout families.
+- Each normal slide visibly carries at least two source-native art moves.
+- A viewer can recognize the reference template without seeing the cookbook name.
+- Density changes preserve composition logic, not only palette and fonts.
 - Low/medium/high density modes exist.
 - Dense evidence pages can still be generated.
 - SVG safety rules are explicit.

@@ -8,6 +8,8 @@ import re
 import http.client
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import Any
 
 from .config import DEFAULT_BASE_URL, DEFAULT_MODEL, QWEN_BASE_URL, QWEN_MAX_TOKENS, QWEN_MODEL, QWEN_TIMEOUT, SKILL_DIR
@@ -18,6 +20,9 @@ from .project import basic_canvas_dict, write_plan_artifacts
 from .usage import UsageLogger
 
 DEEPSEEK_SYSTEM = "You are PPT Master automation engine. Follow the user task exactly."
+SPEC_PIPELINE_ENV = "PPT_MASTER_SPEC_PIPELINE"
+SPEC_SLIDE_WORKERS_ENV = "PPT_MASTER_SPEC_SLIDE_WORKERS"
+SPEC_REDUCER_ENV = "PPT_MASTER_SPEC_REDUCER"
 
 
 DEFAULT_COLORS = {
@@ -109,7 +114,7 @@ PPT_SAFE_FONT_TAILS = {
 
 FORBIDDEN = [
     "Mixing icon libraries",
-    "Dark theme or dark full-slide backgrounds",
+    "Unspecified dark theme or dark full-slide backgrounds not defined by the active cookbook",
     "rgba()",
     "`<style>`, `class`, `<foreignObject>`, `textPath`, `@font-face`, `<animate*>`, `<script>`, `<iframe>`, `<symbol>`",
     "`<g opacity>` (set opacity on each child element individually)",
@@ -119,7 +124,7 @@ FORBIDDEN = [
 
 SPEC_FIELD_RESPONSIBILITY_CONTRACT = """Spec field responsibility model:
 - Semantic layer: `intent` states the audience-facing claim; `why_this_layout` explains why the chosen structure fits the content. These fields should not contain visual styling.
-- Structure layer: `layout_family` is for deck-level variety checks; `layout` is the concrete archetype/catalog-derived structure; `layout_signature` is the one-line spatial blueprint; `composition` is the reading order and region allocation; `visual_structure` is the drawable primitive list for SVG. Do not repeat the same sentence across these fields.
+- Structure layer: `layout_family` is for deck-level variety checks and should be cookbook-adapted when a cookbook is active; `source_recipe_anchor` names the reference recipe/motif that supplies art direction; `required_art_moves` lists visible source-native moves SVG must render; `layout` is the concrete archetype/catalog-derived structure; `layout_signature` is the one-line spatial blueprint; `composition` is the reading order and region allocation; `visual_structure` is the drawable primitive list for SVG. Do not repeat the same sentence across these fields.
 - Density/fullness layer: `content_density` is only the coarse enum; `density_plan` owns visible text amount, component density, and blank-space control; `rhythm` owns macro pacing and visual weight. These fields should work together but not duplicate one another.
 - Theme execution layer: `color_role` owns restrained palette roles; `visual_metaphor` owns the content-linked motif; `card_anatomy` owns card internals when cards exist; `visual_guidance` is the final short synthesis that tells SVG how the above decisions should feel. `visual_guidance` should not restate every field.
 - SVG execution layer: `icon_plan` lists exact icon placeholders only when useful; `chart_or_diagram` names the semantic chart/diagram key from the catalog. Cookbook recipes teach style, not chart priority.
@@ -354,6 +359,169 @@ def compact_slide_manifest(deck: Deck) -> dict[str, Any]:
     }
 
 
+def compact_slide_briefs(deck: Deck, *, excerpt_chars: int = 900) -> list[dict[str, Any]]:
+    briefs: list[dict[str, Any]] = []
+    for slide in deck.slides:
+        body = re.sub(r"\s+", " ", slide.body).strip()
+        briefs.append(
+            {
+                "index": slide.index,
+                "title": slide.title,
+                "kind": slide.kind,
+                "section_title": slide.section_title,
+                "svg_filename": slide.svg_filename,
+                "content_excerpt": body[:excerpt_chars],
+            }
+        )
+    return briefs
+
+
+def design_plan_schema_example() -> dict[str, Any]:
+    return {
+        "project_name": "",
+        "deck_title": "",
+        "style": "",
+        "canvas": {},
+        "theme": {
+            "name": "",
+            "colors": dict(DEFAULT_COLORS),
+            "typography": {"title_family": "", "body_family": "", "title": 34, "body": 18, "annotation": 13},
+        },
+        "art_direction": {
+            "mood": "",
+            "motifs": [],
+            "source_native_art_moves": [],
+            "composition_principles": [],
+            "background_style": "",
+            "card_style": "",
+            "diagram_style": "",
+            "chart_style": "",
+            "avoid": [],
+        },
+        "layout_system": {
+            "grid": "",
+            "density": "",
+            "page_occupancy": "",
+            "density_scale": {"low": "", "medium": "", "high": "", "showcase": ""},
+            "archetypes": [],
+            "diversity_policy": "",
+            "soft_constraints": "",
+        },
+        "component_system": {
+            "cards": "",
+            "card_internal_variations": [],
+            "icons": "",
+            "charts": "",
+            "chart_template_policy": "",
+            "callouts": "",
+            "technical_motifs": "",
+        },
+        "assets": {"icons": {"library": "chunk-filled", "inventory": []}, "images": {}},
+        "cookbook": {
+            "id": "",
+            "priority": "",
+            "applied_to": ["design_plan", "spec_lock", "svg"],
+            "recipe_policy": "reference examples, not whitelist",
+            "adaptation_policy": "derive cookbook-compatible layouts when content requires other structures while preserving source-native art moves",
+        },
+        "slides": [slide_plan_schema_example()],
+    }
+
+
+def slide_plan_schema_example() -> dict[str, Any]:
+    return {
+        "index": 1,
+        "title": "",
+        "kind": "",
+        "section_title": None,
+        "svg_filename": "",
+        "rhythm": "",
+        "layout": "",
+        "layout_family": "",
+        "source_recipe_anchor": "",
+        "required_art_moves": [],
+        "layout_signature": "",
+        "intent": "",
+        "composition": "",
+        "visual_structure": "",
+        "why_this_layout": "",
+        "visual_metaphor": "",
+        "visual_guidance": "",
+        "color_role": "",
+        "density_plan": "",
+        "card_anatomy": "",
+        "icon_plan": [],
+        "chart_or_diagram": "",
+        "content_density": "",
+    }
+
+
+def spec_lock_schema_example() -> dict[str, Any]:
+    return {
+        "canvas": {},
+        "colors": dict(DEFAULT_COLORS),
+        "typography": {"title_family": "", "body_family": "", "title": 34, "body": 18, "annotation": 13},
+        "icons": {"library": "chunk-filled", "inventory": list(ICON_INVENTORY), "stroke_width": 2},
+        "images": {},
+        "spacing": dict(DEFAULT_SPACING),
+        "shape_language": dict(DEFAULT_SHAPE_LANGUAGE),
+        "style_anchor": {"theme": "light technology venture deck", "repeat": [], "vary": []},
+        "cookbook": {
+            "id": "",
+            "priority": "",
+            "required_repeats": [],
+            "source_native_art_moves": [],
+            "layout_recipes": [],
+            "adaptation_policy": "",
+            "chart_catalog_precedence": "",
+            "decorative_asset_policy": "",
+            "under_fidelity_checks": [],
+            "forbidden_drift": [],
+        },
+        "theme_color_policy": {
+            "primary_accent": DEFAULT_COLORS["primary"],
+            "supporting_accents": [
+                DEFAULT_COLORS["accent"],
+                DEFAULT_COLORS["secondary_accent"],
+                DEFAULT_COLORS["accent_violet"],
+                DEFAULT_COLORS["accent_cyan"],
+            ],
+            "slide_color_roles": "",
+            "color_intensity_rule": "",
+            "allow_extra_colors": "",
+            "dominance_rule": "",
+        },
+        "flex_rules": {"allowed": "", "not_allowed": ""},
+        "icon_rules": {"syntax": '<use data-icon="chunk-filled/name" .../>', "style": "filled, simple, colored from locked palette by semantic role"},
+        "chart_rules": {
+            "style": "light-canvas charts with clean axes, semantic color roles, highlighted series/callouts, no clip-path on chart elements, no rgba",
+            "catalog_source": "templates/charts/charts_index.json",
+            "selected_templates": [],
+            "selection_policy": "choose real catalog keys by content semantics first, then redraw/restyle in cookbook/theme grammar",
+            "plot_area_marker": "required for real data charts",
+        },
+        "svg_rules": {
+            "root_bg": "#FFFFFF",
+            "max_chars": 12000,
+            "forbid": ["rgba()", "<style>", "class", "<foreignObject>", "<mask>", "<g opacity>", "<image opacity>"],
+            "clip_path_policy": "only allowed on <image> with matching simple <clipPath> in <defs>",
+        },
+        "page_rhythm": {"P01": "hero", "P02": "dense"},
+        "page_art_moves": {"P01": {"source_recipe_anchor": "", "required_art_moves": []}},
+        "forbidden": [],
+    }
+
+
+def stage_dir(project_path: Path) -> Path:
+    path = project_path / "logs" / "spec_pipeline"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def write_stage_json(project_path: Path, filename: str, data: Any) -> None:
+    (stage_dir(project_path) / filename).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def build_deck_context_prefix(deck: Deck, canvas_format: str, style: str, cookbook: Cookbook | None = None) -> str:
     """Shared byte-stable prefix for planning, notes, and SVG requests."""
     canvas = basic_canvas_dict(canvas_format)
@@ -363,9 +531,9 @@ def build_deck_context_prefix(deck: Deck, canvas_format: str, style: str, cookbo
 
 Fixed generation contract:
 - Output is for an editable PPTX built from PPT-safe SVG.
-- Use a light-canvas visual system only; never use a dark full-slide theme. Controlled color rails, soft tints, chart highlights, and small/medium accent bands are allowed on the light canvas when they remain PPT-safe and readable; avoid large saturated blocks.
+- Use a light-canvas visual system by default. If the active cookbook explicitly defines dark, black, or accent full-bleed pages, those cookbook-defined reversal pages are allowed; otherwise do not invent a dark full-slide theme. Controlled color rails, soft tints, chart highlights, and small/medium accent bands are allowed when they remain PPT-safe and readable.
 - If a Theme Cookbook is present, it is the visual authority for colors, typography, component geometry, decorative assets, chart skin, layout grammar, and page chrome. Generic defaults are only fallbacks.
-- A Theme Cookbook is not a chart/template whitelist: choose chart and diagram semantics from the source content and full chart catalog first, then apply the cookbook's visual grammar.
+- A Theme Cookbook is an art-directed adaptive grammar, not a chart/template whitelist or a loose mood reference: choose chart and diagram semantics from the source content and full chart catalog first, then apply the cookbook's visual grammar and source-native art moves.
 - Keep theme color continuity through the locked compact palette and repeated chrome. Do not force the same primary accent to dominate every page, but limit each slide to one leading accent, one supporting accent, and neutral/pale tints so the deck does not become rainbow-like.
 - Use concise, audience-facing Chinese slide text.
 - Keep visible content faithful to the source Markdown; summarize dense details instead of dumping paragraphs.
@@ -470,6 +638,8 @@ def deterministic_plan(project_name: str, canvas_format: str, style: str, deck: 
                 "rhythm": rhythm,
                 "layout": layout,
                 "layout_family": layout_family,
+                "source_recipe_anchor": "",
+                "required_art_moves": [],
                 "layout_signature": layout,
                 "intent": intent,
                 "composition": layout,
@@ -515,39 +685,30 @@ def deterministic_plan(project_name: str, canvas_format: str, style: str, deck: 
         "flex_rules": default_flex_rules(),
         "chart_rules": default_chart_rules(include_available_templates=True),
         "page_rhythm": page_rhythm,
+        "page_art_moves": {page_key: {"source_recipe_anchor": "", "required_art_moves": []} for page_key in page_rhythm},
         "forbidden": list(FORBIDDEN),
     }
     return plan, lock
 
 
 def build_design_plan_prompt(deck: Deck, canvas_format: str, style: str, cookbook: Cookbook | None = None) -> str:
-    slide_briefs = []
-    for slide in deck.slides:
-        body = re.sub(r"\s+", " ", slide.body).strip()
-        slide_briefs.append(
-            {
-                "index": slide.index,
-                "title": slide.title,
-                "kind": slide.kind,
-                "section_title": slide.section_title,
-                "svg_filename": slide.svg_filename,
-                "content_excerpt": body[:700],
-            }
-        )
+    slide_briefs = compact_slide_briefs(deck, excerpt_chars=700)
     chart_reference = build_chart_template_reference()
     common_prefix = build_deck_context_prefix(deck, canvas_format, style, cookbook)
     cookbook_rules = ""
     if cookbook is not None:
         cookbook_rules = f"""
 Theme Cookbook application rules:
-- Treat cookbook `{cookbook.id}` as a hard art-direction system, not a loose inspiration paragraph.
+- Treat cookbook `{cookbook.id}` as an art-directed adaptive grammar, not a loose inspiration paragraph and not a layout whitelist.
 - Convert cookbook tokens into `theme`, `art_direction`, `layout_system`, `component_system`, `assets`, and `spec_lock`.
 - Treat cookbook recipes as reference exemplars unless the cookbook explicitly says otherwise. Do not force every slide into one of the named recipes.
-- Choose each slide's semantic structure from source content first. If a named cookbook recipe fits, use it. If not, create a cookbook-compatible `layout_family` such as `g08_adapted_funnel`, `g08_adapted_sankey`, or `g08_adapted_dense_table`.
+- Choose each slide's semantic structure from source content first. If a named cookbook recipe fits, use it. If not, create a cookbook-compatible `layout_family` such as `g08_adapted_funnel`, `g08_adapted_sankey`, or `flsg_adapted_dense_table`.
+- Each normal slide must name a concrete `source_recipe_anchor` and 2+ `required_art_moves` from the cookbook. The anchor can be a source recipe, motif cluster, or adapted recipe; it must not be a generic family such as `matrix`, `dashboard`, or `process`.
+- Semantic structure may adapt to content, but source-native art moves must remain visibly inherited. Density may increase, but composition logic cannot collapse into generic cards.
 - If the slide needs a chart, diagram, framework, table, process, architecture visual, or infographic, choose `chart_or_diagram` from the full chart catalog before consulting cookbook recipe examples.
 - If the cookbook specifies fixed chrome, spacing, card geometry, decorative assets, or chart restyling rules, materialize those values in `spec_lock` so SVG workers do not have to infer them.
 - If generic defaults conflict with the cookbook, the cookbook wins, except for PPT-safe SVG forbiddens and source-content faithfulness.
-- `spec_lock.cookbook` should record cookbook id, priority, required repeats, recipe reference vocabulary, adaptation policy, decorative asset policy, chart catalog precedence, and forbidden drift.
+- `spec_lock.cookbook` should record cookbook id, priority, required repeats, source-native art moves, recipe reference vocabulary, adaptation policy, decorative asset policy, under-fidelity checks, chart catalog precedence, and forbidden drift.
 """
     return f"""{common_prefix}
 
@@ -563,7 +724,7 @@ Rules:
 - Keep the schema compact and deterministic.
 - Use PPT-safe fonts and HEX colors only.
 - Design for a polished Chinese presentation: clear hierarchy, purposeful whitespace, cookbook-aligned art direction, balanced palette usage, diagram/card/chart-friendly layouts, and visually full pages.
-- Light-canvas theme only. Root backgrounds must be white or near-white (`#FFFFFF`, `#F8FAFC`, `#F1F5F9`, `#EEF2FF`, `#E0F2FE`). Controlled color rails, soft-tint cards, chart areas, image overlays, and section accents are allowed when text contrast remains strong; avoid large saturated color blocks. Do not use dark full-slide theme, black full-canvas hero background, GitHub-dark palette, or neon-on-black styling.
+- Light-canvas theme by default. Root backgrounds should be white or near-white unless the active cookbook explicitly defines dark, black, or accent full-bleed reversal pages as source-native art moves. Do not invent dark full-slide pages outside cookbook guidance; avoid GitHub-dark palette and neon-on-black styling.
 - Avoid monotonous single-column bullet pages. Vary rhythm across cover-like, two-column, metric/card, timeline/process, evidence grid, and conclusion layouts where appropriate.
 - `spec_lock` must be a strict visual anchor: include canvas, colors, typography, spacing, shape_language, icon_rules, chart_rules, svg_rules, page_rhythm, and forbidden.
 - `icons` and `images` must be JSON objects, not strings.
@@ -588,7 +749,7 @@ Rules:
 - Do not use numeric layout quotas. Instead, choose layouts semantically from the slide content.
 - Prefer specific layout archetypes over generic containers. Avoid repeating generic `two_column_left_right`; if a split layout is genuinely best, make `layout_signature` specific, e.g. `left narrative + right market growth bars`, `left product exploded view + right metric cards`, or `left quotes + right credibility badges`.
 - Avoid adjacent slides with the same layout_family unless their visual_structure is materially different.
-- Every slide must include `layout_family`, `layout_signature`, `visual_structure`, and `why_this_layout` so SVG generation has concrete structure guidance.
+- Every slide must include `layout_family`, `source_recipe_anchor`, `required_art_moves`, `layout_signature`, `visual_structure`, and `why_this_layout` so SVG generation has concrete structure guidance.
 
 - Use the chart template catalog below as semantic visualization vocabulary. The model does not need to read SVG template code; choose real template names from the catalog, then restyle/redraw them according to spec_lock and cookbook.
 - For every slide that needs a chart, diagram, framework, table, process, architecture visual, or infographic, set `chart_or_diagram` to one catalog `key`. Leave it empty only when the recipe is purely text/image/quote/team.
@@ -599,7 +760,9 @@ Rules:
 Design plan field output guide:
 - `rhythm`: a page pacing tag, not a mood word. Use values such as `hero`, `showcase`, `dense`, `breathing`, `process`, `future`, `closing` when they fit. It controls macro pacing and visual weight; use `content_density` and `density_plan` for text volume.
 - `layout`: the archetype or catalog-derived structure, e.g. `product_exploded_view`, `executive_summary_strips`, `roadmap_vertical`.
-- `layout_family`: broader family for continuity checks, e.g. `product`, `timeline`, `dashboard`, `matrix`, `network`, `quote`, `closing`.
+- `layout_family`: a concrete cookbook-adapted family when a cookbook is active, e.g. `flsg_adapted_matrix`, `g08_adapted_timeline`, or a named recipe. Use broad generic families such as `matrix`, `dashboard`, or `process` only when no cookbook is active.
+- `source_recipe_anchor`: the reference recipe or motif cluster that lends the slide its source-native art direction, e.g. `flsg_status_dashboard` or `g08_papercut_side_phrase`.
+- `required_art_moves`: 2+ visible cookbook-native moves that SVG must render, e.g. `top editorial chrome`, `lime proof slab`, `thin rule grid`. Use fewer only for cover/closing pages where the cookbook clearly supports it.
 - `layout_signature`: a short spatial blueprint that could be sketched, e.g. `left product image + right spec cards`, `top timeline + bottom impact summary`.
 - `intent`: the audience-facing message this slide must prove.
 - `composition`: the major regions, reading order, and space allocation; it should make the page feel full without becoming crowded.
@@ -627,45 +790,10 @@ Slide briefs JSON:
 {json.dumps(slide_briefs, ensure_ascii=False, indent=2)}
 
 Required design_plan schema:
-{{
-  "project_name": "",
-  "deck_title": "",
-  "style": "",
-  "canvas": {{}},
-  "theme": {{
-    "name": "",
-    "colors": {{"bg": "#FFFFFF", "panel": "#F8FAFC", "primary": "#1D4ED8", "accent": "#0F766E", "secondary_accent": "#F59E0B", "accent_violet": "#7C3AED", "accent_cyan": "#0891B2", "text": "#0F172A", "text_secondary": "#475569", "border": "#CBD5E1"}},
-    "typography": {{"title_family": "", "body_family": "", "title": 34, "body": 18, "annotation": 13}}
-  }},
-  "art_direction": {{"mood": "", "motifs": [], "composition_principles": [], "background_style": "", "card_style": "", "diagram_style": "", "chart_style": "", "avoid": []}},
-  "layout_system": {{"grid": "", "density": "", "page_occupancy": "", "density_scale": {{"low": "", "medium": "", "high": "", "showcase": ""}}, "archetypes": [], "diversity_policy": "", "soft_constraints": ""}},
-  "component_system": {{"cards": "", "card_internal_variations": [], "icons": "", "charts": "", "chart_template_policy": "", "callouts": "", "technical_motifs": ""}},
-  "assets": {{"icons": {{"library": "chunk-filled", "inventory": []}}, "images": {{}}}},
-  "cookbook": {{"id": "", "priority": "", "applied_to": ["design_plan", "spec_lock", "svg"], "recipe_policy": "reference examples, not whitelist", "adaptation_policy": "derive cookbook-compatible layouts when content requires other structures"}},
-  "slides": [
-    {{"index": 1, "title": "", "kind": "", "section_title": null, "svg_filename": "", "rhythm": "", "layout": "", "layout_family": "", "layout_signature": "", "intent": "", "composition": "", "visual_structure": "", "why_this_layout": "", "visual_metaphor": "", "visual_guidance": "", "color_role": "", "density_plan": "", "card_anatomy": "", "icon_plan": [], "chart_or_diagram": "", "content_density": ""}}
-  ]
-}}
+{json.dumps(design_plan_schema_example(), ensure_ascii=False, indent=2)}
 
 Required spec_lock schema:
-{{
-  "canvas": {{}},
-  "colors": {{"bg": "#FFFFFF", "panel": "#F8FAFC", "primary": "#1D4ED8", "accent": "#0F766E", "secondary_accent": "#F59E0B", "accent_violet": "#7C3AED", "accent_cyan": "#0891B2", "text": "#0F172A", "text_secondary": "#475569", "border": "#CBD5E1"}},
-  "typography": {{"title_family": "", "body_family": "", "title": 34, "body": 18, "annotation": 13}},
-  "icons": {{"library": "chunk-filled", "inventory": {json.dumps(ICON_INVENTORY, ensure_ascii=False)}, "stroke_width": 2}},
-  "images": {{}},
-  "spacing": {{"outer_margin": 56, "card_gap": 16, "section_gap": 24}},
-  "shape_language": {{"radius": 10, "stroke_width": 1, "shadow": "none"}},
-  "style_anchor": {{"theme": "light technology venture deck", "repeat": [], "vary": []}},
-  "cookbook": {{"id": "", "priority": "", "required_repeats": [], "layout_recipes": [], "adaptation_policy": "", "chart_catalog_precedence": "", "decorative_asset_policy": "", "forbidden_drift": []}},
-  "theme_color_policy": {{"primary_accent": "#1D4ED8", "supporting_accents": ["#0F766E", "#F59E0B", "#7C3AED", "#0891B2"], "slide_color_roles": "", "color_intensity_rule": "", "allow_extra_colors": "", "dominance_rule": ""}},
-  "flex_rules": {{"allowed": "", "not_allowed": ""}},
-  "icon_rules": {{"syntax": "<use data-icon=\\"chunk-filled/name\\" .../>", "style": "filled, simple, colored from locked palette by semantic role"}},
-  "chart_rules": {{"style": "light-canvas charts with clean axes, semantic color roles, highlighted series/callouts, no clip-path on chart elements, no rgba", "catalog_source": "templates/charts/charts_index.json", "selected_templates": [], "selection_policy": "choose real catalog keys by content semantics first, then redraw/restyle in cookbook/theme grammar", "plot_area_marker": "required for real data charts"}},
-  "svg_rules": {{"root_bg": "#FFFFFF", "max_chars": 12000, "forbid": ["rgba()", "<style>", "class", "<foreignObject>", "<mask>", "<g opacity>", "<image opacity>"], "clip_path_policy": "only allowed on <image> with matching simple <clipPath> in <defs>"}},
-  "page_rhythm": {{"P01": "hero", "P02": "dense"}},
-  "forbidden": []
-}}
+{json.dumps(spec_lock_schema_example(), ensure_ascii=False, indent=2)}
 
 ---DESIGN_PLAN_JSON_START---
 {{}}
@@ -676,14 +804,335 @@ Required spec_lock schema:
 """
 
 
+def build_theme_contract_prompt(deck: Deck, canvas_format: str, style: str, cookbook: Cookbook | None) -> str:
+    schema = {
+        "theme_name": "",
+        "mode": "art-directed adaptive grammar",
+        "colors": dict(DEFAULT_COLORS),
+        "typography": {},
+        "chrome": [],
+        "source_native_art_moves": [],
+        "recipe_anchors": [],
+        "density_policy": {
+            "low": "",
+            "medium": "",
+            "high": "",
+            "showcase": "",
+            "composition_preservation": "",
+        },
+        "chart_style_policy": "",
+        "image_policy": "",
+        "forbidden_drift": [],
+        "design_plan_requirements": {
+            "layout_family": "concrete theme-adapted family, not a generic family when a cookbook is active",
+            "source_recipe_anchor": "required for normal slides",
+            "required_art_moves": "2+ visible source-native art moves for normal slides",
+        },
+        "spec_lock_seeds": {},
+        "qa_under_fidelity": [],
+    }
+    return f"""{build_deck_context_prefix(deck, canvas_format, style, cookbook)}
+
+Task: create the compact Theme Contract for the split spec pipeline.
+
+Focus only on the reference theme. Do not plan individual slides yet.
+
+Required strategy:
+- This is not template replication and not a loose style reference.
+- Produce an art-directed adaptive grammar: semantic structure may adapt to content, but source-native art moves must remain visibly inherited.
+- Name the concrete art moves that make the reference recognizable.
+- Define density rules as composition-preserving adaptation, not simply less or more whitespace.
+
+Return only JSON inside the exact marker pair.
+
+Theme Contract schema:
+{json.dumps(schema, ensure_ascii=False, indent=2)}
+
+---THEME_CONTRACT_JSON_START---
+{{}}
+---THEME_CONTRACT_JSON_END---
+"""
+
+
+def build_deck_brief_prompt(deck: Deck, canvas_format: str, style: str, cookbook: Cookbook | None, theme_contract: dict[str, Any]) -> str:
+    schema = {
+        "deck_title": "",
+        "narrative_arc": "",
+        "sections": [],
+        "slide_roles": [{"index": 1, "role": "", "weight": "light|medium|heavy", "density": "low|medium|high|showcase", "reason": ""}],
+        "pacing": "",
+        "content_density_map": {},
+        "pages_to_keep_spacious": [],
+        "pages_to_make_dense": [],
+        "pages_needing_data_or_diagrams": [],
+        "neighbor_context_policy": "",
+    }
+    return f"""{build_deck_context_prefix(deck, canvas_format, style, cookbook)}
+
+Task: create the Deck Brief for the split spec pipeline.
+
+Theme Contract JSON:
+{json.dumps(theme_contract, ensure_ascii=False, indent=2)}
+
+Focus on story, pacing, slide weight, and content density. Do not write final design_plan slides yet.
+
+Rules:
+- Decide which pages should be heavy, which should breathe, and which need product/data/team/architecture treatment.
+- Preserve source content meaning and visible evidence density.
+- Use the Theme Contract only as visual guardrails; do not repeat the full cookbook.
+
+Return only JSON inside the exact marker pair.
+
+Deck Brief schema:
+{json.dumps(schema, ensure_ascii=False, indent=2)}
+
+---DECK_BRIEF_JSON_START---
+{{}}
+---DECK_BRIEF_JSON_END---
+"""
+
+
+def slide_neighbor_briefs(slide_index: int, slide_briefs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    neighbors: list[dict[str, Any]] = []
+    for item in slide_briefs:
+        index = int(item.get("index", 0) or 0)
+        if abs(index - slide_index) <= 1 and index != slide_index:
+            copy = dict(item)
+            excerpt = str(copy.get("content_excerpt") or "")
+            copy["content_excerpt"] = excerpt[:350]
+            neighbors.append(copy)
+    return neighbors
+
+
+def build_slide_plan_prompt(
+    *,
+    slide: Any,
+    slide_briefs: list[dict[str, Any]],
+    canvas_format: str,
+    style: str,
+    cookbook: Cookbook | None,
+    theme_contract: dict[str, Any],
+    deck_brief: dict[str, Any],
+    chart_reference: list[dict[str, Any]],
+) -> str:
+    canvas = basic_canvas_dict(canvas_format)
+    cookbook_id = cookbook.id if cookbook is not None else ""
+    slide_payload = {
+        "index": slide.index,
+        "title": slide.title,
+        "kind": slide.kind,
+        "section_title": slide.section_title,
+        "svg_filename": slide.svg_filename,
+        "raw_markdown": slide.raw_markdown,
+    }
+    relevant_role = {}
+    roles = deck_brief.get("slide_roles") if isinstance(deck_brief, dict) else []
+    if isinstance(roles, list):
+        for role in roles:
+            if isinstance(role, dict) and int(role.get("index", 0) or 0) == slide.index:
+                relevant_role = role
+                break
+    return f"""PPT_MASTER_SPLIT_SPEC_SLIDE_PLAN_V1
+
+Task: plan exactly one slide for the final design_plan.json.
+
+Canvas JSON:
+{json.dumps(canvas, ensure_ascii=False, sort_keys=True)}
+
+Style mode:
+{style}
+
+Active cookbook id:
+{cookbook_id}
+
+Theme Contract JSON:
+{json.dumps(theme_contract, ensure_ascii=False, indent=2)}
+
+Deck Brief current slide role:
+{json.dumps(relevant_role, ensure_ascii=False, indent=2)}
+
+Neighbor slide briefs:
+{json.dumps(slide_neighbor_briefs(slide.index, slide_briefs), ensure_ascii=False, indent=2)}
+
+Current slide source:
+{json.dumps(slide_payload, ensure_ascii=False, indent=2)}
+
+Available chart/diagram template catalog:
+{json.dumps(chart_reference, ensure_ascii=False, indent=2)}
+
+Rules:
+- Return only the slide JSON inside the marker pair.
+- Semantic structure comes from this slide's content and the chart catalog.
+- If a cookbook is active, `layout_family` must be a named recipe or `theme_adapted_*`/cookbook-prefixed adapted family, not a broad generic family.
+- If a cookbook is active, set a concrete `source_recipe_anchor` and 2+ `required_art_moves` for normal content slides. These are hard art-direction anchors for SVG.
+- Density can adapt to the content, but it must preserve composition logic and at least one strong source-native art move.
+- `chart_or_diagram` must be one real catalog key when the slide needs chart/diagram/table/process/architecture semantics; leave empty only for pure text/image/quote/team/cover/closing pages.
+- Keep fields compact and executable. Avoid filler words.
+
+Slide schema:
+{json.dumps(slide_plan_schema_example(), ensure_ascii=False, indent=2)}
+
+---SLIDE_PLAN_JSON_START---
+{{}}
+---SLIDE_PLAN_JSON_END---
+"""
+
+
+def build_reducer_prompt(
+    *,
+    project_name: str,
+    deck: Deck,
+    canvas_format: str,
+    style: str,
+    cookbook: Cookbook | None,
+    theme_contract: dict[str, Any],
+    deck_brief: dict[str, Any],
+    slide_plans: list[dict[str, Any]],
+    chart_reference: list[dict[str, Any]],
+) -> str:
+    canvas = basic_canvas_dict(canvas_format)
+    return f"""PPT_MASTER_SPLIT_SPEC_REDUCER_V1
+
+Task: reduce slide-level plans into the final design_plan.json.
+
+Project name:
+{project_name}
+
+Deck title:
+{deck.title}
+
+Canvas JSON:
+{json.dumps(canvas, ensure_ascii=False, sort_keys=True)}
+
+Style mode:
+{style}
+
+Active cookbook id:
+{cookbook.id if cookbook is not None else ""}
+
+Theme Contract JSON:
+{json.dumps(theme_contract, ensure_ascii=False, indent=2)}
+
+Deck Brief JSON:
+{json.dumps(deck_brief, ensure_ascii=False, indent=2)}
+
+Slide Plan JSON array:
+{json.dumps(slide_plans, ensure_ascii=False, indent=2)}
+
+Available chart/diagram template catalog:
+{json.dumps(chart_reference, ensure_ascii=False, indent=2)}
+
+Reducer rules:
+- Return only final design_plan JSON inside the marker pair.
+- Preserve all source slides exactly once and keep `index`, `title`, `kind`, `section_title`, and `svg_filename`.
+- Fix repeated adjacent layout families, color overuse, flat pacing, missing art moves, and generic families.
+- Do not erase useful density decisions from the slide plans.
+- When a cookbook is active, every normal slide should visibly carry 2+ source-native art moves via `required_art_moves`.
+- `layout_family` should be concrete and cookbook-adapted when a cookbook is active, e.g. `flsg_adapted_matrix`, not just `matrix`.
+- Keep chart catalog semantics intact; do not replace charts with generic cards during reduction.
+
+Required final design_plan schema:
+{json.dumps(design_plan_schema_example(), ensure_ascii=False, indent=2)}
+
+---DESIGN_PLAN_JSON_START---
+{{}}
+---DESIGN_PLAN_JSON_END---
+"""
+
+
+def build_spec_lock_prompt(
+    *,
+    deck: Deck,
+    canvas_format: str,
+    style: str,
+    cookbook: Cookbook | None,
+    theme_contract: dict[str, Any],
+    deck_brief: dict[str, Any],
+    design_plan: dict[str, Any],
+    chart_reference: list[dict[str, Any]],
+) -> str:
+    canvas = basic_canvas_dict(canvas_format)
+    return f"""PPT_MASTER_SPLIT_SPEC_LOCK_V1
+
+Task: create the final global spec_lock.json for downstream SVG generation.
+
+Canvas JSON:
+{json.dumps(canvas, ensure_ascii=False, sort_keys=True)}
+
+Style mode:
+{style}
+
+Deck title:
+{deck.title}
+
+Active cookbook id:
+{cookbook.id if cookbook is not None else ""}
+
+Theme Contract JSON:
+{json.dumps(theme_contract, ensure_ascii=False, indent=2)}
+
+Deck Brief JSON:
+{json.dumps(deck_brief, ensure_ascii=False, indent=2)}
+
+Final Design Plan JSON:
+{json.dumps(design_plan, ensure_ascii=False, indent=2)}
+
+Available chart/diagram template catalog:
+{json.dumps(chart_reference, ensure_ascii=False, indent=2)}
+
+Rules:
+- Return only spec_lock JSON inside the marker pair.
+- Spec lock is global and authoritative: colors, fonts, spacing, chrome, component rules, chart skin, SVG safety, image policy, and page rhythm.
+- Include `spec_lock.cookbook.source_native_art_moves`, `under_fidelity_checks`, and `page_art_moves` so SVG generation can preserve art-directed adaptation.
+- Include selected chart template keys in `chart_rules.selected_templates`.
+- Keep PPT-safe SVG restrictions strict. Do not use CSS classes, style tags, rgba, masks, foreignObject, textPath, script, animation, group opacity, or image opacity.
+- Use light root defaults unless cookbook-defined reversal pages require a full-bleed dark/accent rectangle at SVG time.
+
+Required spec_lock schema:
+{json.dumps(spec_lock_schema_example(), ensure_ascii=False, indent=2)}
+
+---SPEC_LOCK_JSON_START---
+{{}}
+---SPEC_LOCK_JSON_END---
+"""
+
+
 def extract_json_marker(text: str, start: str, end: str) -> dict[str, Any]:
     match = re.search(re.escape(start) + r"\s*(.*?)\s*" + re.escape(end), text, re.S)
     if not match:
+        fallback = extract_single_json_object(text)
+        if fallback is not None:
+            return fallback
         raise GenerationError(f"Model response missing marker pair: {start} / {end}")
     try:
         return json.loads(match.group(1))
     except json.JSONDecodeError as exc:
         raise GenerationError(f"Model response contained invalid JSON for {start}") from exc
+
+
+def extract_single_json_object(text: str) -> dict[str, Any] | None:
+    """Best-effort fallback for providers that ignore marker instructions."""
+
+    stripped = text.strip()
+    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", stripped, re.S | re.I)
+    candidates: list[str] = []
+    if fence:
+        candidates.append(fence.group(1))
+    if stripped.startswith("{") and stripped.endswith("}"):
+        candidates.append(stripped)
+    first = stripped.find("{")
+    last = stripped.rfind("}")
+    if first != -1 and last > first:
+        candidates.append(stripped[first : last + 1])
+
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
 
 
 def hex_luminance(color: str) -> float:
@@ -753,6 +1202,8 @@ def enforce_light_theme(plan: dict[str, Any], lock: dict[str, Any]) -> tuple[dic
     theme["colors"] = merge_light_colors(theme.get("colors", {}))
     theme["typography"] = merge_typography(theme.get("typography", {}))
     plan.setdefault("art_direction", default_art_direction())
+    if isinstance(plan.get("art_direction"), dict):
+        plan["art_direction"].setdefault("source_native_art_moves", [])
     plan.setdefault("layout_system", default_layout_system())
     plan.setdefault("component_system", default_component_system())
     plan.setdefault("assets", {})
@@ -765,6 +1216,16 @@ def enforce_light_theme(plan: dict[str, Any], lock: dict[str, Any]) -> tuple[dic
     lock.setdefault("spacing", dict(DEFAULT_SPACING))
     lock.setdefault("shape_language", dict(DEFAULT_SHAPE_LANGUAGE))
     lock.setdefault("style_anchor", default_style_anchor())
+    cookbook_lock = lock.setdefault("cookbook", {})
+    if isinstance(cookbook_lock, dict):
+        cookbook_lock.setdefault("source_native_art_moves", [])
+        cookbook_lock.setdefault(
+            "under_fidelity_checks",
+            [
+                "Every normal slide carries 2+ source-native art moves when a cookbook is active",
+                "Density adaptation preserves composition logic, not just palette and fonts",
+            ],
+        )
     lock.setdefault("theme_color_policy", default_theme_color_policy())
     lock.setdefault("flex_rules", default_flex_rules())
     lock.setdefault("icon_rules", {"syntax": '<use data-icon="chunk-filled/name" .../>', "style": "filled, simple, colored from locked palette by semantic role"})
@@ -899,6 +1360,427 @@ def call_qwen_openai(
     return text.strip(), result.get("usage", {}) if isinstance(result.get("usage"), dict) else {}
 
 
+def call_planner_provider(
+    *,
+    provider: str,
+    prompt: str,
+    api_key: str | None,
+    base_url: str,
+    model: str,
+    qwen_api_key: str | None,
+    qwen_base_url: str,
+    qwen_model: str,
+    qwen_max_tokens: int,
+    qwen_timeout: int,
+    max_tokens: int = 24000,
+) -> tuple[str, dict[str, Any], str]:
+    if provider == "qwen":
+        text, usage = call_qwen_openai(
+            api_key=resolve_qwen_api_key(qwen_api_key),
+            base_url=qwen_base_url,
+            model=qwen_model,
+            prompt=prompt,
+            system=DEEPSEEK_SYSTEM,
+            max_tokens=qwen_max_tokens,
+            timeout=qwen_timeout,
+        )
+        return text, usage, qwen_model
+
+    text, usage = call_deepseek_anthropic(
+        api_key=resolve_api_key(api_key),
+        base_url=base_url,
+        model=model,
+        prompt=prompt,
+        system=DEEPSEEK_SYSTEM,
+        max_tokens=max_tokens,
+    )
+    return text, usage, model
+
+
+def normalize_required_art_moves(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [part.strip() for part in re.split(r"[,;|]", value) if part.strip()]
+    return []
+
+
+def normalize_slide_plan(slide_plan: dict[str, Any], source_slide: Any) -> dict[str, Any]:
+    normalized = dict(slide_plan) if isinstance(slide_plan, dict) else {}
+    normalized["index"] = source_slide.index
+    normalized["title"] = str(normalized.get("title") or source_slide.title)
+    normalized["kind"] = str(normalized.get("kind") or source_slide.kind)
+    normalized["section_title"] = normalized.get("section_title", source_slide.section_title)
+    normalized["svg_filename"] = str(normalized.get("svg_filename") or source_slide.svg_filename)
+
+    defaults = slide_plan_schema_example()
+    for key, default_value in defaults.items():
+        normalized.setdefault(key, default_value)
+    normalized["required_art_moves"] = normalize_required_art_moves(normalized.get("required_art_moves"))
+    if not isinstance(normalized.get("icon_plan"), list):
+        normalized["icon_plan"] = []
+    if not str(normalized.get("content_density") or "").strip():
+        normalized["content_density"] = "low" if source_slide.kind in {"cover", "closing"} else "medium"
+    if not str(normalized.get("layout_family") or "").strip():
+        normalized["layout_family"] = str(normalized.get("layout") or "theme_adapted_content")
+    if not str(normalized.get("layout_signature") or "").strip():
+        normalized["layout_signature"] = str(normalized.get("layout") or normalized["layout_family"])
+    return normalized
+
+
+def normalize_design_plan(
+    plan: dict[str, Any],
+    *,
+    project_name: str,
+    deck: Deck,
+    canvas_format: str,
+    style: str,
+    slide_plans: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    normalized = dict(plan) if isinstance(plan, dict) else {}
+    normalized.setdefault("project_name", project_name)
+    normalized.setdefault("deck_title", deck.title)
+    normalized.setdefault("style", style)
+    normalized.setdefault("canvas", basic_canvas_dict(canvas_format))
+    normalized.setdefault("theme", {"name": "", "colors": dict(DEFAULT_COLORS), "typography": dict(DEFAULT_TYPOGRAPHY)})
+    normalized.setdefault("art_direction", default_art_direction())
+    normalized.setdefault("layout_system", default_layout_system())
+    normalized.setdefault("component_system", default_component_system())
+    normalized.setdefault("assets", {"icons": {"library": "chunk-filled", "inventory": list(ICON_INVENTORY)}, "images": {}})
+    normalized.setdefault("cookbook", {})
+
+    by_index: dict[int, dict[str, Any]] = {}
+    raw_slides = normalized.get("slides")
+    if isinstance(raw_slides, list):
+        for item in raw_slides:
+            if isinstance(item, dict):
+                try:
+                    by_index[int(item.get("index", 0))] = item
+                except (TypeError, ValueError):
+                    continue
+    if slide_plans:
+        for item in slide_plans:
+            if isinstance(item, dict):
+                try:
+                    by_index.setdefault(int(item.get("index", 0)), item)
+                except (TypeError, ValueError):
+                    continue
+
+    normalized["slides"] = [normalize_slide_plan(by_index.get(slide.index, {}), slide) for slide in deck.slides]
+    return normalized
+
+
+def normalize_spec_lock(lock: dict[str, Any], *, deck: Deck, canvas_format: str, design_plan: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(lock) if isinstance(lock, dict) else {}
+    normalized.setdefault("canvas", basic_canvas_dict(canvas_format))
+    normalized.setdefault("colors", dict(DEFAULT_COLORS))
+    normalized.setdefault("typography", dict(DEFAULT_TYPOGRAPHY))
+    normalized.setdefault("icons", {"library": "chunk-filled", "inventory": list(ICON_INVENTORY), "stroke_width": 2})
+    normalized.setdefault("images", {})
+    normalized.setdefault("spacing", dict(DEFAULT_SPACING))
+    normalized.setdefault("shape_language", dict(DEFAULT_SHAPE_LANGUAGE))
+    normalized.setdefault("style_anchor", default_style_anchor())
+    normalized.setdefault("cookbook", {})
+    normalized.setdefault("theme_color_policy", default_theme_color_policy())
+    normalized.setdefault("flex_rules", default_flex_rules())
+    normalized.setdefault("icon_rules", {"syntax": '<use data-icon="chunk-filled/name" .../>', "style": "filled, simple, colored from locked palette by semantic role"})
+    normalized.setdefault("chart_rules", default_chart_rules(include_available_templates=True))
+    normalized.setdefault("svg_rules", spec_lock_schema_example()["svg_rules"])
+    normalized.setdefault("forbidden", [])
+
+    page_rhythm: dict[str, str] = {}
+    page_art_moves: dict[str, dict[str, Any]] = {}
+    slides = design_plan.get("slides", []) if isinstance(design_plan, dict) else []
+    if isinstance(slides, list):
+        for item in slides:
+            if not isinstance(item, dict):
+                continue
+            try:
+                page_key = f"P{int(item.get('index', 0)):02d}"
+            except (TypeError, ValueError):
+                continue
+            page_rhythm[page_key] = str(item.get("rhythm") or "dense")
+            page_art_moves[page_key] = {
+                "source_recipe_anchor": item.get("source_recipe_anchor", ""),
+                "required_art_moves": normalize_required_art_moves(item.get("required_art_moves")),
+            }
+    for slide in deck.slides:
+        page_key = f"P{slide.index:02d}"
+        page_rhythm.setdefault(page_key, "hero" if slide.kind == "cover" else "closing" if slide.kind == "closing" else "dense")
+        page_art_moves.setdefault(page_key, {"source_recipe_anchor": "", "required_art_moves": []})
+    normalized["page_rhythm"] = page_rhythm
+    normalized["page_art_moves"] = page_art_moves
+    return normalized
+
+
+def parse_positive_int_env(name: str, default: int, *, minimum: int = 1, maximum: int | None = None) -> int:
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+def parse_bool_env(name: str, default: bool = True) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in {"0", "false", "no", "off", "skip", "disabled", "disable"}:
+        return False
+    if value in {"1", "true", "yes", "on", "enabled", "enable"}:
+        return True
+    return default
+
+
+def build_design_plan_without_reducer(
+    *,
+    project_name: str,
+    deck: Deck,
+    canvas_format: str,
+    style: str,
+    cookbook: Cookbook | None,
+    theme_contract: dict[str, Any],
+    deck_brief: dict[str, Any],
+    slide_plans: list[dict[str, Any]],
+) -> dict[str, Any]:
+    art_direction = default_art_direction()
+    art_direction["mood"] = str(theme_contract.get("theme_name") or theme_contract.get("mode") or art_direction["mood"])
+    art_direction["motifs"] = [
+        *[str(item) for item in theme_contract.get("recipe_anchors", []) if str(item).strip()],
+        *[str(item) for item in theme_contract.get("chrome", []) if str(item).strip()],
+    ] or art_direction["motifs"]
+    art_direction["source_native_art_moves"] = normalize_required_art_moves(theme_contract.get("source_native_art_moves"))
+    art_direction["composition_principles"] = [
+        str(theme_contract.get("density_policy", {}).get("composition_preservation", "") if isinstance(theme_contract.get("density_policy"), dict) else ""),
+        str(deck_brief.get("pacing", "")),
+        str(deck_brief.get("neighbor_context_policy", "")),
+    ]
+    art_direction["composition_principles"] = [item for item in art_direction["composition_principles"] if item.strip()] or default_art_direction()["composition_principles"]
+    art_direction["chart_style"] = str(theme_contract.get("chart_style_policy") or art_direction["chart_style"])
+    art_direction["avoid"] = [str(item) for item in theme_contract.get("forbidden_drift", []) if str(item).strip()] or art_direction["avoid"]
+
+    layout_system = default_layout_system()
+    density_policy = theme_contract.get("density_policy")
+    if isinstance(density_policy, dict):
+        layout_system["density_scale"] = density_policy
+    layout_system["archetypes"] = [str(item) for item in theme_contract.get("recipe_anchors", []) if str(item).strip()] or layout_system["archetypes"]
+    layout_system["diversity_policy"] = str(deck_brief.get("pacing") or layout_system["diversity_policy"])
+
+    component_system = default_component_system()
+    component_system["charts"] = str(theme_contract.get("chart_style_policy") or component_system["charts"])
+    component_system["technical_motifs"] = ", ".join([str(item) for item in theme_contract.get("chrome", []) if str(item).strip()]) or component_system["technical_motifs"]
+
+    plan = {
+        "project_name": project_name,
+        "deck_title": deck.title,
+        "style": style,
+        "canvas": basic_canvas_dict(canvas_format),
+        "theme": {
+            "name": str(theme_contract.get("theme_name") or ""),
+            "colors": theme_contract.get("colors") if isinstance(theme_contract.get("colors"), dict) else dict(DEFAULT_COLORS),
+            "typography": theme_contract.get("typography") if isinstance(theme_contract.get("typography"), dict) else dict(DEFAULT_TYPOGRAPHY),
+        },
+        "art_direction": art_direction,
+        "layout_system": layout_system,
+        "component_system": component_system,
+        "assets": {"icons": {"library": "chunk-filled", "inventory": list(ICON_INVENTORY)}, "images": {}},
+        "cookbook": {
+            "id": cookbook.id if cookbook is not None else "",
+            "priority": "art-directed adaptive grammar",
+            "applied_to": ["design_plan", "spec_lock", "svg"],
+            "recipe_policy": "reference examples, not whitelist",
+            "adaptation_policy": "semantic structure adapts to content while visible source-native art moves remain inherited",
+        },
+        "slides": slide_plans,
+    }
+    return normalize_design_plan(plan, project_name=project_name, deck=deck, canvas_format=canvas_format, style=style, slide_plans=slide_plans)
+
+
+def generate_plan_map_reduce(
+    *,
+    project_path: Path,
+    project_name: str,
+    canvas_format: str,
+    style: str,
+    deck: Deck,
+    api_key: str | None,
+    base_url: str,
+    model: str,
+    provider: str,
+    qwen_api_key: str | None,
+    qwen_base_url: str,
+    qwen_model: str,
+    qwen_max_tokens: int,
+    qwen_timeout: int,
+    cookbook: Cookbook | None,
+    logger: UsageLogger | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    chart_reference = build_chart_template_reference()
+    slide_briefs = compact_slide_briefs(deck)
+
+    def run_stage(label: str, prompt: str, start_marker: str, end_marker: str, *, max_tokens: int = 24000) -> tuple[dict[str, Any], dict[str, Any], str, str]:
+        text, usage, actual_model = call_planner_provider(
+            provider=provider,
+            prompt=prompt,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            qwen_api_key=qwen_api_key,
+            qwen_base_url=qwen_base_url,
+            qwen_model=qwen_model,
+            qwen_max_tokens=qwen_max_tokens,
+            qwen_timeout=qwen_timeout,
+            max_tokens=max_tokens,
+        )
+        if logger:
+            logger.log_transcript(
+                f"{provider}_{label}",
+                system=DEEPSEEK_SYSTEM,
+                prompt=prompt,
+                response=text,
+                metadata={"model": actual_model, "usage": usage},
+            )
+            logger.log(f"{provider}_{label}", usage=usage, input_chars=len(prompt), output_chars=len(text))
+        return extract_json_marker(text, start_marker, end_marker), usage, actual_model, text
+
+    theme_prompt = build_theme_contract_prompt(deck, canvas_format, style, cookbook)
+    theme_contract, _, _, _ = run_stage(
+        "theme_contract",
+        theme_prompt,
+        "---THEME_CONTRACT_JSON_START---",
+        "---THEME_CONTRACT_JSON_END---",
+    )
+    write_stage_json(project_path, "theme_contract.json", theme_contract)
+
+    brief_prompt = build_deck_brief_prompt(deck, canvas_format, style, cookbook, theme_contract)
+    deck_brief, _, _, _ = run_stage(
+        "deck_brief",
+        brief_prompt,
+        "---DECK_BRIEF_JSON_START---",
+        "---DECK_BRIEF_JSON_END---",
+    )
+    write_stage_json(project_path, "deck_brief.json", deck_brief)
+
+    workers = min(len(deck.slides), parse_positive_int_env(SPEC_SLIDE_WORKERS_ENV, len(deck.slides), maximum=len(deck.slides)))
+
+    def plan_one_slide(slide: Any) -> dict[str, Any]:
+        prompt = build_slide_plan_prompt(
+            slide=slide,
+            slide_briefs=slide_briefs,
+            canvas_format=canvas_format,
+            style=style,
+            cookbook=cookbook,
+            theme_contract=theme_contract,
+            deck_brief=deck_brief,
+            chart_reference=chart_reference,
+        )
+        text, usage, actual_model = call_planner_provider(
+            provider=provider,
+            prompt=prompt,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            qwen_api_key=qwen_api_key,
+            qwen_base_url=qwen_base_url,
+            qwen_model=qwen_model,
+            qwen_max_tokens=min(qwen_max_tokens, 20000),
+            qwen_timeout=qwen_timeout,
+            max_tokens=9000,
+        )
+        if logger:
+            logger.log_transcript(
+                f"{provider}_slide_plan",
+                system=DEEPSEEK_SYSTEM,
+                prompt=prompt,
+                response=text,
+                metadata={"model": actual_model, "usage": usage, "slide": f"P{slide.index:02d}"},
+            )
+            logger.log(f"{provider}_slide_plan", usage=usage, input_chars=len(prompt), output_chars=len(text), slide=f"P{slide.index:02d}")
+        slide_plan = extract_json_marker(text, "---SLIDE_PLAN_JSON_START---", "---SLIDE_PLAN_JSON_END---")
+        normalized = normalize_slide_plan(slide_plan, slide)
+        write_stage_json(project_path, f"slide_{slide.index:02d}_plan.json", normalized)
+        return normalized
+
+    slide_plans_by_index: dict[int, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_map = {executor.submit(plan_one_slide, slide): slide for slide in deck.slides}
+        for future in as_completed(future_map):
+            slide = future_map[future]
+            try:
+                slide_plans_by_index[slide.index] = future.result()
+            except Exception as exc:
+                raise GenerationError(f"Slide planning failed for P{slide.index:02d}: {exc}") from exc
+    slide_plans = [slide_plans_by_index[slide.index] for slide in deck.slides]
+    write_stage_json(project_path, "slide_plans.json", {"slides": slide_plans})
+
+    if parse_bool_env(SPEC_REDUCER_ENV, True):
+        reducer_prompt = build_reducer_prompt(
+            project_name=project_name,
+            deck=deck,
+            canvas_format=canvas_format,
+            style=style,
+            cookbook=cookbook,
+            theme_contract=theme_contract,
+            deck_brief=deck_brief,
+            slide_plans=slide_plans,
+            chart_reference=chart_reference,
+        )
+        plan, _, _, _ = run_stage(
+            "design_plan_reducer",
+            reducer_prompt,
+            "---DESIGN_PLAN_JSON_START---",
+            "---DESIGN_PLAN_JSON_END---",
+            max_tokens=30000,
+        )
+        plan = normalize_design_plan(plan, project_name=project_name, deck=deck, canvas_format=canvas_format, style=style, slide_plans=slide_plans)
+        write_stage_json(project_path, "design_plan_reduced.json", plan)
+    else:
+        plan = build_design_plan_without_reducer(
+            project_name=project_name,
+            deck=deck,
+            canvas_format=canvas_format,
+            style=style,
+            cookbook=cookbook,
+            theme_contract=theme_contract,
+            deck_brief=deck_brief,
+            slide_plans=slide_plans,
+        )
+        if logger:
+            logger.log(f"{provider}_design_plan_reducer", skipped=True, reason=f"{SPEC_REDUCER_ENV}=off")
+        write_stage_json(project_path, "design_plan_unreduced.json", plan)
+
+    lock_prompt = build_spec_lock_prompt(
+        deck=deck,
+        canvas_format=canvas_format,
+        style=style,
+        cookbook=cookbook,
+        theme_contract=theme_contract,
+        deck_brief=deck_brief,
+        design_plan=plan,
+        chart_reference=chart_reference,
+    )
+    lock, _, _, _ = run_stage(
+        "spec_lock",
+        lock_prompt,
+        "---SPEC_LOCK_JSON_START---",
+        "---SPEC_LOCK_JSON_END---",
+        max_tokens=22000,
+    )
+    lock = normalize_spec_lock(lock, deck=deck, canvas_format=canvas_format, design_plan=plan)
+    plan, lock = enforce_light_theme(plan, lock)
+    lock = normalize_spec_lock(lock, deck=deck, canvas_format=canvas_format, design_plan=plan)
+    write_stage_json(project_path, "spec_lock_reduced.json", lock)
+    write_plan_artifacts(project_path, plan, lock)
+    return plan, lock
+
+
 def generate_plan(
     *,
     project_path,
@@ -924,28 +1806,41 @@ def generate_plan(
         write_plan_artifacts(project_path, plan, lock)
         return plan, lock
 
-    prompt = build_design_plan_prompt(deck, canvas_format, style, cookbook)
-    if provider == "qwen":
-        actual_model = qwen_model
-        text, usage = call_qwen_openai(
-            api_key=resolve_qwen_api_key(qwen_api_key),
-            base_url=qwen_base_url,
-            model=qwen_model,
-            prompt=prompt,
-            system=DEEPSEEK_SYSTEM,
-            max_tokens=qwen_max_tokens,
-            timeout=qwen_timeout,
-        )
-    else:
-        actual_model = model
-        text, usage = call_deepseek_anthropic(
-            api_key=resolve_api_key(api_key),
+    spec_pipeline_mode = os.environ.get(SPEC_PIPELINE_ENV, "map_reduce").strip().lower()
+    if spec_pipeline_mode not in {"legacy", "monolithic", "single", "off"}:
+        return generate_plan_map_reduce(
+            project_path=Path(project_path),
+            project_name=project_name,
+            canvas_format=canvas_format,
+            style=style,
+            deck=deck,
+            api_key=api_key,
             base_url=base_url,
             model=model,
-            prompt=prompt,
-            system=DEEPSEEK_SYSTEM,
-            max_tokens=24000,
+            provider=provider,
+            qwen_api_key=qwen_api_key,
+            qwen_base_url=qwen_base_url,
+            qwen_model=qwen_model,
+            qwen_max_tokens=qwen_max_tokens,
+            qwen_timeout=qwen_timeout,
+            cookbook=cookbook,
+            logger=logger,
         )
+
+    prompt = build_design_plan_prompt(deck, canvas_format, style, cookbook)
+    text, usage, actual_model = call_planner_provider(
+        provider=provider,
+        prompt=prompt,
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        qwen_api_key=qwen_api_key,
+        qwen_base_url=qwen_base_url,
+        qwen_model=qwen_model,
+        qwen_max_tokens=qwen_max_tokens,
+        qwen_timeout=qwen_timeout,
+        max_tokens=24000,
+    )
     if logger:
         logger.log_transcript(
             f"{provider}_plan",
@@ -956,7 +1851,10 @@ def generate_plan(
         )
     plan = extract_json_marker(text, "---DESIGN_PLAN_JSON_START---", "---DESIGN_PLAN_JSON_END---")
     lock = extract_json_marker(text, "---SPEC_LOCK_JSON_START---", "---SPEC_LOCK_JSON_END---")
+    plan = normalize_design_plan(plan, project_name=project_name, deck=deck, canvas_format=canvas_format, style=style)
+    lock = normalize_spec_lock(lock, deck=deck, canvas_format=canvas_format, design_plan=plan)
     plan, lock = enforce_light_theme(plan, lock)
+    lock = normalize_spec_lock(lock, deck=deck, canvas_format=canvas_format, design_plan=plan)
     if logger:
         logger.log(f"{provider}_plan", usage=usage, input_chars=len(prompt), output_chars=len(text))
     write_plan_artifacts(project_path, plan, lock)

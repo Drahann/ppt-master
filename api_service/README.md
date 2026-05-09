@@ -36,7 +36,7 @@ python skills/ppt-master/scripts/api_ppt.py generate <source.md> \
   --qwen-max-tokens 65536 \
   --qwen-timeout 900 \
   --cache-prime \
-  --svg-workers 12 \
+  --svg-workers 15 \
   --svg-batch-size 4 \
   --svg-model deepseek-v4-pro[1m] \
   --svg-repair-model deepseek-v4-flash \

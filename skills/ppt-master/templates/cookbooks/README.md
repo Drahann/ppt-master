@@ -19,3 +19,4 @@ Current cookbooks:
 
 - `figma_group02_inter_precision.md` - Figma group-02 monochrome editorial system with fixed recipe geometry, micro-chrome, gray cards, metrics, timeline, matrix, Venn, funnel, device, quote, and team layouts.
 - `figma_group08_pastel_papercut.md` - Figma group-08 pastel papercut editorial system with oversized serif titles, Playfair/Georgia italic notes, irregular pastel paper paths, rotated image slabs, big metrics, milestones, matrix, Venn, device, quote, and team gallery layouts.
+- `figma_lime_serif_grid.md` - Figma lime serif grid system with Neuton display type, Open Sans body text, lime/dark-green/black/white pages, top chrome, thin editorial rules, hard metric fields, status pills, timelines, budget stacks, and dark risk rows.

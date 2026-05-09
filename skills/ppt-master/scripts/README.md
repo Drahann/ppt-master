@@ -50,7 +50,7 @@ Live mode uses DeepSeek's Anthropic-compatible endpoint for planning and per-sli
 
 ```bash
 set DEEPSEEK_API_KEY=sk-...
-python3 scripts/api_ppt.py generate postppt.json --project-name demo --renderer deepseek --cache-prime --svg-workers 12 --svg-batch-size 4
+python3 scripts/api_ppt.py generate postppt.json --project-name demo --renderer deepseek --cache-prime --svg-workers 15 --svg-batch-size 4
 ```
 
 Do not write API keys into project files.

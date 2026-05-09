@@ -1,6 +1,6 @@
 # Cookbook Authoring Method
 
-Use this method to create a strong PPT theme cookbook from reference slides.
+Use this method to create an art-directed adaptive PPT theme cookbook from reference slides.
 
 ## 1. Source Audit
 
@@ -24,7 +24,7 @@ Record:
 - Repeated components: cards, chips, numbers, rules, labels, charts, tables, footers.
 - What must not happen: dark fallback, generic dashboard, random stock photos, wrong font family, repeated 3-card pages.
 
-## 2. Extract Theme Grammar
+## 2. Extract Theme Grammar And Art Moves
 
 Convert observations into executable rules.
 
@@ -47,6 +47,12 @@ Decorative assets:
 - Provide concrete paths, shape recipes, texture rules, crop rules, or icon rules.
 - Say when decoration is required, optional, or forbidden.
 
+Art moves:
+- Name the source-native visual actions that make the reference recognizable, not just the colors and fonts.
+- Examples: irregular paper shards, rotated photo slabs, side italic phrases, giant serif numerals, lime proof panels, black/green reversal pages, top editorial chrome, thin rule grids, status capsules, progress bars.
+- Record which moves are global repeats and which moves belong to specific recipes.
+- Require adapted layouts to inherit at least two relevant art moves unless the page is a purely functional appendix.
+
 Components:
 - Define cards, labels, metric rows, quote blocks, tables, image slabs, diagrams, and charts.
 - Include geometry and spacing, not just aesthetic adjectives.
@@ -57,6 +63,7 @@ Density:
 - Medium: normal business/technical presentation page.
 - High: leave-behind, evidence, table, or technical page.
 - Make high density possible inside the theme instead of forcing every page into sparse poster mode.
+- Density is not a permission to delete the template's composition logic. Low density preserves original whitespace; medium compresses whitespace while keeping proportions; high uses tables/columns/annotation layers while retaining one strong source-native art move.
 
 ## 3. Keep Chart Catalog Precedence
 
@@ -85,6 +92,8 @@ Each recipe should include:
 - When to use it.
 - Composition.
 - Geometry.
+- Art moves to preserve.
+- Adaptation rules for different semantic structures.
 - Text rules.
 - Decorative rules.
 - Variants.
@@ -107,6 +116,8 @@ Design/spec stage:
 - Set cookbook id in `design_plan` and `spec_lock`.
 - Convert tokens into executable `spec_lock` fields.
 - Put recipe or adapted layout in `layout_family`.
+- Put the concrete recipe/motif anchor in `source_recipe_anchor`.
+- Put 2+ visible source-native moves in `required_art_moves`.
 - Put a real chart catalog key in `chart_or_diagram` when needed.
 - Record `chart_catalog_precedence` and `adaptation_policy`.
 
@@ -123,10 +134,12 @@ A strong cookbook has:
 - Exact color tokens.
 - Exact font stacks and type ramp.
 - Canvas and spacing numbers.
+- Source-native art move inventory.
 - Reusable decorative geometry or asset rules.
 - Page chrome rules.
 - Concrete component geometry.
 - Multiple density modes.
+- Per-recipe art moves and adaptation rules.
 - Chart catalog precedence.
 - SVG/PPT safety contract.
 - Forbidden drift list.
@@ -135,6 +148,7 @@ A strong cookbook has:
 
 A weak cookbook has:
 - Only inspiration words.
+- Only colors/fonts, with no source-native art moves.
 - No geometry.
 - No text fitting rules.
 - No density modes.
@@ -155,6 +169,9 @@ After writing:
 - If present, make sure they apply only to safety rules, not chart/layout semantics.
 - Confirm chart catalog precedence is explicit.
 - Confirm `theme_adapted_*` or equivalent adapted layout mechanism exists.
+- Confirm every recipe names art moves to preserve.
+- Confirm `source_recipe_anchor` and `required_art_moves` are described for design_plan/spec usage.
+- Confirm the QA checklist includes under-fidelity, not only overbias.
 - Confirm low/medium/high density modes exist.
 - Confirm at least one recipe teaches each major surface: cover, text, image, metric, chart/table/diagram, team/contact/closing.
 - If a generated deck exists, inspect `design_plan` recipe distribution and `chart_or_diagram` diversity.
@@ -171,16 +188,23 @@ If output is visually mushy:
 - Add exact geometry, font sizes, coordinates, and forbidden drift.
 - Add stronger decorative asset recipes.
 - Add negative examples.
+- Add recipe-level art moves and require 2+ moves in `required_art_moves`.
 
 If output is too sparse:
 - Add `content_density=medium/high`.
 - Provide high-density table/evidence layout rules.
 - Reduce title size ranges for dense pages.
+- Define how medium/high density preserves composition proportions instead of merely filling blank areas.
 
 If output is too template-like:
 - Add adapted layout mechanism.
 - Require semantic layout choice from content.
 - Forbid repeated adjacent layout unless structure differs.
+
+If output is too generic:
+- Add an under-fidelity QA gate: would a viewer recognize the source template without seeing the cookbook name?
+- Require concrete `source_recipe_anchor` values, not generic families such as `matrix`, `dashboard`, or `process`.
+- Require the reducer/spec stage to preserve source-native art moves through adaptation.
 
 If output clips text:
 - Add max title width, max line count, fallback title sizes, and body line-height rules.

@@ -24,6 +24,7 @@ class RunResult:
     quality: dict[str, int] | None = None
     slides: int = 0
     dry_run: bool = False
+    spec_only: bool = False
     renderer: str = "deepseek"
     warnings: list[str] | None = None
     result_path: str | None = None
@@ -183,12 +184,18 @@ def render_design_plan_markdown(plan: dict[str, Any]) -> str:
                 f"- Rhythm: {slide.get('rhythm', 'dense')}",
                 f"- Layout: {slide.get('layout', '')}",
                 f"- Layout family: {slide.get('layout_family', '')}",
+                f"- Source recipe anchor: {slide.get('source_recipe_anchor', '')}",
+                f"- Required art moves: {', '.join(slide.get('required_art_moves', [])) if isinstance(slide.get('required_art_moves'), list) else slide.get('required_art_moves', '')}",
                 f"- Layout signature: {slide.get('layout_signature', '')}",
                 f"- Intent: {slide.get('intent', '')}",
                 f"- Composition: {slide.get('composition', '')}",
                 f"- Visual structure: {slide.get('visual_structure', '')}",
                 f"- Why this layout: {slide.get('why_this_layout', '')}",
                 f"- Visual metaphor: {slide.get('visual_metaphor', '')}",
+                f"- Color role: {slide.get('color_role', '')}",
+                f"- Density plan: {slide.get('density_plan', '')}",
+                f"- Chart or diagram: {slide.get('chart_or_diagram', '')}",
+                f"- Content density: {slide.get('content_density', '')}",
                 f"- Visual guidance: {slide.get('visual_guidance', '')}",
                 "",
             ]
@@ -239,13 +246,17 @@ def render_spec_lock_markdown(lock: dict[str, Any]) -> str:
     if images:
         lines.extend(["", "## images"])
         lines.extend(render_value_lines(images))
-    for section in ("spacing", "shape_language", "style_anchor", "theme_color_policy", "flex_rules", "icon_rules", "chart_rules", "svg_rules"):
+    for section in ("spacing", "shape_language", "style_anchor", "cookbook", "theme_color_policy", "flex_rules", "icon_rules", "chart_rules", "svg_rules"):
         value = lock.get(section, {})
         if value:
             lines.extend(["", f"## {section}"])
             lines.extend(render_value_lines(value))
     lines.extend(["", "## page_rhythm"])
     lines.extend(render_value_lines(lock.get("page_rhythm", {})))
+    page_art_moves = lock.get("page_art_moves", {})
+    if page_art_moves:
+        lines.extend(["", "## page_art_moves"])
+        lines.extend(render_value_lines(page_art_moves))
     lines.extend(["", "## forbidden"])
     lines.extend(render_value_lines(lock.get("forbidden", [])))
     return "\n".join(lines).strip() + "\n"

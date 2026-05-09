@@ -67,6 +67,45 @@ def notify_report_server(
         return CallbackResult(success=False, error=str(exc))
 
 
+def notify_report_failure(
+    report_id: str,
+    file_url: str | None,
+    word_url: str | None,
+    error_message: str,
+    callback_url: str | None,
+) -> CallbackResult:
+    if not callback_url:
+        return CallbackResult(success=False, error="REPORT_CALLBACK_URL not configured")
+    payload = {
+        "success": "failed",
+        "msg": "报告生成失败",
+        "data": {
+            "reportId": report_id,
+            "fileUrl": normalize_to_relative(file_url or ""),
+            "pptUrl": "",
+            "wordUrl": normalize_to_relative(word_url or ""),
+            "error": _safe_callback_error(error_message),
+        },
+    }
+    try:
+        response = requests.post(callback_url, json=payload, timeout=20)
+        response.raise_for_status()
+        try:
+            response.json()
+        except json.JSONDecodeError:
+            pass
+        return CallbackResult(success=True)
+    except Exception as exc:
+        return CallbackResult(success=False, error=str(exc))
+
+
+def _safe_callback_error(error_message: str) -> str:
+    text = str(error_message or "PPT generation failed")
+    text = re.sub(r"(?i)(api[_-]?key|auth[_-]?token|x-api-key)(['\"\s:=]+)[A-Za-z0-9._-]{12,}", r"\1\2<redacted>", text)
+    text = re.sub(r"sk-[A-Za-z0-9._-]{12,}", "sk-<redacted>", text)
+    return text[:1000]
+
+
 def normalize_to_relative(url: str) -> str:
     if not url:
         return ""

@@ -75,10 +75,11 @@ class GenerationOptions:
     svg_repair_model: str = SVG_REPAIR_MODEL
     svg_timeout: int = 600
     svg_retries: int = 1
-    svg_workers: int = 1
+    svg_workers: int = 15
     svg_batch_size: int = 5
     cache_prime: bool = False
     cookbook: str | None = None
+    spec_only: bool = False
 
     @classmethod
     def from_namespace(cls, args: argparse.Namespace) -> "GenerationOptions":
@@ -457,7 +458,7 @@ def generate(options: GenerationOptions) -> RunResult:
             )
         write_source(project_path, markdown)
         write_manifest(project_path, deck)
-        if options.cache_prime and options.renderer != "local" and not options.dry_run:
+        if options.cache_prime and options.renderer != "local" and not options.dry_run and not options.spec_only:
             prime_deepseek_cache(
                 deck=deck,
                 canvas_format=canvas_format,
@@ -488,8 +489,15 @@ def generate(options: GenerationOptions) -> RunResult:
             logger=logger,
         )
         write_prompt_files(project_path, deck, canvas_format, options.style, cookbook)
-        if options.dry_run:
-            result = RunResult(ok=True, project_path=str(project_path), slides=len(deck.slides), dry_run=True, renderer=options.renderer)
+        if options.dry_run or options.spec_only:
+            result = RunResult(
+                ok=True,
+                project_path=str(project_path),
+                slides=len(deck.slides),
+                dry_run=options.dry_run,
+                spec_only=options.spec_only,
+                renderer=options.renderer,
+            )
             write_result(project_path, result)
             return result
 
@@ -542,6 +550,7 @@ def generate(options: GenerationOptions) -> RunResult:
             project_path=str(project_path),
             slides=len(initial_deck.slides),
             dry_run=options.dry_run,
+            spec_only=options.spec_only,
             renderer=options.renderer,
             error=str(exc),
         )

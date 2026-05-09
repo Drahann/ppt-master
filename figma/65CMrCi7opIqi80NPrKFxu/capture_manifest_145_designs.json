@@ -1,0 +1,300 @@
+{
+  "file_key": "65CMrCi7opIqi80NPrKFxu",
+  "figma_file": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled",
+  "capture_set": "145_designs_colorblock_modern",
+  "captured_at": "2026-05-09",
+  "source_frame_size": {
+    "width": 1920,
+    "height": 1080
+  },
+  "ppt_master_viewbox": {
+    "width": 1280,
+    "height": 720,
+    "scale_from_figma": 0.6666667
+  },
+  "contact_sheet": "figma/65CMrCi7opIqi80NPrKFxu/contact_sheet_145_designs.png",
+  "screenshots_dir": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs",
+  "mcp_notes": "figma/65CMrCi7opIqi80NPrKFxu/mcp/145_designs/design_context_samples.md",
+  "items": [
+    {
+      "index": 1,
+      "node_id": "145:1029",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1029&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/01_145-1029.png",
+      "layout_role": "chapter title poster with centered image",
+      "visual_family": "orange/yellow image poster"
+    },
+    {
+      "index": 2,
+      "node_id": "145:1246",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1246&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/02_145-1246.png",
+      "layout_role": "large quote poster",
+      "visual_family": "orange root with blue inset slab and outline quote mark"
+    },
+    {
+      "index": 3,
+      "node_id": "145:1284",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1284&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/03_145-1284.png",
+      "layout_role": "dark editorial headline with note and small image",
+      "visual_family": "dark green editorial text"
+    },
+    {
+      "index": 4,
+      "node_id": "145:1077",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1077&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/04_145-1077.png",
+      "layout_role": "yellow editorial text and small image",
+      "visual_family": "yellow text page"
+    },
+    {
+      "index": 5,
+      "node_id": "145:1053",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1053&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/05_145-1053.png",
+      "layout_role": "agenda with numeric index",
+      "visual_family": "yellow agenda list"
+    },
+    {
+      "index": 6,
+      "node_id": "145:1238",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1238&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/06_145-1238.png",
+      "layout_role": "laptop device showcase",
+      "visual_family": "green root with blue inset slab"
+    },
+    {
+      "index": 7,
+      "node_id": "145:1276",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1276&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/07_145-1276.png",
+      "layout_role": "compact contact card",
+      "visual_family": "green field with centered yellow card"
+    },
+    {
+      "index": 8,
+      "node_id": "145:1024",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1024&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/08_145-1024.png",
+      "layout_role": "cover split image slab",
+      "visual_family": "dark green cover with image and yellow rail"
+    },
+    {
+      "index": 9,
+      "node_id": "145:1082",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1082&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/09_145-1082.png",
+      "layout_role": "orange editorial text with outline glyph",
+      "visual_family": "orange text page"
+    },
+    {
+      "index": 10,
+      "node_id": "145:1038",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1038&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/10_145-1038.png",
+      "layout_role": "table of contents",
+      "visual_family": "blue TOC with outline glyph and numeric list"
+    },
+    {
+      "index": 11,
+      "node_id": "145:1102",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1102&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/11_145-1102.png",
+      "layout_role": "two-column editorial text",
+      "visual_family": "orange header over blue and white text zones"
+    },
+    {
+      "index": 12,
+      "node_id": "145:1109",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1109&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/12_145-1109.png",
+      "layout_role": "headline with image slab",
+      "visual_family": "dark green text plus image/yellow slab"
+    },
+    {
+      "index": 13,
+      "node_id": "145:1289",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1289&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/13_145-1289.png",
+      "layout_role": "single metric proof",
+      "visual_family": "yellow page with orange text block and blue metric slab"
+    },
+    {
+      "index": 14,
+      "node_id": "145:1087",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1087&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/14_145-1087.png",
+      "layout_role": "text grid with outline icons",
+      "visual_family": "blue information grid"
+    },
+    {
+      "index": 15,
+      "node_id": "145:1114",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1114&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/15_145-1114.png",
+      "layout_role": "three metric colorblock columns",
+      "visual_family": "yellow root with orange/green/blue columns"
+    },
+    {
+      "index": 16,
+      "node_id": "145:1070",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1070&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/16_145-1070.png",
+      "layout_role": "orange headline and green body card",
+      "visual_family": "orange text with green block"
+    },
+    {
+      "index": 17,
+      "node_id": "145:1174",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1174&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/17_145-1174.png",
+      "layout_role": "bar chart or budget columns",
+      "visual_family": "yellow page with staggered green/blue bars"
+    },
+    {
+      "index": 18,
+      "node_id": "145:1033",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1033&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/18_145-1033.png",
+      "layout_role": "chapter title with image band",
+      "visual_family": "blue background with orange horizontal slab"
+    },
+    {
+      "index": 19,
+      "node_id": "145:1144",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1144&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/19_145-1144.png",
+      "layout_role": "two-image collage",
+      "visual_family": "yellow and green split image collage"
+    },
+    {
+      "index": 20,
+      "node_id": "145:1191",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1191&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/20_145-1191.png",
+      "layout_role": "matrix or feature block",
+      "visual_family": "orange headline with green/yellow/blue blocks"
+    },
+    {
+      "index": 21,
+      "node_id": "145:1149",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1149&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/21_145-1149.png",
+      "layout_role": "three image evidence strip",
+      "visual_family": "blue page with image row and captions"
+    },
+    {
+      "index": 22,
+      "node_id": "145:1200",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1200&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/22_145-1200.png",
+      "layout_role": "phone device with text",
+      "visual_family": "blue page with orange device slab"
+    },
+    {
+      "index": 23,
+      "node_id": "145:1296",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1296&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/23_145-1296.png",
+      "layout_role": "timeline milestones",
+      "visual_family": "blue timeline with yellow/orange/green strip"
+    },
+    {
+      "index": 24,
+      "node_id": "145:1215",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1215&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/24_145-1215.png",
+      "layout_role": "large phone showcase",
+      "visual_family": "green root with blue inset slab and side labels"
+    },
+    {
+      "index": 25,
+      "node_id": "145:1280",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1280&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/25_145-1280.png",
+      "layout_role": "contact CTA",
+      "visual_family": "blue background with orange contact card"
+    },
+    {
+      "index": 26,
+      "node_id": "145:1226",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1226&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/26_145-1226.png",
+      "layout_role": "laptop product showcase",
+      "visual_family": "yellow page with centered laptop"
+    },
+    {
+      "index": 27,
+      "node_id": "145:1135",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1135&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/27_145-1135.png",
+      "layout_role": "image plus text split",
+      "visual_family": "blue text field with green header band"
+    },
+    {
+      "index": 28,
+      "node_id": "145:1209",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1209&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/28_145-1209.png",
+      "layout_role": "landscape phone showcase",
+      "visual_family": "yellow device poster"
+    },
+    {
+      "index": 29,
+      "node_id": "145:1251",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1251&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/29_145-1251.png",
+      "layout_role": "dark quote closer",
+      "visual_family": "dark green quote with small image"
+    },
+    {
+      "index": 30,
+      "node_id": "145:1255",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1255&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/30_145-1255.png",
+      "layout_role": "team roster",
+      "visual_family": "orange page with wide blue team band"
+    },
+    {
+      "index": 31,
+      "node_id": "145:1270",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1270&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/31_145-1270.png",
+      "layout_role": "single team profile",
+      "visual_family": "orange/yellow portrait page"
+    },
+    {
+      "index": 32,
+      "node_id": "145:1140",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1140&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/32_145-1140.png",
+      "layout_role": "full orange image title page",
+      "visual_family": "orange image poster"
+    },
+    {
+      "index": 33,
+      "node_id": "145:1160",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1160&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/33_145-1160.png",
+      "layout_role": "milestone cards",
+      "visual_family": "yellow page with orange/blue column cards"
+    },
+    {
+      "index": 34,
+      "node_id": "145:1125",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1125&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/34_145-1125.png",
+      "layout_role": "metric mosaic",
+      "visual_family": "blue/orange/green metric blocks"
+    },
+    {
+      "index": 35,
+      "node_id": "145:1314",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=145-1314&m=dev",
+      "screenshot": "figma/65CMrCi7opIqi80NPrKFxu/screenshots/145_designs/35_145-1314.png",
+      "layout_role": "closing thank-you",
+      "visual_family": "dark green closing with image"
+    }
+  ]
+}

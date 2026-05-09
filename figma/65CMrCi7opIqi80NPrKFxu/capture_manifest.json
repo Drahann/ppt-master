@@ -1,0 +1,148 @@
+{
+  "file_key": "65CMrCi7opIqi80NPrKFxu",
+  "figma_file_url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled",
+  "captured_for": "PPT Master theme cookbook figma_lime_serif_grid",
+  "captured_at_local": "2026-05-09",
+  "canvas": {
+    "width": 1920,
+    "height": 1080,
+    "format": "ppt169"
+  },
+  "tokens": {
+    "colors": {
+      "lime": "#c7ef4e",
+      "dark_green": "#003310",
+      "metric_green": "#085420",
+      "black": "#000000",
+      "white": "#ffffff",
+      "secondary_gray": "#7a7a7a"
+    },
+    "fonts": {
+      "display": "Neuton Light",
+      "body": "Open Sans Regular",
+      "label": "Open Sans SemiBold"
+    },
+    "type_scale": {
+      "display": {
+        "font": "Neuton Light",
+        "size": 200,
+        "line_height_percent": 100,
+        "letter_spacing_percent": -2.2
+      },
+      "title": {
+        "font": "Neuton Light",
+        "size": 80,
+        "line_height_percent": 110,
+        "letter_spacing_percent": -2
+      },
+      "body_large": {
+        "font": "Open Sans Regular",
+        "size": 36,
+        "line_height_percent": 120,
+        "letter_spacing_percent": -2.2
+      },
+      "body_medium": {
+        "font": "Open Sans Regular",
+        "size": 24,
+        "line_height_percent": 130,
+        "letter_spacing_percent": 0
+      },
+      "label": {
+        "font": "Open Sans SemiBold",
+        "size": 20,
+        "line_height_percent": 120,
+        "letter_spacing_percent": 2,
+        "text_case": "uppercase"
+      }
+    },
+    "chrome": {
+      "project_name_x": 100,
+      "project_name_y": 46,
+      "page_number_x": 1793,
+      "page_number_y": 46,
+      "top_rule_x": 100,
+      "top_rule_y": 100,
+      "top_rule_width": 1717,
+      "top_rule_stroke": 1
+    }
+  },
+  "frames": [
+    {
+      "index": 1,
+      "node_id": "131:352",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=131-352&m=dev",
+      "screenshot": "screenshots/01_131-352.png",
+      "role": "objectives_metric_columns"
+    },
+    {
+      "index": 2,
+      "node_id": "131:305",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=131-305&m=dev",
+      "screenshot": "screenshots/02_131-305.png",
+      "role": "agenda_lime_divider"
+    },
+    {
+      "index": 3,
+      "node_id": "131:509",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=131-509&m=dev",
+      "screenshot": "screenshots/03_131-509.png",
+      "role": "next_steps_four_columns"
+    },
+    {
+      "index": 4,
+      "node_id": "131:381",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=131-381&m=dev",
+      "screenshot": "screenshots/04_131-381.png",
+      "role": "milestones_image_cards"
+    },
+    {
+      "index": 5,
+      "node_id": "131:322",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=131-322&m=dev",
+      "screenshot": "screenshots/05_131-322.png",
+      "role": "dark_project_overview"
+    },
+    {
+      "index": 6,
+      "node_id": "131:295",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=131-295&m=dev",
+      "screenshot": "screenshots/06_131-295.png",
+      "role": "dark_green_status_title"
+    },
+    {
+      "index": 7,
+      "node_id": "131:538",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=131-538&m=dev",
+      "screenshot": "screenshots/07_131-538.png",
+      "role": "qa_contact"
+    },
+    {
+      "index": 8,
+      "node_id": "131:401",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=131-401&m=dev",
+      "screenshot": "screenshots/08_131-401.png",
+      "role": "current_status_dashboard"
+    },
+    {
+      "index": 9,
+      "node_id": "131:435",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=131-435&m=dev",
+      "screenshot": "screenshots/09_131-435.png",
+      "role": "quarterly_timeline"
+    },
+    {
+      "index": 10,
+      "node_id": "131:457",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=131-457&m=dev",
+      "screenshot": "screenshots/10_131-457.png",
+      "role": "budget_metric_stack"
+    },
+    {
+      "index": 11,
+      "node_id": "131:474",
+      "url": "https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled?node-id=131-474&m=dev",
+      "screenshot": "screenshots/11_131-474.png",
+      "role": "risk_mitigation_rows"
+    }
+  ]
+}
