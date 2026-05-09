@@ -122,6 +122,8 @@ DIRECT_NOTES_TIMEOUT_SECONDS = 10 * 60
 DIRECT_NOTES_MAX_TOKENS = 12000
 DIRECT_SPEC_TIMEOUT_SECONDS = 15 * 60
 DIRECT_SPEC_MAX_TOKENS = 32000
+DIRECT_SVG_REPAIR_TIMEOUT_SECONDS = 5 * 60
+DIRECT_SVG_REPAIR_MAX_TOKENS = 16000
 SKILL_PACK_DIRNAME = "skill_packs"
 QWEN_CHAT_ROOT = Path.home() / ".qwen" / "projects"
 QWEN_DEBUG_ROOT = Path.home() / ".qwen" / "debug"
@@ -3883,6 +3885,9 @@ def validate_svg_outputs(
     plan: list[SlidePlanEntry],
     log_path: Path | None = None,
     *,
+    runner_dir: Path | None = None,
+    model: str | None = None,
+    credential_override: dict[str, str] | None = None,
     emoji_as_error: bool = True,
 ) -> list[str]:
     svg_dir = project_path / "svg_output"
@@ -3905,8 +3910,33 @@ def validate_svg_outputs(
         try:
             root = ET.fromstring(text)
         except ET.ParseError as exc:
-            errors.append(f"Invalid SVG XML: {entry.filename} ({exc})")
-            continue
+            repaired = False
+            if runner_dir is not None:
+                repaired = attempt_direct_svg_syntax_repair(
+                    project_path=project_path,
+                    svg_path=svg_path,
+                    parse_error=str(exc),
+                    runner_dir=runner_dir,
+                    log_path=log_path,
+                    model=model,
+                    credential_override=credential_override,
+                )
+            if repaired:
+                text = svg_path.read_text(encoding="utf-8", errors="replace")
+                try:
+                    root = ET.fromstring(text)
+                except ET.ParseError as repaired_exc:
+                    errors.append(
+                        f"Invalid SVG XML after script cleanup and direct API syntax repair: "
+                        f"{entry.filename} ({repaired_exc}); regenerate this SVG from scratch"
+                    )
+                    continue
+            else:
+                errors.append(
+                    f"Invalid SVG XML after script cleanup: {entry.filename} ({exc}); "
+                    "direct syntax repair was unavailable or failed, regenerate this SVG from scratch"
+                )
+                continue
         visible_text_parts.append(extract_svg_visible_text(root))
 
         if contains_emoji(text):
@@ -3962,6 +3992,9 @@ def check_svg_only_state(
     plan: list[SlidePlanEntry],
     valid_chart_keys: set[str],
     runner_dir: Path,
+    *,
+    model: str | None = None,
+    credential_override: dict[str, str] | None = None,
 ) -> tuple[bool, list[str]]:
     errors: list[str] = []
     expected_svg_names = collect_expected_svg_names(plan)
@@ -3972,11 +4005,21 @@ def check_svg_only_state(
     missing_svg = sorted(expected_svg_names - actual_svg_names)
     extra_svg = sorted(actual_svg_names - expected_svg_names)
     if missing_svg:
-        errors.append(f"Missing SVG files: {', '.join(missing_svg)}")
+        errors.append(f"Missing SVG files: {', '.join(missing_svg)}; regenerate only these missing SVGs from scratch")
     if extra_svg:
         errors.append(f"Unexpected SVG files: {', '.join(extra_svg)}")
 
-    errors.extend(validate_svg_outputs(project_path, plan, runner_dir / "runner.log", emoji_as_error=False))
+    errors.extend(
+        validate_svg_outputs(
+            project_path,
+            plan,
+            runner_dir / "runner.log",
+            runner_dir=runner_dir,
+            model=model,
+            credential_override=credential_override,
+            emoji_as_error=False,
+        )
+    )
     errors.extend(run_svg_quality_check(project_path, runner_dir))
     return not errors, errors
 
@@ -3986,6 +4029,10 @@ def check_batch_state(
     batch_plan: list[SlidePlanEntry],
     full_plan: list[SlidePlanEntry],
     log_path: Path | None = None,
+    *,
+    runner_dir: Path | None = None,
+    model: str | None = None,
+    credential_override: dict[str, str] | None = None,
 ) -> tuple[bool, list[str]]:
     errors: list[str] = []
     svg_dir = project_path / "svg_output"
@@ -3996,11 +4043,21 @@ def check_batch_state(
     missing_svg = sorted(expected_batch_names - actual_svg_names)
     extra_svg = sorted(actual_svg_names - all_expected_names)
     if missing_svg:
-        errors.append(f"Missing batch SVG files: {', '.join(missing_svg)}")
+        errors.append(f"Missing batch SVG files: {', '.join(missing_svg)}; regenerate only these missing SVGs from scratch")
     if extra_svg:
         errors.append(f"Unexpected SVG files: {', '.join(extra_svg)}")
 
-    errors.extend(validate_svg_outputs(project_path, batch_plan, log_path, emoji_as_error=False))
+    errors.extend(
+        validate_svg_outputs(
+            project_path,
+            batch_plan,
+            log_path,
+            runner_dir=runner_dir,
+            model=model,
+            credential_override=credential_override,
+            emoji_as_error=False,
+        )
+    )
     return not errors, errors
 
 
@@ -5163,6 +5220,26 @@ def direct_spec_max_tokens() -> int:
         return DIRECT_SPEC_MAX_TOKENS
 
 
+def direct_svg_repair_max_tokens() -> int:
+    raw = (os.getenv("PPT_API_QWEN_SVG_REPAIR_MAX_TOKENS") or "").strip()
+    if not raw:
+        return DIRECT_SVG_REPAIR_MAX_TOKENS
+    try:
+        return max(1, min(int(raw), 32768))
+    except ValueError:
+        return DIRECT_SVG_REPAIR_MAX_TOKENS
+
+
+def direct_svg_repair_timeout_seconds() -> int:
+    raw = (os.getenv("PPT_API_QWEN_SVG_REPAIR_TIMEOUT_SECONDS") or "").strip()
+    if not raw:
+        return DIRECT_SVG_REPAIR_TIMEOUT_SECONDS
+    try:
+        return max(30, min(int(raw), 30 * 60))
+    except ValueError:
+        return DIRECT_SVG_REPAIR_TIMEOUT_SECONDS
+
+
 def strip_markdown_model_output(text: str, sentinel_prefix: str | None = None) -> str:
     stripped = (text or "").strip()
     fence_match = re.match(r"^```(?:markdown|md)?\s*\n(?P<body>.*)\n```$", stripped, re.DOTALL | re.IGNORECASE)
@@ -5176,6 +5253,107 @@ def strip_markdown_model_output(text: str, sentinel_prefix: str | None = None) -
 
 def strip_notes_model_output(text: str) -> str:
     return strip_markdown_model_output(text, NOTES_COMPLETION_SENTINEL_PREFIX)
+
+
+def strip_svg_model_output(text: str) -> str:
+    stripped = (text or "").strip()
+    fence_match = re.match(r"^```(?:svg|xml)?\s*\n(?P<body>.*)\n```$", stripped, re.DOTALL | re.IGNORECASE)
+    if fence_match:
+        stripped = fence_match.group("body").strip()
+    start = stripped.find("<svg")
+    end = stripped.rfind("</svg>")
+    if start < 0 or end < 0:
+        raise RunnerError("Direct SVG repair did not return a complete <svg>...</svg> document")
+    return stripped[start : end + len("</svg>")].strip() + "\n"
+
+
+def build_direct_svg_syntax_repair_messages(
+    *,
+    svg_path: Path,
+    svg_text: str,
+    parse_error: str,
+) -> list[dict[str, str]]:
+    user_content = f"""Repair this SVG XML syntax only.
+
+Hard output contract:
+- Return exactly one complete SVG document.
+- Do not wrap the SVG in a markdown fence.
+- Do not output explanations, summaries, or file names.
+- Preserve the existing visual design, text, coordinates, ids, colors, image hrefs, and icon placeholders.
+- Fix only well-formed XML/SVG syntax problems such as malformed tags, broken entities, duplicate attributes, invalid comments, or truncated wrappers.
+- If the SVG is too damaged, still return the closest valid full SVG with the same root viewBox and visible content.
+
+File: {svg_path}
+Current parse error: {parse_error}
+
+SVG to repair:
+```svg
+{svg_text}
+```
+"""
+    return [
+        {
+            "role": "system",
+            "content": "You repair SVG XML syntax only. Return exactly one complete SVG document and no prose.",
+        },
+        {"role": "user", "content": user_content},
+    ]
+
+
+def attempt_direct_svg_syntax_repair(
+    *,
+    project_path: Path,
+    svg_path: Path,
+    parse_error: str,
+    runner_dir: Path,
+    log_path: Path | None,
+    model: str | None,
+    credential_override: dict[str, str] | None = None,
+) -> bool:
+    svg_text = svg_path.read_text(encoding="utf-8", errors="replace")
+    artifact_prefix = f"svg_syntax_repair_{sanitize_token(svg_path.stem)}"
+    repair_model = (
+        os.getenv("PPT_API_QWEN_SVG_REPAIR_MODEL")
+        or os.getenv("PPT_API_QWEN_REVIEW_MODEL")
+        or model
+        or DEFAULT_REVIEW_MODEL
+    )
+    if log_path is not None:
+        append_log(log_path, f"Starting direct SVG syntax repair for {svg_path.name}: {parse_error}")
+    try:
+        content, usage, _payload = call_openai_compatible_chat(
+            model=repair_model,
+            messages=build_direct_svg_syntax_repair_messages(
+                svg_path=svg_path,
+                svg_text=svg_text,
+                parse_error=parse_error,
+            ),
+            max_tokens=direct_svg_repair_max_tokens(),
+            runner_dir=runner_dir,
+            artifact_prefix=artifact_prefix,
+            turn_index=1,
+            log_path=log_path,
+            timeout_seconds=direct_svg_repair_timeout_seconds(),
+            credential_override=credential_override,
+        )
+        repaired_svg = strip_svg_model_output(content)
+        ET.fromstring(repaired_svg)
+        svg_path.write_text(repaired_svg, encoding="utf-8")
+        update_usage_summary(
+            runner_dir,
+            stage_name="svg_syntax_repair",
+            artifact_prefix=artifact_prefix,
+            turn_index=1,
+            session_id=f"direct-{uuid.uuid4()}",
+            usage=usage,
+        )
+        if log_path is not None:
+            append_log(log_path, f"Direct SVG syntax repair succeeded for {svg_path.name}")
+        return True
+    except Exception as exc:
+        if log_path is not None:
+            append_log(log_path, f"Direct SVG syntax repair failed for {svg_path.name}: {exc}")
+        return False
 
 
 def notes_usage_from_response(payload: dict[str, Any], model: str) -> TurnUsageSummary:
@@ -6404,7 +6582,15 @@ def execute_single_svg_batch(
         artifact_prefix=f"svg_batch_{batch_index + 1:02d}",
         initial_prompt=batch_prompt,
         completion_sentinel_prefix=SVG_BATCH_COMPLETION_SENTINEL_PREFIX,
-        state_checker=lambda bp=batch_plan: check_batch_state(project_path, bp, full_plan, log_path),
+        state_checker=lambda bp=batch_plan: check_batch_state(
+            project_path,
+            bp,
+            full_plan,
+            log_path,
+            runner_dir=runner_dir,
+            model=request.get("review_model") or request.get("model"),
+            credential_override=credential_override,
+        ),
         continue_prompt_builder=lambda errors, bp=batch_plan: build_batch_svg_continue_prompt(
             request,
             project_path,
@@ -7466,7 +7652,13 @@ def execute_generation(
                 artifact_prefix="qwen",
                 initial_prompt=svg_prompt,
                 completion_sentinel_prefix=COMPLETION_SENTINEL_PREFIX,
-                state_checker=lambda: check_svg_only_state(project_path, plan, valid_chart_keys, runner_dir),
+                state_checker=lambda: check_svg_only_state(
+                    project_path,
+                    plan,
+                    valid_chart_keys,
+                    runner_dir,
+                    model=request.get("review_model") or request.get("model"),
+                ),
                 continue_prompt_builder=lambda errors: build_svg_continue_prompt(
                     request,
                     project_path,
