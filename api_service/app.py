@@ -22,7 +22,7 @@ from .metrics import metrics
 from .models import CallbackResult as CallbackResultModel
 from .models import GeneratePptRequest, GeneratePptResponse, NormalizedRequest, ReportRequest, ReportResponse
 from .runner import derive_title, execute_runner
-from .storage import build_result_zip, notify_report_server, sanitize_title, upload_to_cos
+from .storage import build_result_zip, notify_report_failure, notify_report_server, sanitize_title, upload_to_cos
 from .svg_scheduler import RedisSvgSchedulerStore, SvgScheduler
 
 
@@ -386,6 +386,15 @@ def _process_request(request: NormalizedRequest, job_id: str | None = None) -> d
             }
     except Exception as exc:
         metrics.fail_job(metric_job_id, str(exc))
+        failure_callback = _send_failure_callback(request, job_dir, metric_job_id, job_id, str(exc))
+        if failure_callback:
+            logger.info(
+                "Failure callback job_id=%s report_id=%s success=%s error=%s",
+                metric_job_id,
+                request.report_id,
+                failure_callback.success,
+                failure_callback.error,
+            )
         logger.exception("PPT job failed job_id=%s report_id=%s error=%s", metric_job_id, request.report_id, exc)
         raise
 
@@ -465,6 +474,43 @@ def _update_job_stage(metric_job_id: str, queue_job_id: str | None, stage: str, 
         except Exception:
             pass
     _snapshot_metrics_to_disk(f"stage_{stage}")
+
+
+def _send_failure_callback(
+    request: NormalizedRequest,
+    job_dir: Path,
+    metric_job_id: str,
+    queue_job_id: str | None,
+    error_message: str,
+) -> CallbackResultModel | None:
+    if request.callback_mode != "auto":
+        return None
+    try:
+        _update_job_stage(metric_job_id, queue_job_id, "failure_callback", event="report_callback_failed")
+        callback_result = notify_report_failure(
+            report_id=request.report_id,
+            file_url=request.file_url,
+            word_url=request.word_url,
+            error_message=error_message,
+            callback_url=(request.callback_url or settings.report_callback_url),
+        )
+        model = CallbackResultModel(success=callback_result.success, error=callback_result.error)
+        try:
+            (job_dir / "failure_callback.json").write_text(
+                json.dumps(model.model_dump(), ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+        return model
+    except Exception as callback_exc:
+        logger.exception(
+            "Failure callback crashed job_id=%s report_id=%s error=%s",
+            metric_job_id,
+            request.report_id,
+            callback_exc,
+        )
+        return CallbackResultModel(success=False, error=str(callback_exc))
 
 
 def _redis_available() -> bool:
