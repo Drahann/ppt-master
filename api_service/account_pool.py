@@ -12,7 +12,7 @@ from typing import Any, Iterable
 
 
 DEFAULT_ACCOUNT_MAX_JOBS = 2
-DEFAULT_ACCOUNT_SLOT_CAPACITY = 24
+DEFAULT_ACCOUNT_SLOT_CAPACITY = 40
 DEFAULT_LEASE_TTL_SECONDS = 3 * 60 * 60
 DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 120
 DEFAULT_TRANSIENT_COOLDOWN_SECONDS = 30
@@ -124,8 +124,8 @@ def classify_error(error: str | None) -> str:
 class RedisAccountPool:
     """Redis-backed DeepSeek account pool.
 
-    A lease is held for the whole PPT job. With the default 12 SVG workers,
-    each account's 24-slot capacity naturally admits two concurrent jobs.
+    A lease is held for the whole PPT job. With the default 18 SVG workers,
+    each account's 40-slot capacity naturally admits two concurrent jobs.
     """
 
     def __init__(

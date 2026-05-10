@@ -115,7 +115,7 @@ def healthz() -> dict[str, object]:
             "enabled": bool(pool is not None),
             "error": account_pool_error,
             "required": settings.require_account_pool,
-            "policy": "job lease: max 2 jobs / 24 svg slots per account by default",
+            "policy": "job lease: max 2 jobs / 40 svg slots per account by default",
         },
     }
 

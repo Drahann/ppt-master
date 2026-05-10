@@ -8,7 +8,7 @@
       "svg_model": "deepseek-v4-pro[1m]",
       "svg_repair_model": "deepseek-v4-flash",
       "max_concurrent_jobs": 2,
-      "slot_capacity": 24,
+      "slot_capacity": 40,
       "enabled": true
     },
     {
@@ -19,7 +19,7 @@
       "svg_model": "deepseek-v4-pro[1m]",
       "svg_repair_model": "deepseek-v4-flash",
       "max_concurrent_jobs": 2,
-      "slot_capacity": 24,
+      "slot_capacity": 40,
       "enabled": true
     },
     {
@@ -30,7 +30,7 @@
       "svg_model": "deepseek-v4-pro[1m]",
       "svg_repair_model": "deepseek-v4-flash",
       "max_concurrent_jobs": 2,
-      "slot_capacity": 24,
+      "slot_capacity": 40,
       "enabled": true
     },
     {
@@ -41,7 +41,7 @@
       "svg_model": "deepseek-v4-pro[1m]",
       "svg_repair_model": "deepseek-v4-flash",
       "max_concurrent_jobs": 2,
-      "slot_capacity": 24,
+      "slot_capacity": 40,
       "enabled": true
     },
     {
@@ -52,7 +52,7 @@
       "svg_model": "deepseek-v4-pro[1m]",
       "svg_repair_model": "deepseek-v4-flash",
       "max_concurrent_jobs": 2,
-      "slot_capacity": 24,
+      "slot_capacity": 40,
       "enabled": true
     }
   ]

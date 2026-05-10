@@ -40,8 +40,8 @@ Default policy:
 
 - 5 DeepSeek accounts per server.
 - Each account allows 2 concurrent PPT jobs.
-- Each account has 24 SVG slots.
-- Each PPT job requests 12 SVG slots by default.
+- Each account has 40 SVG slots.
+- Each PPT job requests 18 SVG slots by default.
 
 That makes one server admit ten concurrent jobs. The two-server production
 deployment uses external load balancing and admits twenty concurrent jobs total.
@@ -64,6 +64,12 @@ For `qwen3.6-plus` notes generation, the Qwen request timeout is intentionally l
 
 ```env
 PPT_API_QWEN_TIMEOUT=900
+```
+
+Keep Qwen output at the current safe maximum for `qwen3.6-plus`:
+
+```env
+PPT_API_QWEN_MAX_TOKENS=65536
 ```
 
 ## Start API And Redis

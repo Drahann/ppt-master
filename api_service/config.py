@@ -131,7 +131,7 @@ def load_settings() -> Settings:
         svg_repair_model=os.getenv("PPT_API_SVG_REPAIR_MODEL", "deepseek-v4-flash").strip() or "deepseek-v4-flash",
         svg_timeout=max(60, _env_int("PPT_API_SVG_TIMEOUT", 1200)),
         svg_retries=max(0, _env_int("PPT_API_SVG_RETRIES", 1)),
-        svg_workers=max(1, _env_int("PPT_API_SVG_WORKERS", 15)),
+        svg_workers=max(1, _env_int("PPT_API_SVG_WORKERS", 18)),
         svg_batch_size=max(1, _env_int("PPT_API_SVG_BATCH_SIZE", 3)),
         cache_prime=_env_bool("PPT_API_CACHE_PRIME", True),
         runner_start_stagger_enabled=_env_bool("PPT_API_RUNNER_START_STAGGER_ENABLED", True),
