@@ -46,6 +46,16 @@ python skills/ppt-master/scripts/api_ppt.py generate <source.md> \
 
 DeepSeek keys are injected from the account lease into child process environment variables, not passed on the command line.
 
+Reducer token budget is configured through the child process environment:
+
+```bash
+PPT_MASTER_SPEC_REDUCER_MAX_TOKENS=120000
+```
+
+This controls the map-reduce `design_plan_reducer` response budget. DeepSeek V4
+supports much larger outputs, but `120000` gives long 30+ slide decks room to
+finish without making every job reserve the full provider limit.
+
 SVG generation is scheduled per slide. `--svg-workers` is the actual concurrent
 direct API request limit; `--svg-batch-size` only keeps logical batch metadata in
 logs and does not bind a worker slot to a whole batch.

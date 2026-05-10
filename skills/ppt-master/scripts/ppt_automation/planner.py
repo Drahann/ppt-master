@@ -23,6 +23,8 @@ DEEPSEEK_SYSTEM = "You are PPT Master automation engine. Follow the user task ex
 SPEC_PIPELINE_ENV = "PPT_MASTER_SPEC_PIPELINE"
 SPEC_SLIDE_WORKERS_ENV = "PPT_MASTER_SPEC_SLIDE_WORKERS"
 SPEC_REDUCER_ENV = "PPT_MASTER_SPEC_REDUCER"
+SPEC_REDUCER_MAX_TOKENS_ENV = "PPT_MASTER_SPEC_REDUCER_MAX_TOKENS"
+DEFAULT_SPEC_REDUCER_MAX_TOKENS = 120000
 
 
 DEFAULT_COLORS = {
@@ -127,7 +129,7 @@ SPEC_FIELD_RESPONSIBILITY_CONTRACT = """Spec field responsibility model:
 - Structure layer: `layout_family` is for deck-level variety checks and should be cookbook-adapted when a cookbook is active; `source_recipe_anchor` names the reference recipe/motif that supplies art direction; `required_art_moves` lists visible source-native moves SVG must render; `layout` is the concrete archetype/catalog-derived structure; `layout_signature` is the one-line spatial blueprint; `composition` is the reading order and region allocation; `visual_structure` is the drawable primitive list for SVG. Do not repeat the same sentence across these fields.
 - Density/fullness layer: `content_density` is only the coarse enum; `density_plan` owns visible text amount, component density, and blank-space control; `rhythm` owns macro pacing and visual weight. These fields should work together but not duplicate one another.
 - Theme execution layer: `color_role` owns restrained palette roles; `visual_metaphor` owns the content-linked motif; `card_anatomy` owns card internals when cards exist; `visual_guidance` is the final short synthesis that tells SVG how the above decisions should feel. `visual_guidance` should not restate every field.
-- SVG execution layer: `icon_plan` lists exact icon placeholders only when useful; `chart_or_diagram` names the semantic chart/diagram key from the catalog. Cookbook recipes teach style, not chart priority.
+- SVG execution layer: `icon_plan` lists exact icon placeholders only when they carry semantic meaning; it is acceptable and often preferable for narrative, chart-heavy, image-heavy, table, cover, and closing pages to have no icons. Cookbook recipes teach style, not chart priority.
 - Balance requirements: preserve theme consistency, avoid template sameness, keep normal content pages information-rich and visually full, and keep creativity purposeful rather than gimmicky.
 """
 
@@ -280,7 +282,7 @@ def default_component_system() -> dict[str, Any]:
             "nested callout band",
             "connector notch",
         ],
-        "icons": "chunk-filled placeholders, 20-40px, colored from the current slide's lead or support accent",
+        "icons": "restrained chunk-filled placeholders, usually 0-3 semantic icons per content slide; avoid per-bullet or per-card icons unless they clarify categories",
         "charts": "use chart catalog as semantic vocabulary; give charts one lead series, one support series if needed, direct labels, and chart-plot-area markers for real data charts",
         "chart_template_policy": "choose real template keys from templates/charts/charts_index.json as semantic vocabulary, then redraw/restyle in the locked theme",
         "callouts": "short conclusion phrases with measured color bands, badges, metric pills, or highlight ribbons, never long paragraphs",
@@ -291,7 +293,7 @@ def default_component_system() -> dict[str, Any]:
 def default_style_anchor() -> dict[str, Any]:
     return {
         "theme": "light technology venture deck",
-        "repeat": ["white canvas", "dark text", "compact multi-accent palette", "soft cards", "technical chrome", "consistent icon placeholders"],
+        "repeat": ["white canvas", "dark text", "compact multi-accent palette", "soft cards", "technical chrome", "restrained semantic icon placeholders"],
         "vary": ["slide archetype", "diagram type", "card count", "leading accent color", "accent placement", "chart skin"],
     }
 
@@ -538,7 +540,8 @@ Fixed generation contract:
 - Use concise, audience-facing Chinese slide text.
 - Keep visible content faithful to the source Markdown; summarize dense details instead of dumping paragraphs.
 - If source Markdown contains project images, reference local files with PPT-safe `<image href="../images/filename.ext" ... preserveAspectRatio="xMidYMid meet"/>` or `slice` for deliberate image fills.
-- Use project icon placeholders when icons are needed: `<use data-icon="chunk-filled/rocket" x="100" y="100" width="32" height="32" fill="#1D4ED8"/>`.
+- Use project icon placeholders only when icons add semantic clarity: `<use data-icon="chunk-filled/rocket" x="100" y="100" width="32" height="32" fill="#1D4ED8"/>`.
+- Keep icon frequency restrained. Do not add icons to every bullet or every card by default; most normal slides should use 0-3 semantic icons, while narrative/image/chart/table slides can use none.
 - Available icon placeholders: {", ".join(ICON_INVENTORY)}.
 - Forbidden SVG features: `<style>`, `class`, `<foreignObject>`, `rgba()`, `<script>`, `<animate*>`, `<textPath>`, `<mask>`, HTML named entities, `<g opacity>`, and `clip-path` outside simple image crops.
 - If no task follows this prefix, return exactly `ACK`.
@@ -729,6 +732,7 @@ Rules:
 - `spec_lock` must be a strict visual anchor: include canvas, colors, typography, spacing, shape_language, icon_rules, chart_rules, svg_rules, page_rhythm, and forbidden.
 - `icons` and `images` must be JSON objects, not strings.
 - Use this icon library inventory exactly when icons are needed: {", ".join(ICON_INVENTORY)}.
+- Icon usage should be restrained and semantic, not decorative filler. Prefer labels, numbers, chips, rules, image crops, or source-native motifs over generic pictograms. Do not put an icon on every card or bullet; most content slides should have 0-3 icons, and chart/table/image/narrative slides may have an empty `icon_plan`.
 - Make art direction explicit enough for independent SVG page generation: include mood, motifs, composition principles, card style, diagram style, chart style, and slide archetypes.
 - Treat the slide spec as layered design data, not a checklist of repeated instructions. Each field should own one decision surface and avoid duplicating neighboring fields.
 - Keep all per-slide text fields compact: `intent`, `composition`, `visual_structure`, `why_this_layout`, `visual_metaphor`, and `visual_guidance` should be short phrases or one short sentence, not paragraphs.
@@ -773,7 +777,7 @@ Design plan field output guide:
 - `color_role`: slide-specific palette execution. Name the leading accent and supporting accent uses from locked colors; do not leave color choice implicit.
 - `density_plan`: visible text, information budget, and meaningful component density. Include approximate block/card/count structure and how the page avoids sparse blank areas.
 - `card_anatomy`: if cards appear, describe their internal layout and variation; otherwise leave empty.
-- `icon_plan`: exact icon placeholder names from inventory, only when icons have semantic value.
+- `icon_plan`: exact icon placeholder names from inventory, only when icons have semantic value. Keep frequency moderate: usually 0-3 per content slide, never a default icon for every bullet/card, and leave empty when labels or structural motifs carry the meaning better.
 - `chart_or_diagram`: one real catalog key when the page needs data/diagram structure; empty only for pure quote/image/text/team pages.
 - `content_density`: `low`, `medium`, `high`, or `showcase`; use it to tell SVG generation how aggressively to compress visible text. `medium` is not minimal: it should preserve enough visible detail to avoid thin, under-explained slides.
 - These fields should agree with each other. Do not set `chart_or_diagram=roadmap_vertical` while `layout_signature` describes unrelated KPI cards.
@@ -1026,6 +1030,7 @@ Reducer rules:
 - Return only final design_plan JSON inside the marker pair.
 - Preserve all source slides exactly once and keep `index`, `title`, `kind`, `section_title`, and `svg_filename`.
 - Fix repeated adjacent layout families, color overuse, flat pacing, missing art moves, and generic families.
+- Reduce icon overuse. Keep `icon_plan` only where icons clarify distinct categories, roles, capabilities, or actions; do not preserve icons that merely decorate every bullet/card. Prefer 0-3 icons on most content slides, and allow empty `icon_plan` on narrative, chart-heavy, image-heavy, table, cover, and closing slides.
 - Do not erase useful density decisions from the slide plans.
 - When a cookbook is active, every normal slide should visibly carry 2+ source-native art moves via `required_art_moves`.
 - `layout_family` should be concrete and cookbook-adapted when a cookbook is active, e.g. `flsg_adapted_matrix`, not just `matrix`.
@@ -1542,6 +1547,15 @@ def parse_bool_env(name: str, default: bool = True) -> bool:
     return default
 
 
+def resolve_spec_reducer_max_tokens() -> int:
+    return parse_positive_int_env(
+        SPEC_REDUCER_MAX_TOKENS_ENV,
+        DEFAULT_SPEC_REDUCER_MAX_TOKENS,
+        minimum=30000,
+        maximum=384000,
+    )
+
+
 def build_design_plan_without_reducer(
     *,
     project_name: str,
@@ -1740,7 +1754,7 @@ def generate_plan_map_reduce(
             reducer_prompt,
             "---DESIGN_PLAN_JSON_START---",
             "---DESIGN_PLAN_JSON_END---",
-            max_tokens=30000,
+            max_tokens=resolve_spec_reducer_max_tokens(),
         )
         plan = normalize_design_plan(plan, project_name=project_name, deck=deck, canvas_format=canvas_format, style=style, slide_plans=slide_plans)
         write_stage_json(project_path, "design_plan_reduced.json", plan)

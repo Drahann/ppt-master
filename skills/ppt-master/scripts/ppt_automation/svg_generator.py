@@ -326,7 +326,7 @@ Stable rules:
   - `color_role` names the leading accent and supporting accent for this page; apply those colors to hierarchy, headers, chips, one chart series, connector lines, or callouts rather than defaulting everything to primary blue. Keep neutral surfaces dominant.
   - `density_plan` is the visible information and component-density budget; follow its requested cards, labels, captions, metric chips, evidence phrases, and blank-space control unless it would cause collisions.
   - `card_anatomy` is mandatory when cards exist; build those internal structures instead of drawing identical blank rectangles with centered text.
-  - `icon_plan` should be implemented with `<use data-icon="...">` placeholders when icons add meaning.
+  - `icon_plan` should be implemented with `<use data-icon="...">` placeholders only when icons add semantic meaning. Do not add extra icons beyond `icon_plan` just to fill space; use labels, numbers, chips, rules, source-native motifs, or chart marks instead.
   - `chart_or_diagram` chooses the visualization geometry; restyle it in the locked theme rather than swapping to a generic card grid.
   - `content_density` decides how much text to keep visible and how aggressively to summarize.
 - Text density execution:
@@ -342,7 +342,7 @@ Stable rules:
 - If a slide is dense, summarize into key phrases and speaker-note-level detail rather than overfilling the canvas; do not over-compress medium/high pages into a few sparse labels.
 - Keep SVG concise: target 7,000-12,000 characters, no comments, no duplicated hidden text, no verbose metadata.
 - If current page source Markdown contains an image, use the downloaded local image when it helps the slide. Reference it with `<image href="../images/filename.ext" ... preserveAspectRatio="xMidYMid meet"/>`; do not reference external http(s), `/root/...`, or original source URLs.
-- Prefer project icon placeholders instead of hand-drawn icons. Use syntax such as `<use data-icon="chunk-filled/rocket" x="100" y="100" width="32" height="32" fill="#1D4ED8"/>`; `finalize_svg.py` will embed the real icon.
+- When the current page plan calls for icons, prefer project icon placeholders instead of hand-drawn icons. Use syntax such as `<use data-icon="chunk-filled/rocket" x="100" y="100" width="32" height="32" fill="#1D4ED8"/>`; `finalize_svg.py` will embed the real icon. Keep icon usage sparse and purposeful, not one icon per bullet/card by default.
 - Available icon placeholders: {", ".join(ICON_INVENTORY)}.
 - Current style: {style}
 
