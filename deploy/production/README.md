@@ -80,6 +80,14 @@ PPT_MASTER_SPEC_RETRIES=2
 PPT_MASTER_SPEC_RETRY_BACKOFF_SECONDS=8
 ```
 
+Keep context-cache priming enabled for API runs and wait briefly before the
+first SVG batch so the provider has time to materialize the shared-prefix cache:
+
+```env
+PPT_API_CACHE_PRIME=1
+PPT_MASTER_CACHE_PRIME_WAIT_SECONDS=3
+```
+
 DeepSeek remains available as a planner fallback with a larger completion budget
 to avoid truncated plan/spec output:
 

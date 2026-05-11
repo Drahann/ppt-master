@@ -50,6 +50,7 @@ Cache prime is enabled through the API environment:
 
 ```bash
 PPT_API_CACHE_PRIME=1
+PPT_MASTER_CACHE_PRIME_WAIT_SECONDS=3
 ```
 
 Spec planning retries are enabled through the child process environment:
