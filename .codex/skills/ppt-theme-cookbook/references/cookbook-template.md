@@ -10,10 +10,11 @@ Important philosophy:
 - Semantic structure may adapt to content; source-native art moves must remain visibly inherited.
 - Density may increase, but composition logic cannot collapse into generic cards.
 
-Reference set:
-- Source folder/deck:
+Theme evidence summary:
+- Reference type and reviewed frame/slide count:
 - Visual DNA:
-- Key source slides/pages:
+- Key motifs and recurring structures:
+- Evidence limitations or inference boundaries:
 
 ## 1. Pipeline Role
 

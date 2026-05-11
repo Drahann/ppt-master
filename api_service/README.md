@@ -30,7 +30,7 @@ The runner calls:
 ```bash
 python skills/ppt-master/scripts/api_ppt.py generate <source.md> \
   --renderer deepseek \
-  --planner-provider deepseek \
+  --planner-provider qwen \
   --notes-provider qwen \
   --qwen-model qwen3.6-plus \
   --qwen-max-tokens 65536 \
@@ -46,15 +46,28 @@ python skills/ppt-master/scripts/api_ppt.py generate <source.md> \
 
 DeepSeek keys are injected from the account lease into child process environment variables, not passed on the command line.
 
-Reducer token budget is configured through the child process environment:
+Cache prime is enabled through the API environment:
 
 ```bash
-PPT_MASTER_SPEC_REDUCER_MAX_TOKENS=120000
+PPT_API_CACHE_PRIME=1
 ```
 
-This controls the map-reduce `design_plan_reducer` response budget. DeepSeek V4
-supports much larger outputs, but `120000` gives long 30+ slide decks room to
-finish without making every job reserve the full provider limit.
+Spec planning retries are enabled through the child process environment:
+
+```bash
+PPT_MASTER_SPEC_RETRIES=2
+PPT_MASTER_SPEC_RETRY_BACKOFF_SECONDS=8
+```
+
+These retries regenerate the entire `design_plan/spec_lock` response when the
+model returns missing marker pairs or invalid JSON. They do not try to salvage a
+corrupted spec payload.
+
+When the planner provider is DeepSeek, this primes the shared deck context before
+the single-stage design plan/spec lock call, including spec-only jobs. SVG
+generation performs a separate prime for the shared SVG prompt prefix and waits
+briefly before scheduling the first slide batch so batch one can reuse the
+provider cache when it is available.
 
 SVG generation is scheduled per slide. `--svg-workers` is the actual concurrent
 direct API request limit; `--svg-batch-size` only keeps logical batch metadata in

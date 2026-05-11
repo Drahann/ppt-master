@@ -24,6 +24,11 @@ For JSON payloads where Markdown is in `content`:
 python3 ${SKILL_DIR}/scripts/api_ppt.py generate postppt.json --project-name demo
 ```
 
+When no `--cookbook` is provided, the runner randomly selects one of four theme
+modes for each generation: default no-cookbook, `figma_65cm_default`,
+`figma_colorblock_modern`, or `figma_lime_serif_grid`. Use
+`--cookbook default` to force the built-in no-cookbook theme.
+
 For local smoke tests without DeepSeek:
 
 ```bash
@@ -40,6 +45,12 @@ For live runs that should prime provider context cache before planning and SVG g
 
 ```bash
 python3 ${SKILL_DIR}/scripts/api_ppt.py generate postppt.json --project-name demo --cache-prime --svg-workers 6 --svg-batch-size 5
+```
+
+For named cookbook folders that include reusable assets:
+
+```bash
+python3 ${SKILL_DIR}/scripts/api_ppt.py generate postppt.json --project-name demo --cookbook figma_65cm_default
 ```
 
 ## Automation Contract
@@ -112,13 +123,18 @@ The old interactive workflow is no longer the main execution path, but these rep
 
 ## Model Usage
 
-- DeepSeek direct Anthropic-compatible API is used for `design_plan/spec_lock` and per-slide SVG generation in live mode; Qwen is the default speaker-notes provider.
+- Qwen is the default provider for `design_plan/spec_lock` and speaker notes. DeepSeek direct Anthropic-compatible API is used for per-slide SVG generation in live mode, and can still be used as a planner fallback with a larger `PPT_MASTER_DEEPSEEK_PLAN_MAX_TOKENS` budget.
 - SVG generation produces one independent direct API request per slide; no Claude Code CLI process is used in this branch.
 - `--svg-workers` is the true SVG concurrency limit. `--svg-batch-size` only groups pages for log/reporting batch metadata; it does not reserve a worker slot for a whole batch.
 - SVG/spec font choices are preserved for the primary editable PPTX export. Post-processing also builds a temporary `svg_final_sourcehan/` variant and exports a Source Han version (`思源宋体` titles, `思源黑体` body text) without changing `svg_final/`.
 - All live prompt families start with a byte-stable `PPT_MASTER_COMMON_PREFIX_V1` deck prefix: fixed rules, canvas, style, source Markdown, and compact slide manifest.
 - The common prefix must not include project paths, timestamps, logs, current page numbers, or random values.
-- `--cache-prime` sends low-output ACK requests for stable shared prefixes before live model work; each per-slide SVG prompt appends slide-specific content after the stable prefix.
+- Cache prime is enabled by default in API-style live runs. It sends low-output ACK requests for stable shared prefixes before live model work; SVG generation waits briefly after the shared-prefix prime before scheduling the first slide batch so the first batch can hit provider cache when the provider has materialized it.
+- Spec planning retries are enabled by default: `PPT_MASTER_SPEC_RETRIES=2` retries the whole `design_plan/spec_lock` provider request when marker pairs are missing or JSON is invalid. Do not salvage corrupted spec content; regenerate it.
+- Cookbooks may be single markdown files or named folders under `templates/cookbooks/`. Folder cookbooks should keep the markdown at `<theme_id>/<theme_id>.md` or `<theme_id>/cookbook.md` and store screenshots/assets/notes alongside it.
+- Default-candidate Figma cookbooks must preserve an evidence pack: native screenshots for all requested frames, a contact sheet, representative Figma metadata/design-context evidence, local reusable assets, and notes about missing/truncated captures.
+- Cookbook markdown injected into prompts must not include local path lists, `Reference set:` sections, Figma URLs, or MCP asset URLs. Keep those in asset notes only; the prompt-facing cookbook should summarize provenance as visual DNA, motifs, frame count, and limitations.
+- Downloaded/copied input images must be described in `images/image_manifest.json` with filename, alt text, width, height, aspect ratio, orientation, byte size, and MIME type so SVG generation can choose correct image frame ratios and `meet`/`slice` behavior.
 - Theme color policy: extra HEX colors are allowed for richness, but the locked primary accent must remain the dominant non-neutral accent on every slide.
 - Layout diversity is semantic, not quota-based: `design_plan` should prefer specific archetypes and include `layout_family`, `layout_signature`, `visual_structure`, and `why_this_layout` per slide.
 - Usage is appended to `logs/usage.jsonl`; legacy `logs/api_ppt.log` is also written for compatibility.

@@ -60,7 +60,7 @@ PPT_API_RUNNER_START_JITTER_SECONDS=12
 PPT_API_RUNNER_START_STAGGER_SCOPE=global
 ```
 
-For `qwen3.6-plus` notes generation, the Qwen request timeout is intentionally longer than the old 5-minute default:
+For `qwen3.6-plus` planning and notes generation, the Qwen request timeout is intentionally longer than the old 5-minute default:
 
 ```env
 PPT_API_QWEN_TIMEOUT=900
@@ -70,6 +70,21 @@ Keep Qwen output at the current safe maximum for `qwen3.6-plus`:
 
 ```env
 PPT_API_QWEN_MAX_TOKENS=65536
+```
+
+Retry the full spec request when the model returns missing marker pairs or
+invalid JSON instead of trying to reuse corrupted spec content:
+
+```env
+PPT_MASTER_SPEC_RETRIES=2
+PPT_MASTER_SPEC_RETRY_BACKOFF_SECONDS=8
+```
+
+DeepSeek remains available as a planner fallback with a larger completion budget
+to avoid truncated plan/spec output:
+
+```env
+PPT_MASTER_DEEPSEEK_PLAN_MAX_TOKENS=120000
 ```
 
 ## Start API And Redis

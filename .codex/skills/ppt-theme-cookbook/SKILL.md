@@ -25,6 +25,13 @@ Write an **art-directed adaptive grammar**, not a template whitelist or a loose 
      - Call `whoami` once to verify Figma MCP access.
      - For every requested frame, call `get_screenshot` at native slide scale and immediately download the PNG locally because MCP asset URLs are short-lived.
      - For every requested frame, capture `node_id`, URL, screenshot filename, and intended layout role in a machine-readable manifest.
+     - When the cookbook may become a default or reusable production theme, treat the task as a heavy design-system extraction, not a light visual summary:
+       - Download every requested frame screenshot.
+       - Generate a contact sheet before interpretation.
+       - Extract aggregate colors, fonts, node types, image counts, text samples, and reusable layer names across all frames.
+       - Download representative decorative/image assets exposed by Figma design-context constants into a stable local asset folder.
+       - Write an asset index explaining what each downloaded asset is, when it may be reused, and when literal brand assets must be replaced.
+       - Preserve capture notes with tool limitations, timeouts, truncation, and evidence-vs-inference boundaries.
      - Call `get_variable_defs` on representative light, dark, accent, image, dashboard, and dense pages to collect color/font variable names and exact values.
      - Call `get_metadata` for representative pages to preserve frame hierarchy, geometry, and layer names.
      - Call `get_design_context` for at least one representative page per layout family to capture generated React/Tailwind-style code, asset constants, typography summary, node IDs, and exact geometry clues. Store excerpts locally; do not rely on chat history.
@@ -61,6 +68,14 @@ Write an **art-directed adaptive grammar**, not a template whitelist or a loose 
    - For adapted layouts, define how art moves transfer: e.g. `source_recipe_anchor`, `required_art_moves`, and the composition logic that must survive after content-density changes.
    - Write from the full evidence pack: reference images, manifest, metadata, variable defs, design-context excerpts, and contact sheet.
    - Store any tool limitations, missing captures, or inference boundaries near the source folder so future cookbook revisions do not over-trust incomplete evidence.
+   - The final cookbook injected into API prompts must not include local path lists, `Reference set:` sections, MCP URLs, Figma node URLs, or source-folder breadcrumbs. Summarize provenance as `Theme evidence summary` with reference type, frame count, visual DNA, motifs, and limitations only.
+   - For production/default-candidate cookbooks, the output should be a folder, not only a single markdown file:
+     - `<theme_id>/<theme_id>.md`
+     - `<theme_id>/assets/screenshots/`
+     - `<theme_id>/assets/figma_assets/`
+     - `<theme_id>/assets/notes/`
+     - `<theme_id>/assets/contact_sheet.png`
+     - Optionally add a root README or index if the repo supports named cookbook folders.
 
 4. Write the cookbook using the method reference.
    - Load [references/cookbook-method.md](references/cookbook-method.md) before drafting.
@@ -89,6 +104,8 @@ Write an **art-directed adaptive grammar**, not a template whitelist or a loose 
    - Check that a viewer could recognize the reference template without seeing the cookbook name.
    - Check that at least one recipe came from actual metadata/design-context geometry instead of screenshot-only impressions.
    - Check that short-lived Figma MCP asset URLs are not required by the final cookbook or generated SVG.
+   - Check that downloaded assets are local and indexed.
+   - Check that brand-specific source assets are not mandated for unrelated decks; preserve the art move while allowing semantic replacement.
 
 ## Output Contract
 

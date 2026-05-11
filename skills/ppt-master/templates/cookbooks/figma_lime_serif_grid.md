@@ -10,15 +10,10 @@ Important philosophy:
 - Semantic structure may adapt to content; source-native art moves must remain visibly inherited.
 - Density may increase, but composition logic cannot collapse into generic cards.
 
-Reference set:
-- Source folder: `figma/65CMrCi7opIqi80NPrKFxu`
-- Figma file: `https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled`
-- Local evidence:
-  - `figma/65CMrCi7opIqi80NPrKFxu/contact_sheet.png`
-  - `figma/65CMrCi7opIqi80NPrKFxu/capture_manifest.json`
-  - `figma/65CMrCi7opIqi80NPrKFxu/mcp/design_context_samples.md`
+Theme evidence summary:
+- Extracted from a sharp editorial business deck.
 - Visual DNA: sharp editorial business deck with lime full-bleed pages, white analytical pages, black/dark-green sparse pages, Neuton serif display type, Open Sans body type, thin rules, hard rectangles, status pills, large metrics, and a restrained grid.
-- Key source frames: `131:305`, `131:352`, `131:509`, `131:381`, `131:322`, `131:295`, `131:538`, `131:401`, `131:435`, `131:457`, `131:474`.
+- Key reference motifs: lime title fields, serif display numerals, thin rule grid, hard proof slabs, status pills, and restrained analytical pages.
 
 Coordinate note:
 - Figma references are `1920 x 1080`.

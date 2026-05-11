@@ -1,6 +1,8 @@
 param(
     [int]$Count = 3,
-    [string]$EnvFile = ".env.stress.local.ps1",
+    [string]$EnvFile = ".env.api",
+    [string]$AccountPoolFile = "secrets/deepseek_account_pool.json",
+    [string]$AccountId = "",
     [string]$InputFile = "postppt.json",
     [string]$ProjectNameBase = "postppt_qwen36plus_12w_b3_max",
     [string]$LogDir = ".tmp/ppt-stress",
@@ -25,6 +27,48 @@ function Assert-Secret {
     }
 }
 
+function Import-EnvFile {
+    param([string]$Path)
+    if ($Path.EndsWith(".ps1", [System.StringComparison]::OrdinalIgnoreCase)) {
+        . $Path
+        return
+    }
+    foreach ($line in Get-Content $Path) {
+        $trimmed = $line.Trim()
+        if (-not $trimmed -or $trimmed.StartsWith("#")) {
+            continue
+        }
+        $parts = $trimmed.Split("=", 2)
+        if ($parts.Count -ne 2) {
+            continue
+        }
+        [Environment]::SetEnvironmentVariable($parts[0].Trim(), $parts[1].Trim(), "Process")
+    }
+}
+
+function Get-DeepSeekAccounts {
+    param(
+        [string]$PoolPath,
+        [string]$PreferredId
+    )
+    if (-not (Test-Path $PoolPath)) {
+        throw "DeepSeek account pool not found: $PoolPath"
+    }
+    $pool = Get-Content $PoolPath -Raw | ConvertFrom-Json
+    $accounts = @($pool.accounts | Where-Object { $_.enabled -eq $true })
+    if (-not $accounts) {
+        throw "No enabled DeepSeek accounts in $PoolPath"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($PreferredId)) {
+        $account = $accounts | Where-Object { $_.account_id -eq $PreferredId } | Select-Object -First 1
+        if (-not $account) {
+            throw "DeepSeek account not found or disabled: $PreferredId"
+        }
+        return @($account)
+    }
+    return @($accounts | Sort-Object account_id)
+}
+
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
 Set-Location $script:RepoRoot
 
@@ -38,11 +82,17 @@ if (-not (Test-Path $envPath)) {
     throw "Environment file not found: $envPath"
 }
 
-. $envPath
+Import-EnvFile $envPath
 $env:PYTHONIOENCODING = if ($env:PYTHONIOENCODING) { $env:PYTHONIOENCODING } else { "utf-8" }
 
-Assert-Secret "DEEPSEEK_API_KEY"
 Assert-Secret "DASHSCOPE_API_KEY"
+
+$poolPath = if ([System.IO.Path]::IsPathRooted($AccountPoolFile)) {
+    $AccountPoolFile
+} else {
+    Join-Path $script:RepoRoot $AccountPoolFile
+}
+$deepseekAccounts = @(Get-DeepSeekAccounts -PoolPath $poolPath -PreferredId $AccountId)
 
 $inputPath = Resolve-RepoPath $InputFile
 $python = (Get-Command python -ErrorAction Stop).Source
@@ -59,6 +109,7 @@ $runDir = Join-Path (Resolve-Path $logRoot).Path $timestamp
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 
 Write-Host "Stress run directory: $runDir"
+Write-Host "Using DeepSeek accounts: $(@($deepseekAccounts | ForEach-Object { $_.account_id }) -join ', ')"
 Write-Host "Launching $Count concurrent PPT generation jobs..."
 
 $jobs = @()
@@ -67,6 +118,17 @@ for ($i = 1; $i -le $Count; $i++) {
     $projectName = "${ProjectNameBase}_stress${suffix}"
     $stdout = Join-Path $runDir "stress${suffix}.out.log"
     $stderr = Join-Path $runDir "stress${suffix}.err.log"
+    $deepseekAccount = $deepseekAccounts[($i - 1) % $deepseekAccounts.Count]
+    $env:DEEPSEEK_API_KEY = [string]$deepseekAccount.api_key
+    $env:ANTHROPIC_AUTH_TOKEN = [string]$deepseekAccount.api_key
+    if ($deepseekAccount.base_url) {
+        $env:ANTHROPIC_BASE_URL = [string]$deepseekAccount.base_url
+    }
+    $deepseekBaseUrl = if ($deepseekAccount.base_url) { [string]$deepseekAccount.base_url } else { $env:PPT_API_DEEPSEEK_BASE_URL }
+    $deepseekModel = if ($deepseekAccount.deepseek_model) { [string]$deepseekAccount.deepseek_model } else { $env:PPT_API_DEEPSEEK_MODEL }
+    $svgModel = if ($deepseekAccount.svg_model) { [string]$deepseekAccount.svg_model } else { $env:PPT_API_SVG_MODEL }
+    $svgRepairModel = if ($deepseekAccount.svg_repair_model) { [string]$deepseekAccount.svg_repair_model } else { $env:PPT_API_SVG_REPAIR_MODEL }
+    Assert-Secret "DEEPSEEK_API_KEY"
 
     $arguments = @(
         "skills/ppt-master/scripts/api_ppt.py",
@@ -78,11 +140,13 @@ for ($i = 1; $i -le $Count; $i++) {
         "--notes-provider", "qwen",
         "--qwen-model", "qwen3.6-plus",
         "--qwen-max-tokens", "65536",
+        "--deepseek-base-url", $deepseekBaseUrl,
+        "--deepseek-model", $deepseekModel,
         "--cache-prime",
         "--svg-workers", "12",
         "--svg-batch-size", "3",
-        "--svg-model", "deepseek-v4-pro[1m]",
-        "--svg-repair-model", "deepseek-v4-flash",
+        "--svg-model", $svgModel,
+        "--svg-repair-model", $svgRepairModel,
         "--svg-timeout", "1200",
         "--svg-retries", "1"
     )
@@ -99,6 +163,7 @@ for ($i = 1; $i -le $Count; $i++) {
     $jobs += [pscustomobject]@{
         Index = $i
         ProjectName = $projectName
+        AccountId = $deepseekAccount.account_id
         Pid = $process.Id
         Process = $process
         Stdout = $stdout
@@ -107,7 +172,7 @@ for ($i = 1; $i -le $Count; $i++) {
     }
 }
 
-$jobs | Select-Object Index, ProjectName, Pid, Stdout, Stderr | Format-Table -AutoSize
+$jobs | Select-Object Index, ProjectName, AccountId, Pid, Stdout, Stderr | Format-Table -AutoSize
 
 if ($NoWait) {
     Write-Host "Jobs are running in the background. Inspect logs in $runDir"
@@ -133,6 +198,7 @@ while ($true) {
             State = if ($job.Process.HasExited) { "done:$($job.Process.ExitCode)" } else { "running" }
             ElapsedSeconds = $elapsed
             ProjectName = $job.ProjectName
+            AccountId = $job.AccountId
         }
     }
     $status | Format-Table -AutoSize

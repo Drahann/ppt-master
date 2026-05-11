@@ -45,7 +45,7 @@ def add_generate_parser(subparsers: argparse._SubParsersAction[argparse.Argument
     parser.add_argument("--deepseek-api-key", default=None, help="DeepSeek key; prefer DEEPSEEK_API_KEY env var.")
     parser.add_argument("--deepseek-base-url", default=DEFAULT_BASE_URL, help="Anthropic-compatible base URL.")
     parser.add_argument("--deepseek-model", default=DEFAULT_MODEL, help="Model for direct DeepSeek calls.")
-    parser.add_argument("--planner-provider", default="deepseek", choices=["deepseek", "qwen"], help="Provider for design_plan/spec_lock.")
+    parser.add_argument("--planner-provider", default="qwen", choices=["deepseek", "qwen"], help="Provider for design_plan/spec_lock.")
     parser.add_argument("--notes-provider", default="qwen", choices=["deepseek", "qwen"], help="Provider for speaker notes.")
     parser.add_argument("--qwen-api-key", default=None, help="Qwen/DashScope key; prefer DASHSCOPE_API_KEY env var.")
     parser.add_argument("--qwen-base-url", default=QWEN_BASE_URL, help="OpenAI-compatible DashScope base URL.")
@@ -58,7 +58,8 @@ def add_generate_parser(subparsers: argparse._SubParsersAction[argparse.Argument
     parser.add_argument("--svg-retries", type=int, default=1, help="Retries per failed direct SVG page.")
     parser.add_argument("--svg-workers", type=int, default=18, help="Parallel SVG slide workers.")
     parser.add_argument("--svg-batch-size", type=int, default=5, help="Slides per SVG batch when --svg-workers > 1.")
-    parser.add_argument("--cache-prime", action="store_true", help="Prime provider context cache with the stable deck prefix before live generation.")
+    parser.add_argument("--cache-prime", dest="cache_prime", action="store_true", default=None, help="Prime provider context cache with the stable deck prefix before live generation.")
+    parser.add_argument("--no-cache-prime", dest="cache_prime", action="store_false", help="Disable provider context cache priming even if enabled by environment defaults.")
     parser.set_defaults(func=generate_command)
 
 

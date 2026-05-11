@@ -10,13 +10,21 @@ Cookbooks are hard theme systems for the automation pipeline. They are loaded be
 Usage:
 
 ```bash
-python skills/ppt-master/scripts/api_ppt.py generate input.md --cookbook figma_group02_inter_precision
+python skills/ppt-master/scripts/api_ppt.py generate input.md
+python skills/ppt-master/scripts/api_ppt.py generate input.md --cookbook figma_65cm_default
 ```
 
-You can also pass an absolute path or set `PPT_MASTER_COOKBOOK`.
+You can pass a root-level cookbook markdown file, a cookbook folder containing
+`<folder-name>.md` or `cookbook.md`, an absolute path, or set
+`PPT_MASTER_COOKBOOK`.
+
+When no cookbook is specified, each generation randomly selects one of four
+theme modes: default no-cookbook, `figma_65cm_default`,
+`figma_colorblock_modern`, or `figma_lime_serif_grid`. Pass
+`--cookbook default` to force the no-cookbook default mode.
 
 Current cookbooks:
 
-- `figma_group02_inter_precision.md` - Figma group-02 monochrome editorial system with fixed recipe geometry, micro-chrome, gray cards, metrics, timeline, matrix, Venn, funnel, device, quote, and team layouts.
-- `figma_group08_pastel_papercut.md` - Figma group-08 pastel papercut editorial system with oversized serif titles, Playfair/Georgia italic notes, irregular pastel paper paths, rotated image slabs, big metrics, milestones, matrix, Venn, device, quote, and team gallery layouts.
+- `figma_65cm_default/figma_65cm_default.md` - Figma 65CM dark pharmaceutical finance analysis system with Metropolis typography, night gradients, Pfizer/Merck dual-brand chroming, BBS top mark, translucent oversized brand letters/numerals, blue/green/orange accent logic, glassy data panels, 3D medical assets, financial-document stacks, team portrait strips, and dense chart/table layouts.
+- `figma_colorblock_modern.md` - Figma colorblock editorial system with mustard/orange/sage/powder-blue fields, light sans display type, thin outline glyphs, device/photo slabs, and sparse numeric systems.
 - `figma_lime_serif_grid.md` - Figma lime serif grid system with Neuton display type, Open Sans body text, lime/dark-green/black/white pages, top chrome, thin editorial rules, hard metric fields, status pills, timelines, budget stacks, and dark risk rows.

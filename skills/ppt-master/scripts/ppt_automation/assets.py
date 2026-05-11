@@ -11,6 +11,12 @@ import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
+
+try:
+    from PIL import Image as PILImage
+except Exception:  # pragma: no cover - Pillow is optional in some script contexts.
+    PILImage = None
 
 
 MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
@@ -24,6 +30,53 @@ class ImageAsset:
     alt: str
     status: str
     reason: str = ""
+    width: int | None = None
+    height: int | None = None
+    aspect_ratio: float | None = None
+    orientation: str | None = None
+    bytes: int | None = None
+    mime_type: str | None = None
+
+
+def _image_metadata(path: Path) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "bytes": path.stat().st_size if path.exists() else None,
+        "mime_type": mimetypes.guess_type(path.name)[0],
+        "width": None,
+        "height": None,
+        "aspect_ratio": None,
+        "orientation": None,
+    }
+    if PILImage is None:
+        return metadata
+    try:
+        with PILImage.open(path) as image:
+            width, height = image.size
+    except Exception:
+        return metadata
+    metadata["width"] = int(width)
+    metadata["height"] = int(height)
+    if width > 0 and height > 0:
+        ratio = round(width / height, 4)
+        metadata["aspect_ratio"] = ratio
+        if ratio > 1.18:
+            metadata["orientation"] = "landscape"
+        elif ratio < 0.85:
+            metadata["orientation"] = "portrait"
+        else:
+            metadata["orientation"] = "square"
+    return metadata
+
+
+def _attach_image_metadata(asset: ImageAsset, image_dir: Path) -> ImageAsset:
+    if not asset.filename:
+        return asset
+    path = image_dir / asset.filename
+    if not path.exists():
+        return asset
+    for key, value in _image_metadata(path).items():
+        setattr(asset, key, value)
+    return asset
 
 
 def _split_markdown_target(target: str) -> str:
@@ -154,6 +207,7 @@ def _copy_local_image(
     output_path = _unique_output_path(image_dir, f"{safe_source_name}{suffix}")
     shutil.copy2(source, output_path)
     asset = ImageAsset(original_url=url, filename=output_path.name, alt=alt, status="copied")
+    _attach_image_metadata(asset, image_dir)
     return f"../images/{output_path.name}", asset
 
 
@@ -188,6 +242,7 @@ def download_and_rewrite_markdown_images(
         try:
             filename = _download(url, image_dir, base)
             asset = ImageAsset(original_url=url, filename=filename, alt=alt, status="downloaded")
+            _attach_image_metadata(asset, image_dir)
             assets.append(asset)
             return f"../images/{filename}", asset
         except (OSError, ValueError, urllib.error.URLError, urllib.error.HTTPError) as exc:
@@ -225,6 +280,9 @@ def download_and_rewrite_markdown_images(
         )
         lines = ["# Image Resource List", ""]
         for asset in assets:
-            lines.append(f"- {asset.status}: {asset.filename or asset.original_url} | alt={asset.alt} | reason={asset.reason}")
+            dimensions = f" | {asset.width}x{asset.height}, ratio={asset.aspect_ratio}, {asset.orientation}" if asset.width and asset.height else ""
+            size = f" | bytes={asset.bytes}" if asset.bytes is not None else ""
+            mime = f" | mime={asset.mime_type}" if asset.mime_type else ""
+            lines.append(f"- {asset.status}: {asset.filename or asset.original_url}{dimensions}{size}{mime} | alt={asset.alt} | reason={asset.reason}")
         (image_dir / "image_manifest.md").write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return rewritten, assets

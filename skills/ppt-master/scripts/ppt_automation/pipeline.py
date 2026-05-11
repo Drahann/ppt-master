@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -27,7 +28,7 @@ from .config import (
     normalized_format,
 )
 from .assets import download_and_rewrite_markdown_images
-from .cookbook import resolve_cookbook, write_project_cookbook
+from .cookbook import resolve_cookbook_selection, write_project_cookbook, write_theme_selection
 from .errors import GenerationError
 from .parser import parse_markdown_deck, read_input_markdown, safe_project_name
 from .planner import (
@@ -72,7 +73,7 @@ class GenerationOptions:
     deepseek_api_key: str | None = None
     deepseek_base_url: str = DEFAULT_BASE_URL
     deepseek_model: str = DEFAULT_MODEL
-    planner_provider: str = "deepseek"
+    planner_provider: str = "qwen"
     notes_provider: str = "qwen"
     qwen_api_key: str | None = None
     qwen_base_url: str = QWEN_BASE_URL
@@ -85,13 +86,23 @@ class GenerationOptions:
     svg_retries: int = 1
     svg_workers: int = 15
     svg_batch_size: int = 5
-    cache_prime: bool = False
+    cache_prime: bool | None = True
     cookbook: str | None = None
     spec_only: bool = False
 
     @classmethod
     def from_namespace(cls, args: argparse.Namespace) -> "GenerationOptions":
-        return cls(**{field: getattr(args, field) for field in cls.__dataclass_fields__})
+        values = {field: getattr(args, field) for field in cls.__dataclass_fields__}
+        if values.get("cache_prime") is None:
+            values["cache_prime"] = env_bool("PPT_API_CACHE_PRIME", env_bool("PPT_MASTER_CACHE_PRIME", True))
+        return cls(**values)
+
+
+def env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on", "y"}
 
 
 def run_command(args: list[str], cwd: Path, allow_failure: bool = False) -> subprocess.CompletedProcess[str]:
@@ -192,7 +203,7 @@ def run_chart_scan(project_path: Path) -> list[str]:
     return [f"Chart-like SVG lacks chart-plot-area marker: {name}" for name in sorted(set(chart_like) - set(marked))]
 
 
-def generate_notes(project_path: Path, options: GenerationOptions, logger: UsageLogger) -> None:
+def generate_notes(project_path: Path, options: GenerationOptions, logger: UsageLogger, cookbook=None) -> None:
     if options.renderer == "local":
         deck_json = json.loads((project_path / "slide_manifest.json").read_text(encoding="utf-8"))
         from .parser import Deck, Slide
@@ -224,7 +235,6 @@ def generate_notes(project_path: Path, options: GenerationOptions, logger: Usage
         (project_path / "notes" / "total.md").write_text(deterministic_notes(deck), encoding="utf-8")
         return
 
-    cookbook = resolve_cookbook(options.cookbook)
     prompt = build_notes_prompt(
         parse_markdown_deck((project_path / "sources" / "input.md").read_text(encoding="utf-8"), options.max_slides),
         options.format,
@@ -418,9 +428,18 @@ def generate(options: GenerationOptions) -> RunResult:
     canvas_format = normalized_format(options.format)
     project_path = create_project(project_name, canvas_format, Path(options.projects_dir))
     logger = UsageLogger(project_path)
-    cookbook = resolve_cookbook(options.cookbook)
+    cookbook_selection = resolve_cookbook_selection(options.cookbook)
+    cookbook = cookbook_selection.cookbook
 
     try:
+        logger.log(
+            "theme_selection",
+            theme_id=cookbook_selection.theme_id,
+            random=cookbook_selection.random,
+            cookbook_id=cookbook.id if cookbook else None,
+            choices=list(("default", "figma_65cm_default", "figma_colorblock_modern", "figma_lime_serif_grid")),
+        )
+        write_theme_selection(project_path, cookbook_selection)
         write_project_cookbook(project_path, cookbook)
         markdown, image_assets = download_and_rewrite_markdown_images(raw_markdown, project_path, input_path.parent)
         deck = parse_markdown_deck(markdown, max_slides=options.max_slides)
@@ -435,7 +454,12 @@ def generate(options: GenerationOptions) -> RunResult:
             )
         write_source(project_path, markdown)
         write_manifest(project_path, deck)
-        if options.cache_prime and options.renderer != "local" and not options.dry_run and not options.spec_only:
+        if (
+            options.cache_prime
+            and options.renderer != "local"
+            and not options.dry_run
+            and options.planner_provider == "deepseek"
+        ):
             prime_deepseek_cache(
                 deck=deck,
                 canvas_format=canvas_format,
@@ -480,7 +504,7 @@ def generate(options: GenerationOptions) -> RunResult:
 
         with ThreadPoolExecutor(max_workers=1) as notes_executor:
             logger.log("notes_parallel", event="start")
-            notes_future = notes_executor.submit(generate_notes, project_path, options, logger)
+            notes_future = notes_executor.submit(generate_notes, project_path, options, logger, cookbook)
             generate_svg_files(
                 project_path=project_path,
                 deck=deck,

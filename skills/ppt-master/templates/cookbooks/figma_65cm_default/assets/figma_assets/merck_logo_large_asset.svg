@@ -1,0 +1,21 @@
+<svg preserveAspectRatio="none" width="100%" height="100%" overflow="visible" style="display: block;" viewBox="0 0 1920 531" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Merck_Logo 3" clip-path="url(#clip0_0_9)">
+<path id="Vector" fill-rule="evenodd" clip-rule="evenodd" d="M-3 531L-3 1.28746e-05L1920 1.28746e-05V531L-3 531Z" fill="url(#paint0_linear_0_9)"/>
+<path id="Vector_2" d="M-3 0L-3 531L1075 531V0L-3 0Z" fill="url(#paint1_radial_0_9)"/>
+</g>
+<defs>
+<linearGradient id="paint0_linear_0_9" x1="958.5" y1="531" x2="958.5" y2="0" gradientUnits="userSpaceOnUse">
+<stop stop-color="#0B091E"/>
+<stop offset="0.15" stop-color="#0B091E"/>
+<stop offset="0.9" stop-color="#0B091E" stop-opacity="0.6"/>
+<stop offset="1" stop-color="#0B091E" stop-opacity="0.6"/>
+</linearGradient>
+<radialGradient id="paint1_radial_0_9" cx="0" cy="0" r="1" gradientTransform="matrix(1078 531 -628.833 910.286 -2.99999 4.29537e-05)" gradientUnits="userSpaceOnUse">
+<stop stop-color="#1E74FB" stop-opacity="0.34902"/>
+<stop offset="0.63" stop-color="#0B091E" stop-opacity="0"/>
+</radialGradient>
+<clipPath id="clip0_0_9">
+<rect width="1920" height="531" fill="white"/>
+</clipPath>
+</defs>
+</svg>

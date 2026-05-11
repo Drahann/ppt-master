@@ -118,7 +118,7 @@ def load_settings() -> Settings:
         canvas_format=os.getenv("PPT_API_CANVAS_FORMAT", "ppt169").strip() or "ppt169",
         style=_choice("PPT_API_STYLE", "general", {"general", "consultant", "consultant-top"}),
         renderer=_choice("PPT_API_RENDERER", "deepseek", {"deepseek", "local"}),
-        planner_provider=_choice("PPT_API_PLANNER_PROVIDER", "deepseek", {"deepseek", "qwen"}),
+        planner_provider=_choice("PPT_API_PLANNER_PROVIDER", "qwen", {"deepseek", "qwen"}),
         notes_provider=_choice("PPT_API_NOTES_PROVIDER", "qwen", {"deepseek", "qwen"}),
         qwen_base_url=os.getenv("PPT_API_QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1").strip(),
         qwen_model=os.getenv("PPT_API_QWEN_MODEL", "qwen3.6-plus").strip() or "qwen3.6-plus",

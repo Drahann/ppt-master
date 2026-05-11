@@ -326,7 +326,7 @@ Stable rules:
   - `color_role` names the leading accent and supporting accent for this page; apply those colors to hierarchy, headers, chips, one chart series, connector lines, or callouts rather than defaulting everything to primary blue. Keep neutral surfaces dominant.
   - `density_plan` is the visible information and component-density budget; follow its requested cards, labels, captions, metric chips, evidence phrases, and blank-space control unless it would cause collisions.
   - `card_anatomy` is mandatory when cards exist; build those internal structures instead of drawing identical blank rectangles with centered text.
-  - `icon_plan` should be implemented with `<use data-icon="...">` placeholders only when icons add semantic meaning. Do not add extra icons beyond `icon_plan` just to fill space; use labels, numbers, chips, rules, source-native motifs, or chart marks instead.
+  - `icon_plan` is title-only. If it contains a placeholder, implement at most one `<use data-icon="...">` near the slide title/header. Do not add icons inside body cards, bullets, chips, metrics, tables, diagrams, or charts; use labels, numbers, chips, rules, source-native motifs, or chart marks instead.
   - `chart_or_diagram` chooses the visualization geometry; restyle it in the locked theme rather than swapping to a generic card grid.
   - `content_density` decides how much text to keep visible and how aggressively to summarize.
 - Text density execution:
@@ -342,7 +342,8 @@ Stable rules:
 - If a slide is dense, summarize into key phrases and speaker-note-level detail rather than overfilling the canvas; do not over-compress medium/high pages into a few sparse labels.
 - Keep SVG concise: target 7,000-12,000 characters, no comments, no duplicated hidden text, no verbose metadata.
 - If current page source Markdown contains an image, use the downloaded local image when it helps the slide. Reference it with `<image href="../images/filename.ext" ... preserveAspectRatio="xMidYMid meet"/>`; do not reference external http(s), `/root/...`, or original source URLs.
-- When the current page plan calls for icons, prefer project icon placeholders instead of hand-drawn icons. Use syntax such as `<use data-icon="chunk-filled/rocket" x="100" y="100" width="32" height="32" fill="#1D4ED8"/>`; `finalize_svg.py` will embed the real icon. Keep icon usage sparse and purposeful, not one icon per bullet/card by default.
+- Use Available Project Images JSON when placing images: `width`, `height`, `aspect_ratio`, `orientation`, `bytes`, `mime_type`, and `alt` are layout signals. Match the SVG image frame to the source aspect ratio when evidence fidelity matters; use `preserveAspectRatio="xMidYMid meet"` for contained product/evidence images and `xMidYMid slice` only for deliberate hero/background crops. Do not stretch images into mismatched card ratios.
+- When the current page plan calls for a title icon, prefer one project icon placeholder instead of a hand-drawn icon. Use syntax such as `<use data-icon="chunk-filled/rocket" x="100" y="100" width="32" height="32" fill="#1D4ED8"/>`; `finalize_svg.py` will embed the real icon. Never add one icon per bullet/card.
 - Available icon placeholders: {", ".join(ICON_INVENTORY)}.
 - Current style: {style}
 
@@ -770,7 +771,7 @@ def generate_svg_files(
                         "duration_seconds": round(duration, 3),
                         "usage": usage,
                         "model": svg_model,
-                        "scope": "common_prefix",
+                        "scope": "svg_shared_prefix",
                     },
                 )
                 logger.log(
@@ -781,8 +782,23 @@ def generate_svg_files(
                     prompt_chars=len(prime_prompt),
                     output_chars=len(text),
                     model=svg_model,
-                    scope="common_prefix",
+                    scope="svg_shared_prefix",
                 )
+            wait_seconds = 0.0
+            try:
+                wait_seconds = float(os.environ.get("PPT_MASTER_CACHE_PRIME_WAIT_SECONDS", "3"))
+            except ValueError:
+                wait_seconds = 3.0
+            if wait_seconds > 0:
+                if logger:
+                    logger.log(
+                        "deepseek_svg_cache_prime",
+                        ok=True,
+                        event="wait_before_first_batch",
+                        wait_seconds=wait_seconds,
+                        scope="svg_shared_prefix",
+                    )
+                time.sleep(wait_seconds)
         except Exception as exc:
             if logger:
                 logger.log(
@@ -791,7 +807,7 @@ def generate_svg_files(
                     error=str(exc),
                     prompt_chars=len(prime_prompt),
                     model=svg_model,
-                    scope="common_prefix",
+                    scope="svg_shared_prefix",
                 )
     workers = max(1, svg_workers)
     jobs = group_slide_jobs(deck.slides, svg_batch_size)

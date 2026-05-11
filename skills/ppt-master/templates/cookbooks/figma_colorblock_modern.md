@@ -10,17 +10,10 @@ Important philosophy:
 - Semantic structure may adapt to content; source-native art moves must remain visibly inherited.
 - Density may increase, but composition logic cannot collapse into generic cards.
 
-Reference set:
-- Source folder: `figma/65CMrCi7opIqi80NPrKFxu`
-- Figma file: `https://www.figma.com/design/65CMrCi7opIqi80NPrKFxu/Untitled`
-- Requested frames: 35 frames under `145:*`.
-- Local evidence:
-  - `figma/65CMrCi7opIqi80NPrKFxu/contact_sheet_145_designs.png`
-  - `figma/65CMrCi7opIqi80NPrKFxu/capture_manifest_145_designs.json`
-  - `figma/65CMrCi7opIqi80NPrKFxu/mcp/145_designs/design_context_samples.md`
-  - `figma/65CMrCi7opIqi80NPrKFxu/notes/145_designs/capture_process_and_limitations.md`
+Theme evidence summary:
+- Extracted from a multi-frame modern colorblock editorial deck.
 - Visual DNA: modern colorblock editorial deck with full-bleed mustard, burnt orange, sage green, and powder blue fields; very light Plus Jakarta Sans titles; high-tracking uppercase labels; hard rectangular slabs; thin monoline outline glyphs; large device/photo placeholders; sparse poster rhythm; and direct numeric list or metric systems.
-- Key source frames: `145:1024`, `145:1053`, `145:1114`, `145:1174`, `145:1215`, `145:1238`, `145:1246`, `145:1255`, `145:1314`.
+- Key reference motifs: poster title fields, numbered strip systems, device/photo placeholder slabs, thin outline glyphs, and sparse metric compositions.
 
 Coordinate note:
 - Figma references are `1920 x 1080`.
