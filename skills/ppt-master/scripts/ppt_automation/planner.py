@@ -1448,7 +1448,11 @@ Task: generate `notes/total.md` for this PPT Master project.
 Rules:
 - Use one level-1 heading per slide.
 - Heading must exactly equal the SVG stem from the manifest, e.g. `# 01_title`.
-- Each slide note must include a transition sentence, key points, and duration.
+- Write presenter-ready speech notes, not an outline. Use a natural roadshow / pitch delivery voice that can be read aloud directly.
+- For each slide, include 2-4 short spoken paragraphs with clear opening, transition, and evidence explanation. Use first-person plural when appropriate, e.g. `我们`.
+- You may include stage cues such as `[停顿]`, `[看向评委]`, or `[切换下一页]` when they help delivery rhythm.
+- Do not include a `要点` section, bullet summary, or checklist unless the source slide itself is a list that must be read.
+- End each slide note with a duration line, e.g. `时长：约 1 分钟`.
 - Use Chinese labels naturally when source text is Chinese.
 - Output only the complete `total.md` content.
 """

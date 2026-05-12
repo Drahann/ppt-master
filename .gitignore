@@ -82,6 +82,7 @@ tramp
 # Working drafts and notes (root-level only — project notes/ subdirs are tracked)
 /AGENT_CONTEXT.md
 /drafts/
+/handoff/
 /notes/
 /scratch/
 .notes/

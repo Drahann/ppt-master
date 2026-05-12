@@ -195,17 +195,23 @@ def deterministic_notes(deck: Deck) -> str:
     sections: list[str] = []
     for slide in deck.slides:
         lines = stripped_markdown_lines(slide.body)
-        key_points = "；".join([line[:80] for line in lines[:3]]) or slide.title
-        transition = "开场先交代本页主题。" if slide.index == 1 else "承接上一页，我们继续看下一组信息。"
+        evidence = "；".join([line[:80] for line in lines[:3]]) or slide.title
+        opening = (
+            f"各位评委老师好，今天我们从“{slide.title}”开始介绍这个项目。"
+            if slide.index == 1
+            else f"承接上一页，接下来我们看“{slide.title}”这一部分。"
+        )
         sections.extend(
             [
                 f"# {slide.stem}",
                 "",
-                f"[过渡] {transition}",
+                opening,
                 "",
-                f"围绕“{slide.title}”，本页建议先给出结论，再用页面中的关键信息补充背景和证据。",
+                "[停顿]",
                 "",
-                f"要点：{key_points}",
+                f"这一页的核心，是把{slide.title}背后的判断讲清楚。我们会先给出结论，再结合页面上的关键信息补充背景和证据。",
+                "",
+                f"具体来看，{evidence}。这部分不需要展开成过多细节，重点是让听众快速理解本页为什么成立，以及它和整个项目逻辑之间的关系。",
                 "",
                 "时长：约 1 分钟",
                 "",
