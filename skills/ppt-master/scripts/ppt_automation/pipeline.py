@@ -28,7 +28,7 @@ from .config import (
     normalized_format,
 )
 from .assets import download_and_rewrite_markdown_images
-from .cookbook import resolve_cookbook_selection, write_project_cookbook, write_theme_selection
+from .cookbook import RANDOM_THEME_CHOICES, resolve_cookbook_selection, write_project_cookbook, write_theme_selection
 from .errors import GenerationError
 from .parser import parse_markdown_deck, read_input_markdown, safe_project_name
 from .planner import (
@@ -437,7 +437,7 @@ def generate(options: GenerationOptions) -> RunResult:
             theme_id=cookbook_selection.theme_id,
             random=cookbook_selection.random,
             cookbook_id=cookbook.id if cookbook else None,
-            choices=list(("default", "figma_65cm_default", "figma_colorblock_modern", "figma_lime_serif_grid")),
+            choices=list(RANDOM_THEME_CHOICES),
         )
         write_theme_selection(project_path, cookbook_selection)
         write_project_cookbook(project_path, cookbook)
