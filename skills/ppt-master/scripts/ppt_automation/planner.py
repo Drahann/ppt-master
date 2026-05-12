@@ -689,6 +689,17 @@ def build_design_plan_prompt(deck: Deck, canvas_format: str, style: str, cookboo
     slide_briefs = compact_slide_briefs(deck, excerpt_chars=700)
     chart_reference = build_chart_template_reference()
     common_prefix = build_deck_context_prefix(deck, canvas_format, style, cookbook)
+    universal_quality_rules = """
+Universal deck quality rules:
+- Cookbook or not, every normal slide must have a concrete content structure, not a generic bullet/card layout.
+- Choose chart, dashboard, table, roadmap, network, architecture, product view, evidence grid, or another source-fit structure when the content supports it.
+- Pages should feel information-rich and visibly full while staying readable; preserve source evidence as grouped labels, tables, timelines, charts, metric chips, captions, or concise text blocks.
+- Preserve compact fields, but make each short phrase decisive enough for SVG: name the focal structure, one polish move, one accent role, and the visible evidence grouping.
+- Keep `layout_signature`, `visual_structure`, `why_this_layout`, `chart_or_diagram`, and `density_plan` aligned. Do not describe a roadmap while selecting KPI cards, or request a table while describing generic columns.
+- Avoid plain rows of identical cards that differ only by text. When cards are necessary, vary interiors by role using badges, rails, numbers, chips, callouts, micro-charts, or connector details within the active theme.
+- Cookbook controls art direction, color, typography, decorative assets, and source-native art moves; it does not override source-content structure quality.
+- Do not generate empty minimalist pages, generic rows of identical cards, or decorative motif pages that fail to prove the slide's source claim.
+"""
     cookbook_rules = ""
     if cookbook is not None:
         cookbook_rules = f"""
@@ -709,11 +720,9 @@ Theme Cookbook application rules:
 Default theme restoration rules:
 - No cookbook is active. Use the built-in `automation-default-technology` visual system as a real theme, not a bland fallback.
 - Keep the strong light technology venture look from the stable pre-split spec flow: white/near-white canvas, dark text, compact multi-accent palette, technical chrome, evidence bands, precise diagram/card/chart surfaces, and content-linked motifs.
-- Normal pages should feel designed and information-rich: use chart/dashboard/table/roadmap/network/product structures when content supports them, not plain bullet cards.
-- Preserve the compact fields requested by the current pipeline, but make each short phrase decisive enough for SVG: name the focal structure, one polish move, one accent role, and the visible evidence grouping.
 - Use default `source_recipe_anchor` values such as `default_tech_chrome`, `default_evidence_grid`, `default_process_ribbon`, `default_metric_dashboard`, `default_architecture_cutaway`, or `default_market_chart` when no cookbook source recipe exists.
 - Use `required_art_moves` from the default theme vocabulary, for example `technical top rule`, `measured evidence band`, `accent rail`, `metric chip strip`, `thin connector grid`, `soft tinted panel`, `highlighted chart series`, or `section proof slab`.
-- Do not generate dark full-slide themes, empty minimalist pages, or generic rows of identical cards.
+- Do not generate dark full-slide themes outside explicit source need.
 """
     return f"""{common_prefix}
 
@@ -740,7 +749,7 @@ Rules:
 - Keep all per-slide text fields compact: every slide-level prose field should be a short phrase or one short sentence, not a detailed implementation plan.
 - `visual_guidance` must be a final SVG-facing synthesis, not a repetition of `layout_signature`, `density_plan`, and `color_role`. Name only the decisive execution moves that make the selected chart/layout beautiful, including one content-linked motif when useful.
 - `color_role` should name one leading accent color and one supporting accent from `spec_lock.colors`, plus what each color is used for. Additional colors should be pale tints or small metric chips only.
-- Define density explicitly. Default every non-cover, non-closing content page to `high` unless the source clearly requires a quote/breathing/showcase slide. `high` means preserve more source evidence as concise labels, tables, timelines, charts, or grouped text.
+- Define density explicitly. Cover and closing slides use `low`; every other content page defaults to `high`. Use `rhythm` and layout fields for showcase/breathing pacing, while keeping substantive content density high.
 - `density_plan` should be brief, e.g. `high: grouped evidence + concise labels`; do not specify object counts or detailed card internals.
 - When `chart_or_diagram` is selected, explain how to restyle that visualization in the theme: what is emphasized, how labels/legends should sit, what supporting marks are muted, and what small creative detail prevents a generic chart look.
 - When a page uses cards, specify the card grammar: radius, border weight, fill relationship, header badge, icon placement, spacing, and how cards align to the page's narrative flow.
@@ -781,8 +790,10 @@ Design plan field output guide:
 - `card_anatomy`: if cards appear, give a brief treatment; otherwise leave empty.
 - `icon_plan`: exact icon placeholder names from inventory, title/header only, maximum one per slide. Leave empty when labels or structural motifs carry the meaning better.
 - `chart_or_diagram`: one real catalog key when the page needs data/diagram structure; empty only for pure quote/image/text/team pages.
-- `content_density`: `low`, `medium`, `high`, or `showcase`; default normal content slides to `high`. Use `low` only for cover and closing unless the slide is intentionally a quote/breathing page.
+- `content_density`: `low`, `medium`, `high`, or `showcase`; in this pipeline, use `low` for cover/closing and `high` for all other content slides. Express visual-dominant showcase pacing through `rhythm`, `layout_signature`, and `visual_structure`, not by lowering density.
 - These fields should agree with each other. Do not set `chart_or_diagram=roadmap_vertical` while `layout_signature` describes unrelated KPI cards.
+
+{universal_quality_rules}
 
 {cookbook_rules}
 
