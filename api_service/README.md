@@ -46,6 +46,13 @@ python skills/ppt-master/scripts/api_ppt.py generate <source.md> \
 
 DeepSeek keys are injected from the account lease into child process environment variables, not passed on the command line.
 
+Production API env files currently force the built-in no-cookbook default
+theme while keeping the cookbook random pool available in code:
+
+```bash
+PPT_MASTER_COOKBOOK=default
+```
+
 Cache prime is enabled through the API environment:
 
 ```bash

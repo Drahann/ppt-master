@@ -12,14 +12,23 @@ from ppt_automation.cookbook import RANDOM_THEME_CHOICES, resolve_cookbook_selec
 
 
 class CookbookSelectionTest(unittest.TestCase):
-    def test_random_theme_pool_is_default_only(self) -> None:
-        self.assertEqual(RANDOM_THEME_CHOICES, ("default",))
+    def test_random_theme_pool_keeps_all_supported_theme_modes(self) -> None:
+        self.assertEqual(
+            RANDOM_THEME_CHOICES,
+            (
+                "default",
+                "figma_65cm_default",
+                "figma_colorblock_modern",
+                "figma_lime_serif_grid",
+            ),
+        )
 
-        with patch.dict(os.environ, {}, clear=True):
+    def test_env_can_force_default_theme(self) -> None:
+        with patch.dict(os.environ, {"PPT_MASTER_COOKBOOK": "default"}, clear=True):
             selection = resolve_cookbook_selection(None)
         self.assertEqual(selection.theme_id, "default")
         self.assertIsNone(selection.cookbook)
-        self.assertTrue(selection.random)
+        self.assertFalse(selection.random)
 
     def test_explicit_cookbook_still_resolves(self) -> None:
         with patch.dict(os.environ, {}, clear=True):

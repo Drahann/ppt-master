@@ -72,6 +72,14 @@ Keep Qwen output at the current safe maximum for `qwen3.6-plus`:
 PPT_API_QWEN_MAX_TOKENS=65536
 ```
 
+Production env files currently force the built-in no-cookbook default theme.
+Remove this setting or set it to `random`/`auto` to use the code-level random
+theme pool:
+
+```env
+PPT_MASTER_COOKBOOK=default
+```
+
 Retry the full spec request when the model returns missing marker pairs or
 invalid JSON instead of trying to reuse corrupted spec content:
 

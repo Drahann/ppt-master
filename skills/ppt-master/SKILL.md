@@ -24,10 +24,12 @@ For JSON payloads where Markdown is in `content`:
 python3 ${SKILL_DIR}/scripts/api_ppt.py generate postppt.json --project-name demo
 ```
 
-When no `--cookbook` is provided, the runner currently selects the built-in
-default no-cookbook theme. The random theme pool is intentionally restricted to
-`default`; use `--cookbook <name>` to force a specific cookbook such as
+When no `--cookbook` is provided, the runner uses `PPT_MASTER_COOKBOOK` if it is
+set. Production/API env files currently set `PPT_MASTER_COOKBOOK=default` to
+force the built-in no-cookbook theme. Without that env override, `random`/`auto`
+can select from the supported theme pool: default no-cookbook,
 `figma_65cm_default`, `figma_colorblock_modern`, or `figma_lime_serif_grid`.
+Use `--cookbook <name>` to force a specific cookbook for one run.
 
 For local smoke tests without DeepSeek:
 

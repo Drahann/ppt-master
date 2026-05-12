@@ -14,6 +14,9 @@ COOKBOOK_DIR = SKILL_DIR / "templates" / "cookbooks"
 DEFAULT_THEME_ID = "default"
 RANDOM_THEME_CHOICES = (
     DEFAULT_THEME_ID,
+    "figma_65cm_default",
+    "figma_colorblock_modern",
+    "figma_lime_serif_grid",
 )
 
 

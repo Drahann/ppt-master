@@ -18,10 +18,12 @@ You can pass a root-level cookbook markdown file, a cookbook folder containing
 `<folder-name>.md` or `cookbook.md`, an absolute path, or set
 `PPT_MASTER_COOKBOOK`.
 
-When no cookbook is specified, each generation currently uses the built-in
-default no-cookbook theme. The random theme pool is intentionally restricted to
-`default`; pass `--cookbook <name>` to force a cookbook such as
+When no cookbook is specified, the runner uses `PPT_MASTER_COOKBOOK` if it is
+set. Production/API env files currently set `PPT_MASTER_COOKBOOK=default` to
+force the built-in no-cookbook theme. Without that env override, `random`/`auto`
+can select from the supported theme pool: default no-cookbook,
 `figma_65cm_default`, `figma_colorblock_modern`, or `figma_lime_serif_grid`.
+Pass `--cookbook <name>` to force a cookbook for one run.
 
 Current cookbooks:
 
