@@ -84,7 +84,7 @@ Retry the full spec request when the model returns missing marker pairs or
 invalid JSON instead of trying to reuse corrupted spec content:
 
 ```env
-PPT_MASTER_SPEC_RETRIES=2
+PPT_MASTER_SPEC_RETRIES=10
 PPT_MASTER_SPEC_RETRY_BACKOFF_SECONDS=8
 ```
 

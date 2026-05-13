@@ -104,7 +104,7 @@ Full live LLM prompts and responses are also written to `logs/llm_transcript.jso
 ## v1 Limits
 
 - No HTTP service implementation.
-- No automatic SVG retry loop.
+- SVG generation retries failed pages by default; use `--svg-retries` to override the retry count.
 - No automatic chart coordinate calibration.
 - No automatic template selection.
 - No AI image generation.

@@ -732,7 +732,7 @@ def generate_svg_files(
     svg_model: str = SVG_MODEL,
     svg_repair_model: str = SVG_REPAIR_MODEL,
     svg_timeout: int = 600,
-    svg_retries: int = 1,
+    svg_retries: int = 10,
     svg_workers: int = 1,
     svg_batch_size: int = 5,
     cache_prime: bool = False,

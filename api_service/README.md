@@ -41,7 +41,7 @@ python skills/ppt-master/scripts/api_ppt.py generate <source.md> \
   --svg-model deepseek-v4-pro[1m] \
   --svg-repair-model deepseek-v4-flash \
   --svg-timeout 1200 \
-  --svg-retries 1
+  --svg-retries 10
 ```
 
 DeepSeek keys are injected from the account lease into child process environment variables, not passed on the command line.
@@ -63,7 +63,7 @@ PPT_MASTER_CACHE_PRIME_WAIT_SECONDS=3
 Spec planning retries are enabled through the child process environment:
 
 ```bash
-PPT_MASTER_SPEC_RETRIES=2
+PPT_MASTER_SPEC_RETRIES=10
 PPT_MASTER_SPEC_RETRY_BACKOFF_SECONDS=8
 ```
 

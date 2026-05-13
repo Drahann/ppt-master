@@ -20,7 +20,7 @@ class PlannerSpecRetryTest(unittest.TestCase):
 
     def test_spec_retries_env_default_and_override(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(resolve_spec_retries(), 2)
+            self.assertEqual(resolve_spec_retries(), 10)
         with patch.dict(os.environ, {"PPT_MASTER_SPEC_RETRIES": "4"}, clear=True):
             self.assertEqual(resolve_spec_retries(), 4)
         with patch.dict(os.environ, {"PPT_MASTER_SPEC_RETRIES": "-1"}, clear=True):

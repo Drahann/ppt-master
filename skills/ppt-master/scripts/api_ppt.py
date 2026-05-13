@@ -55,7 +55,7 @@ def add_generate_parser(subparsers: argparse._SubParsersAction[argparse.Argument
     parser.add_argument("--svg-model", default=SVG_MODEL, help="DeepSeek model for direct SVG generation.")
     parser.add_argument("--svg-repair-model", default=SVG_REPAIR_MODEL, help="DeepSeek model for SVG syntax repair.")
     parser.add_argument("--svg-timeout", type=int, default=600, help="Timeout per direct SVG page request in seconds.")
-    parser.add_argument("--svg-retries", type=int, default=1, help="Retries per failed direct SVG page.")
+    parser.add_argument("--svg-retries", type=int, default=10, help="Retries per failed direct SVG page.")
     parser.add_argument("--svg-workers", type=int, default=18, help="Parallel SVG slide workers.")
     parser.add_argument("--svg-batch-size", type=int, default=5, help="Slides per SVG batch when --svg-workers > 1.")
     parser.add_argument("--cache-prime", dest="cache_prime", action="store_true", default=None, help="Prime provider context cache with the stable deck prefix before live generation.")

@@ -20,7 +20,7 @@ from .usage import UsageLogger
 
 DEEPSEEK_SYSTEM = "You are PPT Master automation engine. Follow the user task exactly."
 DEFAULT_DEEPSEEK_PLAN_MAX_TOKENS = 120000
-DEFAULT_SPEC_RETRIES = 2
+DEFAULT_SPEC_RETRIES = 10
 DEFAULT_SPEC_RETRY_BACKOFF_SECONDS = 8.0
 
 

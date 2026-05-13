@@ -148,7 +148,7 @@ for ($i = 1; $i -le $Count; $i++) {
         "--svg-model", $svgModel,
         "--svg-repair-model", $svgRepairModel,
         "--svg-timeout", "1200",
-        "--svg-retries", "1"
+        "--svg-retries", "10"
     )
 
     $process = Start-Process `
